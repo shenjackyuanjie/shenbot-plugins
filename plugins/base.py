@@ -1,6 +1,7 @@
 import io
 import psutil
 import platform
+from pathlib import Path
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, TypeVar
 from PIL import (Image, ImageDraw, ImageFont)
@@ -36,17 +37,18 @@ def local_env_info() -> str:
         cache.write("内存: 未知\n")
     return cache.getvalue()
 
-def local_env_image() -> bytes:
-    img = Image.new("RGB", (800, 140), (255, 255, 255))
-    # 往图片上写入一些信息
-    draw = ImageDraw.Draw(img)
-    font = ImageFont.truetype("./SMILEYSANS-OBLIQUE.TTF", size=25)
-    draw.text((10, 10), local_env_info(), fill=(0, 0, 0), font=font)
-    img_cache = io.BytesIO()
-    img.save(img_cache, format="PNG")
-    raw_img = img_cache.getvalue()
-    img_cache.close()
-    return raw_img
+# def local_env_image() -> bytes:
+#     print(Path.cwd())
+#     img = Image.new("RGB", (800, 140), (255, 255, 255))
+#     # 往图片上写入一些信息
+#     draw = ImageDraw.Draw(img)
+#     font = ImageFont.truetype("SMILEYSANS-OBLIQUE.TTF", size=25)
+#     draw.text((10, 10), local_env_info(), fill=(0, 0, 0), font=font)
+#     img_cache = io.BytesIO()
+#     img.save(img_cache, format="PNG")
+#     raw_img = img_cache.getvalue()
+#     img_cache.close()
+#     return raw_img
 
 def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
     if not (msg.is_from_self or msg.is_reply):
@@ -56,7 +58,7 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
         elif msg.content == "/bot-sys":
             datas = local_env_info()
             reply = msg.reply_with(datas)
-            reply.set_img(local_env_image(), "image/png", False)
+            # reply.set_img(local_env_image(), "image/png", False)
             client.send_message(reply)
         elif msg.content == "/bot-uptime":
             uptime = client.startup_time
@@ -73,7 +75,7 @@ def on_tailchat_message(msg: TailchatReciveMessage, client: TailchatClient) -> N
         elif msg.content == "/bot-sys":
             datas = local_env_info()
             reply = msg.reply_with(datas)
-            reply.set_img(local_env_image(), "just_img.png")
+            # reply.set_img(local_env_image(), "just_img.png")
             client.send_message(reply)
         elif msg.content == "/bot-uptime":
             uptime = client.startup_time
