@@ -111,12 +111,19 @@ class IcaNewMessage:
         ...
     @property
     def sender_id(self) -> IcaType.UserId:
+        """获取发送人id"""
+        ...
+    @property
+    def sender_name(self) -> str:
+        """获取发送人名字"""
         ...
     @property
     def is_from_self(self) -> bool:
+        """是不是自己发的消息"""
         ...
     @property
     def is_reply(self) -> bool:
+        """是不是回复消息"""
         ...
     @property
     def is_room_msg(self) -> bool:

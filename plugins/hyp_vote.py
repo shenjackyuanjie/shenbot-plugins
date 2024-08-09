@@ -47,6 +47,8 @@ def hypvote(msg: IcaNewMessage, client: IcaClient):
                     VOTE[msg.room_id][int(x) % 24].remove(msg.sender_id)
     elif arg[0] == "clear":
         VOTE[msg.room_id] = gen_room()
+    elif arg[0] == "view":
+        ...
     elif arg == [] or arg[0] == "ls":
         res = fmt_vote(msg.room_id)
         reply = msg.reply_with(res)
@@ -65,6 +67,8 @@ OPTIONS
             clear the vote (OP only)
         ls
             list voted time, equivalent to empty
+        view <space seperated hour>
+            
         help
             show this help
 AUTHOR
