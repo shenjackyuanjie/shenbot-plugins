@@ -15,8 +15,8 @@ def fmt_vote(room_id) -> str:
     global VOTE
     if room_id not in VOTE:
         VOTE[room_id] = EMPTY_VOTE.copy()
-    return "|".join(
-        f"{x}{VOTE[room_id][x] if VOTE[room_id][x] else ''}" for x in VOTE[room_id]
+    return "\n".join(
+        f"{x}: {len(VOTE[room_id][x])}" for x in VOTE[room_id] if VOTE[room_id][x]
     )
 
 
