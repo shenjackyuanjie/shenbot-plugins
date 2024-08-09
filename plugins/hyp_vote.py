@@ -17,7 +17,7 @@ def fmt_vote(room_id) -> str:
     if room_id not in VOTE:
         VOTE[room_id] = EMPTY_VOTE.copy()
     return "|".join(
-        f"{x}{VOTE[room_id][x] if VOTE[room_id][x] else ""}" for x in VOTE[room_id]
+        f"{x}{VOTE[room_id][x] if VOTE[room_id][x] else ''}" for x in VOTE[room_id]
     )
 
 
@@ -39,7 +39,7 @@ def hypvote(msg: IcaNewMessage, client: IcaClient):
     elif arg[0] == "unvote":
         for x in arg[1:]:
             if x.isdigit() and 0 <= int(x) < 24:
-                if msg.sender_id in VOTE[int(x) % 24]:
+                if msg.sender_id in VOTE[msg.room_id][int(x) % 24]:
                     VOTE[msg.room_id][int(x) % 24].remove(msg.sender_id)
     elif arg[0] == "clear":
         VOTE[msg.room_id] = EMPTY_VOTE.copy()
