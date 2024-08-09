@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import re
 from typing import TYPE_CHECKING, TypeVar
 
@@ -7,14 +9,17 @@ else:
     IcaNewMessage = TypeVar("NewMessage")
     IcaClient = TypeVar("IcaClient")
 
-EMPTY_VOTE = {i: [] for i in range(0, 24)}
+
+def gen_room() -> dict[int, list[int]]:
+    return {i: [] for i in range(0, 24)}
+
 VOTE = {}
 
 
 def fmt_vote(room_id) -> str:
     global VOTE
     if room_id not in VOTE:
-        VOTE[room_id] = EMPTY_VOTE.copy()
+        VOTE[room_id] = gen_room()
     return "\n".join(
         f"{x}: {len(VOTE[room_id][x])}" for x in VOTE[room_id] if VOTE[room_id][x]
     )
@@ -28,7 +33,7 @@ def hypvote(msg: IcaNewMessage, client: IcaClient):
     else:
         return
     if msg.room_id not in VOTE:
-        VOTE[msg.room_id] = EMPTY_VOTE.copy()
+        VOTE[msg.room_id] = gen_room()
     if arg[0] == "vote":
         for x in arg[1:]:
             if x.isdigit() and 0 <= int(x) < 24:
@@ -41,7 +46,7 @@ def hypvote(msg: IcaNewMessage, client: IcaClient):
                 if msg.sender_id in VOTE[msg.room_id][int(x) % 24]:
                     VOTE[msg.room_id][int(x) % 24].remove(msg.sender_id)
     elif arg[0] == "clear":
-        VOTE[msg.room_id] = EMPTY_VOTE.copy()
+        VOTE[msg.room_id] = gen_room()
     elif arg == [] or arg[0] == "ls":
         res = fmt_vote(msg.room_id)
         reply = msg.reply_with(res)
