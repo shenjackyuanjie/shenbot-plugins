@@ -10,10 +10,10 @@ else:
     IcaClient = TypeVar("IcaClient")
 
 
-def gen_room() -> dict[int, list[int]]:
-    return {i: [] for i in range(0, 24)}
+def gen_room() -> dict[int, dict[int, str]]:
+    return {i: {} for i in range(0, 24)}
 
-VOTE = {}
+VOTE: dict[int, dict[int, str]] = {}
 
 
 def fmt_vote(room_id) -> str:
@@ -39,16 +39,20 @@ def hypvote(msg: IcaNewMessage, client: IcaClient):
             if x.isdigit() and 0 <= int(x) < 24:
                 if msg.sender_id in VOTE[msg.room_id][int(x) % 24]:
                     continue
-                VOTE[msg.room_id][int(x) % 24].append(msg.sender_id)
+                VOTE[msg.room_id][int(x) % 24][msg.sender_id] = msg.sender_name
     elif arg[0] == "unvote":
         for x in arg[1:]:
             if x.isdigit() and 0 <= int(x) < 24:
                 if msg.sender_id in VOTE[msg.room_id][int(x) % 24]:
-                    VOTE[msg.room_id][int(x) % 24].remove(msg.sender_id)
+                    VOTE[msg.room_id][int(x) % 24][msg.sender_id] = None
     elif arg[0] == "clear":
         VOTE[msg.room_id] = gen_room()
     elif arg[0] == "view":
-        ...
+        replys = "\n".join(
+            f"{x}: {','.join(VOTE[msg.room_id][int(x) % 24].values())}" for x in arg[1:] if x.isdigit()
+        )
+        reply = msg.reply_with(replys)
+        client.send_message(reply)
     elif arg == [] or arg[0] == "ls":
         res = fmt_vote(msg.room_id)
         reply = msg.reply_with(res)
@@ -68,7 +72,7 @@ OPTIONS
         ls
             list voted time, equivalent to empty
         view <space seperated hour>
-            
+            view who vote for the time
         help
             show this help
 AUTHOR
