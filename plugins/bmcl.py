@@ -208,8 +208,6 @@ def bmcl_rank_general(msg, client):
     # raw_img = img_cache.getvalue()
     # img_cache.close()
 
-    report_msg = display_rank_full(ranks, req_time)
-    client.debug(report_msg)
     reply = msg.reply_with(display_rank_full(ranks, req_time))
     # reply.set_img(raw_img, "image/jpeg", False)
     client.send_message(reply)
