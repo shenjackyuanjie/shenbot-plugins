@@ -1,3 +1,4 @@
+from __future__ import annotations
 import io
 import time
 import requests
@@ -9,7 +10,7 @@ import urllib.parse
 from typing import TYPE_CHECKING, TypeVar, Optional, Tuple, List
 
 if TYPE_CHECKING:
-    from ica_typing import IcaNewMessage, IcaClient, ConfigData
+    from ica_typing import IcaNewMessage, IcaClient, ConfigData, TailchatClient
     CONFIG_DATA: ConfigData
 else:
     CONFIG_DATA = None # type: ignore
@@ -60,7 +61,7 @@ def format_hit_count(count: int) -> str:
         return count_str
 
 
-def wrap_request(url: str, msg: IcaNewMessage, client: IcaClient) -> Optional[dict]:
+def wrap_request(url: str, msg: IcaNewMessage, client: IcaClient | TailchatClient) -> Optional[dict]:
     try:
         cookie = CONFIG_DATA["cookie"] # type: ignore
         if cookie == "填写你的 cookie" or cookie is None:
@@ -70,22 +71,22 @@ def wrap_request(url: str, msg: IcaNewMessage, client: IcaClient) -> Optional[di
     except requests.exceptions.RequestException:
         warn_msg = f"数据请求失败, 请检查网络\n{traceback.format_exc()}"
         reply = msg.reply_with(warn_msg)
-        client.send_and_warn(reply)
+        client.send_and_warn(reply)  # pyright: ignore reportArgumentType
         return None
     except Exception as _:
         warn_msg = f"数据请求中发生未知错误, 请呼叫 shenjack\n{traceback.format_exc()}"
         reply = msg.reply_with(warn_msg)
-        client.send_and_warn(reply)
+        client.send_and_warn(reply)  # pyright: ignore reportArgumentType
         return None
     if not response.status_code == 200 or response.reason != "OK":
         warn_msg = f"请求失败, 请检查网络\n{response.status_code} {response.reason}"
         reply = msg.reply_with(warn_msg)
-        client.send_and_warn(reply)
+        client.send_and_warn(reply)  # pyright: ignore reportArgumentType
         return None
     return response.json()
 
 
-def bmcl_dashboard(msg: IcaNewMessage, client: IcaClient) -> None:
+def bmcl_dashboard(msg: IcaNewMessage, client: IcaClient | TailchatClient) -> None:
     req_time = time.time()
     # 记录请求时间
     data = wrap_request("https://bd.bangbang93.com/openbmclapi/metric/dashboard", msg, client)
@@ -214,7 +215,7 @@ def bmcl_rank_general(msg, client):
     client.send_message(reply)
 
 
-def bmcl_rank(msg: IcaNewMessage, client: IcaClient, name: str) -> None:
+def bmcl_rank(msg: IcaNewMessage, client: IcaClient | TailchatClient, name: str) -> None:
     req_time = time.time()
     # 记录请求时间
     rank_data = wrap_request("https://bd.bangbang93.com/openbmclapi/metric/rank", msg, client)
@@ -323,13 +324,14 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
                 bangbang_img(msg, client)
         except:  # noqa
             report_msg = f"bmcl插件发生错误,请呼叫shenjack\n{traceback.format_exc()}"
+            client.warn(report_msg)
             if len(report_msg) > 200:
                 report_msg = report_msg[:200] + "..."   # 防止消息过长
             reply = msg.reply_with(report_msg)
             client.send_and_warn(reply)
 
 
-def on_tailchat_message(msg, client) -> None:
+def on_tailchat_message(msg, client: TailchatClient) -> None:
     if not msg.is_reply:
         if '\n' in msg.content:
             return
@@ -366,6 +368,7 @@ def on_tailchat_message(msg, client) -> None:
                 bangbang_img(msg, client)
         except:  # noqa
             report_msg = f"bmcl插件发生错误,请呼叫shenjack\n{traceback.format_exc()}"
+            client.warn(report_msg)
             if len(report_msg) > 200:
                 report_msg = report_msg[:200] + "..."   # 防止消息过长
             reply = msg.reply_with(report_msg)
