@@ -170,12 +170,16 @@ class IcaClient:
     def version(self) -> str:
         ...
     @property
-    def startup_time(self) -> datetime:
-        """请注意, 此时刻为 UTC 时刻"""
+    def version_str(self) -> str:
+        """获取一个更完善的版本号信息"""
         ...
     @property
     def ica_version(self) -> str:
         """shenbot ica 的版本号"""
+        ...
+    @property
+    def startup_time(self) -> datetime:
+        """请注意, 此时刻为 UTC 时刻"""
         ...
     def debug(self, message: str) -> None:
         """向日志中输出调试信息"""
@@ -269,6 +273,10 @@ class TailchatClient:
         return self.send_message(message)
     @property
     def version(self) -> str:
+        ...
+    @property
+    def version_str(self) -> str:
+        """获取一个更完善的版本号信息"""
         ...
     @property
     def tailchat_version(self) -> str:

@@ -52,7 +52,7 @@ def local_env_info() -> str:
 
 def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
     if not (msg.is_from_self or msg.is_reply):
-        if msg.content == "/bot":
+        if msg.content == "/bot-py":
             reply = msg.reply_with(f"ica-async-rs({client.version})-sync-py {client.ica_version}")
             client.send_message(reply)
         elif msg.content == "/bot-sys":
@@ -69,7 +69,7 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
 
 def on_tailchat_message(msg: TailchatReciveMessage, client: TailchatClient) -> None:
     if not (msg.is_reply or msg.is_from_self):
-        if msg.content == "/bot":
+        if msg.content == "/bot-py":
             reply = msg.reply_with(f"tailchat-async-rs({client.version})-sync-py {client.tailchat_version}")
             client.send_message(reply)
         elif msg.content == "/bot-sys":

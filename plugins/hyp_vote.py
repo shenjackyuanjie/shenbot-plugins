@@ -9,11 +9,12 @@ else:
     IcaNewMessage = TypeVar("NewMessage")
     IcaClient = TypeVar("IcaClient")
 
+VERSION = "1.2.0"
 
 def gen_room() -> dict[int, dict[int, str]]:
     return {i: {} for i in range(0, 24)}
 
-VOTE: dict[int, dict[int, str]] = {}
+VOTE: dict[int, dict[int, dict[int, str]]] = {}
 
 
 def fmt_vote(room_id) -> str:
@@ -24,6 +25,27 @@ def fmt_vote(room_id) -> str:
         f"{x}: {len(VOTE[room_id][x])}" for x in VOTE[room_id] if VOTE[room_id][x]
     )
 
+
+HELP_MSG = f"""/hyp - 计划时间，高效开黑-v{VERSION}
+SYNOPSIS
+        /hyp [command] [args]
+OPTIONS
+        vote <space seperated hour>
+            vote for time you want to play
+        unvote <space seperated hour>
+            unvote for time you want to play
+        clear
+            clear the vote (OP only)
+        ls
+            list voted time, equivalent to empty
+        view <space seperated hour>
+            view who vote for the time
+        help
+            show this help
+AUTHOR
+        dongdigua
+        shenjack(bugfixs)
+"""
 
 def hypvote(msg: IcaNewMessage, client: IcaClient):
     global VOTE
@@ -44,7 +66,7 @@ def hypvote(msg: IcaNewMessage, client: IcaClient):
         for x in arg[1:]:
             if x.isdigit() and 0 <= int(x) < 24:
                 if msg.sender_id in VOTE[msg.room_id][int(x) % 24]:
-                    VOTE[msg.room_id][int(x) % 24][msg.sender_id] = None
+                    del VOTE[msg.room_id][int(x) % 24][msg.sender_id]
     elif arg[0] == "clear":
         VOTE[msg.room_id] = gen_room()
     elif arg[0] == "view":
@@ -58,30 +80,14 @@ def hypvote(msg: IcaNewMessage, client: IcaClient):
         reply = msg.reply_with(res)
         client.send_message(reply)
     elif arg[0] == "help":
-        reply = msg.reply_with("""NAME
-        /hyp - 计划时间，高效开黑
-SYNOPSIS
-        /hyp [command] [args]
-OPTIONS
-        vote <space seperated hour>
-            vote for time you want to play
-        unvote <space seperated hour>
-            unvote for time you want to play
-        clear
-            clear the vote (OP only)
-        ls
-            list voted time, equivalent to empty
-        view <space seperated hour>
-            view who vote for the time
-        help
-            show this help
-AUTHOR
-        dongdigua
-        shenjack(bugfixs)
-""")
+        reply = msg.reply_with(HELP_MSG)
         client.send_message(reply)
 
 
 def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
     if (not (msg.is_from_self or msg.is_reply)) and msg.content.startswith("/hyp"):
+        if msg.content == "/hyp":
+            reply = msg.reply_with(HELP_MSG)
+            client.send_message(reply)
+            return
         hypvote(msg, client)
