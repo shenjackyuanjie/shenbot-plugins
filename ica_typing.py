@@ -174,6 +174,10 @@ class IcaClient:
         """获取一个更完善的版本号信息"""
         ...
     @property
+    def client_id(self) -> str:
+        """返回一个"唯一"的客户端id"""
+        ...
+    @property
     def ica_version(self) -> str:
         """shenbot ica 的版本号"""
         ...
@@ -277,6 +281,10 @@ class TailchatClient:
     @property
     def version_str(self) -> str:
         """获取一个更完善的版本号信息"""
+        ...
+    @property
+    def client_id(self) -> str:
+        """返回一个"唯一"的客户端id"""
         ...
     @property
     def tailchat_version(self) -> str:
