@@ -1,6 +1,6 @@
 'use strict';
 
-const _version_ = "0.4.0";
+const _version_ = "0.4.1";
 
 // let name_input = "!test!\n\natest\n\ntest2";
 // let name_input = "!test!\n\nthis_is_a";
@@ -654,8 +654,12 @@ var H = {
         H.hL(a, 0, a.length - 1, b)
     },
     hL(a, b, c, d) {
-        if (c - b <= 32) H.ej(a, b, c, d)
-        else H.ei(a, b, c, d)
+        // 插入/快排
+        if (c - b <= 32) {
+            H.ej(a, b, c, d) // 插入排序
+        } else {
+            H.ei(a, b, c, d) // 快速排序
+        }
     },
     ej(a, b, c, d) {
         var s, r, q, p, o
@@ -3592,6 +3596,8 @@ var J = {
         },
         lA: function lA() { },
         fZ(a) {
+            // encode to utf8
+            // 但是在前面加个 0
             var s = H.b([0], t.i)
             C.Array.a5(s, C.e.gaB().ab(a))
             return s
@@ -4715,6 +4721,7 @@ var P = {
         this.a = a
     },
     o_() {
+        // math.random
         return C.F
     },
     kT: function kT() { },
@@ -5851,7 +5858,7 @@ var T = {
     parse_names(a) {
         var s, r, q, p, o, n, m, l, k, j, i, h, g, f, e = null,
             d = t.E,
-            c = H.b([], d),
+            result_team = H.b([], d),
             b = C.String.cK(a, $.r_())
         for (s = 0; s < b.length; ++s) {
             r = b[s]
@@ -5866,19 +5873,19 @@ var T = {
             b.pop()
             if (b.length === 0) return H.b([], d)
         }
-        p = C.Array.w(b, "") && true
+        p = C.Array.w(b, "") && true // b contains ""
         d = t.t
         o = H.b([], d)
         for (s = 0, r = t.V, q = !p, n = e; s < b.length; ++s) {
             m = b[s]
             if (m === "") {
-                if (o.length !== 0) c.push(o)
+                if (o.length !== 0) result_team.push(o)
                 o = H.b([], d)
                 n = e
                 continue
             }
             if (q) {
-                if (o.length !== 0) c.push(o)
+                if (o.length !== 0) result_team.push(o)
                 o = H.b([], d)
             }
             // if includes "+"
@@ -5892,38 +5899,40 @@ var T = {
                 // j = C.String.dF(C.String.ay(m, k + 1))
                 j = C.String.trim_name(C.String.ay(m, k + 1))
                 l = C.String.af(m, 0, k)
+                // nq = P.RegExp_RegExp("\\s+$")
                 i = $.nq()
                 m = H.iG(l, i, "", 0)
             } else {
                 j = e
             }
             // console.log("weapon: " + j)
-            l = $.n3()
-            if (l == null) H.throw_expression(H.R(l))
+            l = $.n3() // @
+            // if (l == null) H.throw_expression(H.R(l))
             if (H.iF(m, l, 0)) {
                 h = C.String.cK(m, $.n3())
                 if (J.m1(h[0], " ")) {
                     l = 0
                     h[l] = J.nB(h[l], 1)
                 }
-                if (!J.Y(h[1], "")) {
+                // if (!J.Y(h[1], "")) {
+                if (h[1] === "") {
                     l = h[1]
                     i = $.n5()
                     l.toString
-                    if (i == null) H.throw_expression(H.R(i))
+                    // if (i == null) H.throw_expression(H.R(i))
                     g = J.a3(l)
                     f = g.gp(l)
                     if (0 > f) H.throw_expression(P.a8(0, 0, g.gp(l), e, e))
                     l = H.iF(l, i, 0)
-                } else l = true
-                if (l) o.push(H.b([h[0], null, j], r))
-                else o.push(H.b([h[0], h[1], j], r))
-            } else if (C.String.bA(m, " ")) {
+                } else { l = true }
+                if (l) { o.push(H.b([h[0], null, j], r)) }
+                else { o.push(H.b([h[0], h[1], j], r)) }
+            } else if (C.String.bA(m, " ")) { // m.startwith(" ")
                 o.push(H.b([C.String.ay(m, 1), n, j], r))
             } else {
                 if (s + 1 < b.length) {
                     l = $.n5()
-                    if (l == null) H.throw_expression(H.R(l))
+                    // if (l == null) H.throw_expression(H.R(l))
                     l = !H.iF(m, l, 0) && J.m1(b[s + 1], " ")
                 } else l = false
                 if (l) n = m
@@ -5933,8 +5942,8 @@ var T = {
                 }
             }
         }
-        if (o.length !== 0) c.push(o)
-        return c
+        if (o.length !== 0) result_team.push(o)
+        return result_team
     },
     // Engine start!
     start_main(target) {
@@ -8633,7 +8642,7 @@ J.JavaScriptFunction.prototype = {
 }
 J.JsArray.prototype = {
     j(a, b) {
-        if (!!a.fixed$length) H.throw_expression(P.UnsupportError("add"))
+        // if (!!a.fixed$length) H.throw_expression(P.UnsupportError("add"))
         a.push(b)
     },
     cu(a, b) {
@@ -8736,7 +8745,7 @@ J.JsArray.prototype = {
         return false
     },
     bb(a, b) {
-        if (!!a.immutable$list) H.throw_expression(P.UnsupportError("sort"))
+        // if (a.immutable$list) H.throw_expression(P.UnsupportError("sort"))
         H.tJ(a, b == null ? J.bO() : b)
     },
     aJ(a) {
@@ -8750,6 +8759,7 @@ J.JsArray.prototype = {
         return -1
     },
     w(a, b) {
+        // a contains b
         var s
         for (s = 0; s < a.length; ++s)
             // if (J.Y(a[s], b)) return true
@@ -8885,21 +8895,45 @@ J.JsNumber.prototype = {
         if (b < 0) return s - b
         else return s + b
     },
+    /**
+     * 处理除法运算的方法。
+     * 
+     * @param {number} a - 被除数
+     * @param {number} b - 除数
+     * @returns {number} - 除法结果
+     * @throws {Error} - 如果 b 不是数字
+     */
     P(a, b) {
         if (typeof b != "number") throw H.wrap_expression(H.R(b))
-        if ((a | 0) === a)
+        if ((a | 0) === a) {
             if (b >= 1 || b < -1) return a / b | 0
+        }
         return this.d6(a, b)
     },
+    /**
+     * 处理除法运算的方法。
+     * 
+     * @param {number} a - 被除数
+     * @param {number} b - 除数
+     * @returns {number} - 除法结果
+     */
     ag(a, b) {
         return (a | 0) === a ? a / b | 0 : this.d6(a, b)
     },
+    /**
+     * 处理除法运算的备用方法。
+     * 
+     * @param {number} a - 被除数
+     * @param {number} b - 除数
+     * @returns {number} - 除法结果
+     * @throws {Error} - 如果结果超出范围或为无穷大
+     */
     d6(a, b) {
         var s = a / b
         if (s >= -2147483648 && s <= 2147483647) return s | 0
         if (s > 0) {
-            if (s !== 1 / 0) return Math.floor(s)
-        } else if (s > -1 / 0) return Math.ceil(s)
+            if (s !== Infinity) return Math.floor(s)
+        } else if (s > Infinity) return Math.ceil(s)
         throw H.wrap_expression(P.UnsupportError("Result of truncating division is " + H.as_string(s) + ": " + H.as_string(a) + " ~/ " + b))
     },
     bX(a, b) {
@@ -12471,6 +12505,7 @@ P.lF.prototype = {
 }
 P.kT.prototype = {
     ax(a) {
+        // math.random * a
         if (a <= 0 || a > 4294967296) throw H.wrap_expression(P.tn("max must be in range 0 < max \u2264 2^32, was " + H.as_string(a)))
         return Math.random() * a >>> 0
     }
@@ -15514,6 +15549,7 @@ T.SklSummon.prototype = {
         s = this_.fr
         if (s == null) {
             s = H.as_string(this_.r.a) + "?" + H.as_string($.qQ())
+            // name + ? + summon
             r = this_.r
             q = r.b
             r = r.c
@@ -16658,70 +16694,71 @@ T.Engine.prototype = {
         var async_goto = 0,
             async_completer = P._makeAsyncAwaitCompleter(t.z),
             q, this_ = this,
-            o, n, m, name2p, k, j, i, h, g, f, runner, d, c, b, is_boss, a0, weapon_name, player, a3, a4, a5, a6, sorted_names, sorted_hash_names, sorted_hash, b0, b1, b2, seed_names
+            o, n, m, name2p, k, j, i, h, g_list, group, runner, d, obj, b, is_boss, a0, weapon_name, player, len, a4, a5, plr_q, sorted_names, sorted_hash_names, sorted_hash, b0, b1, b2, seed_names
         var $async$bD = P._wrapJsFunctionForAsync(function (async_error_code, async_result) {
             if (async_error_code === 1) return P.async_rethrow(async_result, async_completer)
             while (true) switch (async_goto) {
                 case 0:
                     seed_names = H.b([], t.V)
                     for (o = this_.x, n = o.length, m = t.eG, name2p = this_.r, k = this_.z, j = t.L, i = this_.a, h = 0; h < o.length; o.length === n || (0, H.F)(o), ++h) {
-                        g = o[h]
-                        f = H.b([], j)
-                        runner = new T.Grp(this_, f, H.b([], j), H.b([], j), H.b([], j))
-                        for (d = (g && C.Array).ga0(g); d.u();) {
-                            c = d.gC()
-                            if (!(c instanceof T.Plr))
-                                if (m.b(c) && J.aw(c) >= $.t()) {
-                                    b = J.a3(c)
-                                    b.h(c, 0)
-                                    b.h(c, 1)
-                                    is_boss = b.gp(c)
-                                    a0 = $.t()
-                                    weapon_name = is_boss > a0 ? b.h(c, a0) : null
-                                    if (typeof b.h(c, 1) == "string") {
-                                        is_boss = J.aw(b.h(c, 1))
-                                        a0 = 1
-                                        is_boss = is_boss === a0 && J.ny(b.h(c, a0), 0) < $.pC()
-                                    } else
-                                        is_boss = false
-                                    if (is_boss) {
-                                        player = T.choose_boss(b.h(c, 0), b.h(c, 1), this_, weapon_name)
-                                    } else {
-                                        player = T.init_plr(b.h(c, 0), b.h(c, 1), runner.b, weapon_name)
-                                    }
-                                    // a2 = a ? T.init_boss(b.h(c, 0), b.h(c, 1), this_, a1) : T.init_plr(b.h(c, 0), b.h(c, 1), e.b, a1)
-                                    if (player instanceof T.PlrSeed_) { // PlrSeed
-                                        seed_names.push(player.e)
-                                        k.push(player)
-                                        continue
-                                    }
-                                    if (name2p.J(0, player.e)) {
-                                        // if name2p.containsKey(p.idName)
-                                        continue
-                                    }
-                                    if (runner.b == null)
-                                        runner.b = player.c
-                                    player.y = runner
-                                    f.push(player)
-                                    name2p.m(0, player.e, player)
+                        g_list = o[h]
+                        group = H.b([], j)
+                        runner = new T.Grp(this_, group, H.b([], j), H.b([], j), H.b([], j))
+                        for (d = (g_list && C.Array).ga0(g_list); d.u();) {
+                            obj = d.gC()
+                            if (!(obj instanceof T.Plr) && m.b(obj) && J.aw(obj) >= $.t()) {
+                                b = J.a3(obj)
+                                // b.h(obj, 0)
+                                // b.h(obj, 1)
+                                is_boss = b.gp(obj)
+                                a0 = $.t()
+                                weapon_name = is_boss > a0 ? b.h(obj, a0) : null
+                                if (typeof b.h(obj, 1) == "string") {
+                                    is_boss = J.aw(b.h(obj, 1))
+                                    a0 = 1
+                                    is_boss = is_boss === a0 && J.ny(b.h(obj, a0), 0) < $.pC()
+                                } else
+                                    is_boss = false
+                                if (is_boss) {
+                                    player = T.choose_boss(b.h(obj, 0), b.h(obj, 1), this_, weapon_name)
+                                } else {
+                                    player = T.init_plr(b.h(obj, 0), b.h(obj, 1), runner.b, weapon_name)
                                 }
+                                // a2 = a ? T.init_boss(b.h(c, 0), b.h(c, 1), this_, a1) : T.init_plr(b.h(c, 0), b.h(c, 1), e.b, a1)
+                                if (player instanceof T.PlrSeed_) { // PlrSeed
+                                    seed_names.push(player.e)
+                                    k.push(player)
+                                    continue
+                                }
+                                if (name2p.J(0, player.e)) {
+                                    // if name2p.containsKey(p.idName)
+                                    continue
+                                }
+                                if (runner.b == null)
+                                    runner.b = player.c
+                                player.y = runner
+                                group.push(player)
+                                console.log("player.e (idName) = " + player.e)
+                                name2p.m(0, player.e, player)
+                            }
                         }
                         // group.initPlayers.length != 0
-                        if (f.length !== 0) {
+                        if (group.length !== 0) {
                             i.push(runner)
-                            a3 = f.length
-                            for (a4 = 0; a4 < a3; ++a4) {
-                                player = f[a4]
-                                for (a5 = a4 + 1; a5 < a3; ++a5) {
-                                    a6 = f[a5]
-                                    if (player.b == a6.b) {
-                                        player.cA(a6.E)
-                                        a6.cA(player.E)
+                            len = group.length
+                            for (a4 = 0; a4 < len; ++a4) {
+                                player = group[a4]
+                                for (a5 = a4 + 1; a5 < len; ++a5) {
+                                    plr_q = group[a5]
+                                    if (player.b == plr_q.b) {
+                                        player.cA(plr_q.E)
+                                        plr_q.cA(player.E)
                                     }
                                 }
                             }
                         }
                     }
+                    // aliveGCount
                     this_.Q = i.length
                     if (C.JsInt.am(name2p.gp(name2p), $.Z()) > 0) {
                         // errorMaxPlayer
@@ -16755,9 +16792,8 @@ T.Engine.prototype = {
                         sorted_hash_names = sorted_names
                     }
 
-                    o = C.Array.aV(sorted_hash_names, "\r")
+                    o = C.Array.aV(sorted_hash_names, "\n")
                     sorted_hash = C.e.gaB().ab(o)
-
                     this_.b = new LangData.SuperRC4()
                     this_.b.bd(sorted_hash, 1) // init 1
                     this_.b.bO(sorted_hash) // xor bytes once
@@ -16822,8 +16858,8 @@ T.Engine.prototype = {
                         for (k = b1.f, j = k.length, b2 = 0; b2 < k.length; k.length === j || (0, H.F)(k), ++b2) {
                             player = k[b2]
                             i = this_.b
-                            f = player.e
-                            i.bO(C.e.gaB().ab(f))
+                            group = player.e
+                            i.bO(C.e.gaB().ab(group))
                         }
                         this_.b.bO(H.b([0], m))
                         C.Array.a5(name2p, b1.f)
@@ -17242,7 +17278,8 @@ T.Plr.prototype = {
         // Plr 构造函数
         // 名字字符输入的处理在此
         var name, team, q, p, o, n, m, l, k, j, i, this_ = this
-
+        // this.c -> sglname
+        // this.d -> weapon
         this_.I = this_.gfJ()
         name = this_.r = this_.a // 名字第一部分
         team = this_.b // @ 号以后的东西
@@ -17267,7 +17304,7 @@ T.Plr.prototype = {
 
                 // 武器列表
                 team = $.rj()
-                console.log("$.rj()", $.rj())
+                // console.log("$.rj()", $.rj())
                 if (team.J(0, q)) {
                     p = team.h(0, q).$2(q, this_)
                 } else if (J.nz(q, $.cl())) {
@@ -17287,43 +17324,58 @@ T.Plr.prototype = {
         }
 
         if (J.lW(name, " ")) {
-            this_.r = name.split(" ")[0]
+            this_.r = name.split(" ")[0] // display name = 第一部分
         }
         if (this_.c == null) {
             this_.c = this_.b
         }
-        team = new LangData.SuperRC4()
-
-        team.bd(LangData.fZ(this_.b), 1)
-        this_.X = team
+        let rc4 = new LangData.SuperRC4()
+        rc4.bd(LangData.fZ(this_.b), 1)
+        this_.X = rc4
         // q = $.ns()
         // $.mc = q + 1
         q = why_ns
         why_ns += 1
 
-        q = C.JsInt.P(Math.abs(q), $.bx())
+        // q = C.JsInt.P(Math.abs(q), $.bx())
+        q = C.JsInt.P(Math.abs(q), 2048)
+        q = Math.abs(q) / 2048
         n = 0
-        if (q > n) {
-            q = team.c
+        // if (q > n) {
+        if (q > 0) {
+            q = rc4.c
             m = q[n]
             l = 1
             q[n] = q[l]
             q[l] = m
         }
-        team.dB(0, LangData.fZ(name), $.t())
-        for (name = this_.X.c, name.length, team = this_.a2, k = 0; k < 256; ++k) {
+        // console.log("name and this_.b", name, this_.b, why_ns)
+        // console.log("$.nW, .nV, .mP .mb, .r2, .r3, .r4, .eX .b2", $.nW, $.nV, $.mP(), $.mb, $.r2(), $.r3(), $.r4(), $.eX(), $.b2())
+        // 181 160 255 89 217 0 math.random 256 63
+        // rc4.dB(0, LangData.fZ(name), $.t())
+        rc4.dB(0, LangData.fZ(name), 2)
+        for (name = this_.X.c, name.length, k = 0; k < 256; ++k) {
             j = name[k]
-            i = (j * $.nW + $.nV & $.mP()) >>> 0
-            if (i >= $.mb && i < $.r2()) {
-                C.Array.j(this_.t, (i + $.r3() * $.r4().ax($.eX()) & $.b2()) >>> 0)
-            } else team.push(j)
+            // i = (j * $.nW + $.nV & $.mP()) >>> 0
+            // if (i >= $.mb && i < $.r2()) {
+            //     C.Array.j(this_.t, (i + $.r3() * $.r4().ax($.eX()) & $.b2()) >>> 0)
+            // } else rc4.push(j)
+            i = (j * 181 + 160 & 255) >>> 0
+            if (i >= 89 && i < 217) {
+                // C.Array.j(this_.t, (i + 0 * (Math.random() * 256) & 63) >>> 0)
+                this_.t.push((i & 63) >>> 0)
+            }
+            // } else {
+            //     // rc4.push(j)
+            //     this_.a2.push(j)
+            // }
         }
         name = this_.t
         name = H.b(name.slice(0), H._arrayInstanceType(name))
         this_.E = name
         this_.ac() // createSkills, 对this.k1直接操作，顺序固定
         this_.k2 = this_.X.dH(this_.k1, t.c5)
-        // rc4.next
+        // rc4.sort
     },
     bf() {
         // MARK: 名字长度系数计算
@@ -17337,8 +17389,9 @@ T.Plr.prototype = {
         if (p > $.au()) throw H.wrap_expression(p)
         q = T.lC(q) // name
         p = T.lC(this_.b) // team
-        s = $.a4() // 6
-        this_.x = Math.max(H.ar(q), p - s)
+        // s = $.a4() // 6
+        // this_.x = Math.max(H.ar(q), p - s)
+        this_.x = Math.max(H.ar(q), p - 6)
         // logger.info("name", this.a, "team", this.b, "x(final)", this_.x, "p(team)", p, "q(name)", q)
     },
     b0(a, b) {
@@ -17354,15 +17407,18 @@ T.Plr.prototype = {
         /// upgrade leader from team member
         var s, this_ = this
         if (a.length === this_.t.length) {
-            for (s = $.ap(); s < this_.t.length; ++s)
+            for (s = $.ap(); s < this_.t.length; ++s) {
                 if ((a[s - 1] === this_.E[s]) && a[s] > this_.t[s]) {
                     this_.t[s] = a[s]
                 }
-            if (this_.a == this_.b)
-                for (s = $.X(); s < this_.t.length; ++s)
+            }
+            if (this_.a == this_.b) {
+                for (s = $.X(); s < this_.t.length; ++s) {
                     if ((a[s - $.t()] === this_.E[s]) && a[s] > this_.t[s]) {
                         this_.t[s] = a[s]
                     }
+                }
+            }
         }
     },
     cg() {
@@ -17432,14 +17488,17 @@ T.Plr.prototype = {
     aU() {
         // initRawAttr
         var s, r, q, p, this_ = this
-        for (s = $.Z(); s < 31; s += $.B()) {
+        // for (s = $.Z(); s < 31; s += $.B()) {
+        for (s = 10; s < 31; s += 3) {
             r = this_.q
-            q = C.Array.al(this_.t, s, s + $.B())
-            if (!!q.immutable$list) H.throw_expression(P.UnsupportError("sort"))
+            // q = C.Array.al(this_.t, s, s + $.B())
+            q = C.Array.al(this_.t, s, s + 3)
+            // if (!!q.immutable$list) H.throw_expression(P.UnsupportError("sort"))
             p = q.length - 1
+            // sort
             if (p - 0 <= 32) H.ej(q, 0, p, J.bO())
             else H.ei(q, 0, p, J.bO())
-            C.Array.j(r, q[1])
+            C.Array.j(r, q[1]) // push
         }
         r = this_.q
 
@@ -17566,7 +17625,6 @@ T.Plr.prototype = {
                     }
                 }
             }
-
         } catch (error) {
             console.log("error diy")
             console.error(error)
@@ -18610,6 +18668,7 @@ T.SklZombie.prototype = {
         if (!(a6 instanceof T.Minion) && (a7.n() & 63) < this_.f && this_.r.bw(a7)) {
             a6.r2.m(0, $.iJ(), new T.ZombieState())
             s = H.as_string(this_.r.a) + "?" + H.as_string($.qZ())
+            // name + ? + zombie
             r = this_.r
             q = r.b
             r = r.c
@@ -19121,16 +19180,16 @@ T.Weapon.prototype = {
     },
     bn() {
         // preUpgrade
-        var s, r, q, p = this,
+        var s, r, q, this_ = this,
             o = 0
-        for (s = $.Z(), r = p.c; s < $.d1(); s += $.B()) {
-            o += p.cB(r.E, r.t, p.d, s)
+        for (s = $.Z(), r = this_.c; s < $.d1(); s += $.B()) {
+            o += this_.cB(r.E, r.t, this_.d, s)
         }
         r = C.JsInt.P($.mY() - o, $.a4())
-        p.f = r
+        this_.f = r
         q = 0
         if (r < q) {
-            p.f = q
+            this_.f = q
         }
     },
     cs() {
@@ -20168,14 +20227,16 @@ var t = (function rtii() {
         return LangData.j("e'teI>NNCU", 17)
     })
     lazy_old($, "zA", "qZ", function () {
-        return LangData.j("CXmc>1nB", 39)
+        // return LangData.j("CXmc>1nB", 39)
+        return "zombie"
     })
     lazy_old($, "ze", "qM", function () {
         // return LangData.j("qnQymy)B", 38)
         return "shadow"
     })
     lazy_old($, "zl", "qQ", function () {
-        return LangData.j("WG/z.8^B", 55)
+        // return LangData.j("WG/z.8^B", 55)
+        return "summon"
     })
     lazy_old($, "yE", "na", function () {
         // return LangData.j("EMzI&'T=]Q:wUF", 13)
@@ -20499,7 +20560,8 @@ var t = (function rtii() {
         return X.k("uo2[vY3QwA", 3)
     })
     lazy_old($, "wQ", "B", function () {
-        return X.k("Cv.c@Ovh.D", 22)
+        // return X.k("Cv.c@Ovh.D", 22)
+        return 3
     })
     lazy_old($, "wa", "p8", function () {
         return X.k("o8#!>[]y<J", 57)
@@ -20935,6 +20997,7 @@ var t = (function rtii() {
         return X.k("}-?M/~zGrI", 98)
     })
     lazy_old($, "zO", "r4", function () {
+        // math.random
         return P.o_()
     })
     // lazy_old($, "mc", "ns", function () {
@@ -21894,6 +21957,7 @@ const runner = {
             main(names);
         })
     },
+    run_env: run_env
 };
 
 if (run_env.from_code) {
