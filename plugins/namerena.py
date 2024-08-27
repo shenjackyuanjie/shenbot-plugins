@@ -33,7 +33,7 @@ else:
     TailchatReciveMessage = TypeVar("TailchatReciveMessage")
 
 
-_version_ = "0.6.0"
+_version_ = "0.6.1"
 
 EVAL_PREFIX = "/namerena"
 CONVERT_PREFIX = "/namer-peek"
@@ -82,6 +82,10 @@ def eval_fight(msg: ReciveMessage, client) -> None:
     names = msg.content[len(EVAL_PREFIX) :]
     # 去掉第一个 \n
     names = names[names.find("\n") + 1 :]
+    # 判空, 别报错了
+    if names.strip() == "":
+        client.send_message(msg.reply_with("请输入名字"))
+        return
 
     start_time = time.time()
     # 开始 try
