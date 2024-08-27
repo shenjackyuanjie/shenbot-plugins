@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import io
 import sys
 import time
@@ -31,7 +33,7 @@ else:
     TailchatReciveMessage = TypeVar("TailchatReciveMessage")
 
 
-_version_ = "0.5.0"
+_version_ = "0.6.0"
 
 EVAL_PREFIX = "/namerena"
 CONVERT_PREFIX = "/namer-peek"
@@ -89,11 +91,11 @@ def eval_fight(msg: ReciveMessage, client) -> None:
         root_path = Path(__file__).parent
         with open(root_path / "md5" / "input.txt", "w") as f:
             f.write(names)
-        # 执行 node md5.js
-        runner_path = root_path / "md5" / "md5-api.js"
-        # input_path = root_path / "md5" / "input.txt"
+        # 执行 node md5-api.js / bun md5-api.ts
+        use_bun = CONFIG_DATA["use_bun"]
+        runner_path = root_path / "md5" / ("md5-api.ts" if use_bun else "md5-api.js")
         result = subprocess.run(
-            ["node", runner_path.absolute()],
+            ["bun", "run", runner_path.absolute()] if use_bun else ["node", runner_path.absolute()],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
@@ -127,3 +129,10 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
 
 def on_tailchat_message(msg: TailchatReciveMessage, client) -> None:
     dispatch_msg(msg, client)  # type: ignore
+
+
+def on_config() -> tuple[str, str]:
+    return (
+        "namer.toml",
+        "use_bun = false # 是否使用 bun"
+    )

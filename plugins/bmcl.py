@@ -361,8 +361,8 @@ def on_tailchat_message(msg, client: TailchatClient) -> None:
                     if len(name) > 1:
                         name = name[1]
                         bmcl_rank(msg, client, name)
-            elif msg.content == "/bm93":
-                bangbang_img(msg, client)
+            # elif msg.content == "/bm93":
+            #     bangbang_img(msg, client)
         except:  # noqa
             report_msg = f"bmcl插件发生错误,请呼叫shenjack\n{traceback.format_exc()}"
             client.warn(report_msg)
