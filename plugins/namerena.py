@@ -109,7 +109,7 @@ def eval_fight(msg: ReciveMessage, client) -> None:
         # 发送结果
         end_time = time.time()
         reply = msg.reply_with(
-            f"{out_result}{err_result}外部耗时:{end_time - start_time:.2f}s\n版本:{_version_}"
+            f"{out_result}{err_result}外部耗时:{end_time - start_time:.2f}s\n版本:{_version_}-{'bun' if use_bun else 'node'}"
         )
         client.send_message(reply)
     except Exception as e:
