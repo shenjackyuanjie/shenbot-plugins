@@ -281,7 +281,7 @@ help = f"""/bmcl -> dashboard
 /bmcl rank <name> -> rank of <name>
 /brrs <name> -> rank of <name>
 搜索限制:
-1- {FULL_DISPLAY} 显示全部信息
+1-{FULL_DISPLAY} 显示全部信息
 {FULL_DISPLAY+1}-{MAX_DISPLAY} 显示状态、名称
 {MAX_DISPLAY+1}+  不显示
 """
