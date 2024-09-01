@@ -17,7 +17,7 @@ else:
     IcaNewMessage = TypeVar("NewMessage")
     IcaClient = TypeVar("IcaClient")
 
-_version_ = "2.8.0-rs"
+_version_ = "2.8.1-rs"
 backend_version = "unknown"
 
 def format_data_size(data_bytes: float) -> str:
@@ -213,6 +213,10 @@ def bmcl_rank_general(msg, client):
     client.send_message(reply)
 
 
+FULL_DISPLAY = 3
+MAX_DISPLAY = 20
+
+
 def bmcl_rank(msg: IcaNewMessage, client: IcaClient | TailchatClient, name: str) -> None:
     req_time = time.time()
     # 记录请求时间
@@ -237,8 +241,8 @@ def bmcl_rank(msg: IcaNewMessage, client: IcaClient | TailchatClient, name: str)
     # 如果找到 > 3 个节点, 则提示 不显示
     counts = [f for f in finds if f]
     ranks = [rank_data[i] for i, f in enumerate(finds) if f]
-    if len(counts) > 3:
-        if len(counts) > 10:
+    if len(counts) > FULL_DISPLAY:
+        if len(counts) > MAX_DISPLAY:
             reply = msg.reply_with(f"搜索|{name}|到{len(counts)}个节点, 请用更精确的名字")
         else:
             # 4~10  个节点 只显示名称和次序
@@ -273,14 +277,14 @@ def bmcl_rank(msg: IcaNewMessage, client: IcaClient | TailchatClient, name: str)
 #     client.send_message(reply)
 
 
-help = """/bmcl -> dashboard
+help = f"""/bmcl -> dashboard
 /bmcl rank -> all rank
 /bmcl rank <name> -> rank of <name>
 /brrs <name> -> rank of <name>
 搜索限制:
-1- 3 显示全部信息
-4-10 显示状态、名称
-11+  不显示
+1- {FULL_DISPLAY} 显示全部信息
+{FULL_DISPLAY+1}-{MAX_DISPLAY} 显示状态、名称
+{MAX_DISPLAY+1}+  不显示
 """
 # /bm93 -> 随机怪图
 
