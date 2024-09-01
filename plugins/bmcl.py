@@ -3,7 +3,6 @@ import io
 import time
 import requests
 import traceback
-import urllib.parse
 
 # import PIL
 
