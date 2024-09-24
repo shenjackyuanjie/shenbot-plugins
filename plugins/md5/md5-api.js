@@ -231,7 +231,7 @@ function main() {
                     fs = require("fs");
                     path = require("path");
                     process = require("process");
-                    if (!(process.argv.length > 2 && process.argv[2] === "fight")) return [3 /*break*/, 2];
+                    if (!("fight" in process.argv)) return [3 /*break*/, 2];
                     names_1 = fs.readFileSync(path.resolve(__dirname, "input.txt"), "utf-8");
                     return [4 /*yield*/, fight_only(names_1)];
                 case 1:
