@@ -188,20 +188,30 @@ async function wrap_any(names: string, round: number): Promise<string> {
 	}
 }
 
+async function fight_only(names: string) {
+	md5_module.run_env.fight_only = true;
+	const result = await fight(names);
+	console.log(result.source_plr); // 输出完事
+}
+
 async function main() {
 	// 从相对位置导入内容
 	const fs = require("fs");
 	const path = require("path");
-
+	const process = require("process");
+	// 读取 cli
+	// 有 fight 参数就开启 fight_only模式
+	if (process.argv.length > 2 && process.argv[2] === "fight") {
+		const names = fs.readFileSync(path.resolve(__dirname, "input.txt"), "utf-8");
+		await fight_only(names);
+		return;
+	}
 	const names = fs.readFileSync(path.resolve(__dirname, "input.txt"), "utf-8");
 	// const result = await fight(names);
 	// const result = await md5_module.run_any(names, 50000);
 	// console.log(`赢家:|${result.source_plr}|`);
-	const start_time = Date.now();
 	const result = await wrap_any(names, 10000);
-	const end_time = Date.now();
 	console.log(result);
-	console.log(`Node.js 耗时: ${end_time - start_time} ms`);
 }
 
 main();

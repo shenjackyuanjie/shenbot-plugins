@@ -33,23 +33,38 @@ else:
     TailchatReciveMessage = TypeVar("TailchatReciveMessage")
 
 
-_version_ = "0.6.1"
+_version_ = "0.7.0"
 
-EVAL_PREFIX = "/namerena"
-CONVERT_PREFIX = "/namer-peek"
+CMD_PREFIX = "/namer"
 
+EVAL_CMD = "/namerena"
+EVAL_SIMPLE_CMD = f"{CMD_PREFIX}" # 用于简化输入
+CONVERT_CMD = f"{CMD_PREFIX}-peek"
+FIGHT_CMD = f"/{CMD_PREFIX}-fight"
+HELP_CMD = f"{EVAL_CMD}-help"
+
+HELP_MSG = f"""namerena-v[{_version_}]
+名字竞技场 一款不建议入坑的文字类游戏
+
+- {HELP_CMD} - 查看帮助
+- {EVAL_CMD} - 运行名字竞技场, 每一行是一个输入, 输入格式与网页版相同
+- {EVAL_SIMPLE_CMD} - 简化输入
+- {CONVERT_CMD} - 查看一个名字的属性, 每一行一个名字
+- {FIGHT_CMD} - 1v1 战斗, 格式是 "AAA+BBB+[seed]"
+    - 例如: "AAA+BBB+seed:123@!" 表示 AAA 和 BBB 以 123@! 为种子进行战斗
+    - 可以输入多行"""
 
 def convert_name(msg: ReciveMessage, client) -> None:
     # 也是多行
     if msg.content.find("\n") == -1:
         client.send_message(
             msg.reply_with(
-                f"请使用 {CONVERT_PREFIX} 命令，然后换行输入名字，例如：\n{CONVERT_PREFIX}\n张三\n李四\n王五\n"
+                f"请使用 {CONVERT_CMD} 命令，然后换行输入名字，例如：\n{CONVERT_CMD}\n张三\n李四\n王五\n"
             )
         )
         return
     # 去掉 prefix
-    names = msg.content[len(CONVERT_PREFIX) :]
+    names = msg.content[len(CONVERT_CMD) :]
     # 去掉第一个 \n
     names = names[names.find("\n") + 1 :]
     cache = io.StringIO()
@@ -74,12 +89,12 @@ def eval_fight(msg: ReciveMessage, client) -> None:
         if msg.content.find(" ") != -1:
             client.send_message(
                 msg.reply_with(
-                    f"请使用 {EVAL_PREFIX} 命令，然后换行输入名字，例如：\n{EVAL_PREFIX}\n张三\n李四\n王五\n"
+                    f"请使用 {EVAL_CMD} 命令，然后换行输入名字，例如：\n{EVAL_CMD}\n张三\n李四\n王五\n"
                 )
             )
             return
     # 去掉 prefix
-    names = msg.content[len(EVAL_PREFIX) :]
+    names = msg.content[len(EVAL_CMD) :]
     # 去掉第一个 \n
     names = names[names.find("\n") + 1 :]
     # 判空, 别报错了
@@ -118,12 +133,33 @@ def eval_fight(msg: ReciveMessage, client) -> None:
         client.send_message(reply)
 
 
+def run_fights(msg: ReciveMessage, client) -> None:
+    # 先解析出要运行的东西
+    # 格式
+    # aaaa+bbb+seed:123@!
+    # aaa+bbb
+    content = msg.content[len(FIGHT_CMD) :]
+    # 去掉第一个 \n
+    content = content[content.find("\n") + 1 :]
+    # 判空, 别报错了
+    if content.strip() == "":
+        client.send_message(msg.reply_with("请输入名字"))
+        return
+    # 以换行分割
+    fights = content.split("\n")
+    
+
+
 def dispatch_msg(msg: ReciveMessage, client) -> None:
     if msg.is_reply or msg.is_from_self:
         return
-    if msg.content.startswith(EVAL_PREFIX):
+    if msg.content == HELP_CMD:
+        client.send_message(msg.reply_with(HELP_MSG))
+    if msg.content.startswith(EVAL_CMD) or msg.content.startswith(EVAL_SIMPLE_CMD):
         eval_fight(msg, client)
-    elif msg.content.startswith(CONVERT_PREFIX):
+    elif msg.content.startswith(FIGHT_CMD):
+        run_fights(msg, client)
+    elif msg.content.startswith(CONVERT_CMD):
         convert_name(msg, client)
 
 

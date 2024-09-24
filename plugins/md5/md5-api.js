@@ -206,22 +206,43 @@ function wrap_any(names, round) {
         });
     });
 }
+function fight_only(names) {
+    return __awaiter(this, void 0, void 0, function () {
+        var result;
+        return __generator(this, function (_a) {
+            switch (_a.label) {
+                case 0:
+                    md5_module.run_env.fight_only = true;
+                    return [4 /*yield*/, fight(names)];
+                case 1:
+                    result = _a.sent();
+                    console.log(result.source_plr); // 输出完事
+                    return [2 /*return*/];
+            }
+        });
+    });
+}
 function main() {
     return __awaiter(this, void 0, void 0, function () {
-        var fs, path, names, start_time, result, end_time;
+        var fs, path, process, names_1, names, result;
         return __generator(this, function (_a) {
             switch (_a.label) {
                 case 0:
                     fs = require("fs");
                     path = require("path");
-                    names = fs.readFileSync(path.resolve(__dirname, "input.txt"), "utf-8");
-                    start_time = Date.now();
-                    return [4 /*yield*/, wrap_any(names, 10000)];
+                    process = require("process");
+                    if (!(process.argv.length > 2 && process.argv[2] === "fight")) return [3 /*break*/, 2];
+                    names_1 = fs.readFileSync(path.resolve(__dirname, "input.txt"), "utf-8");
+                    return [4 /*yield*/, fight_only(names_1)];
                 case 1:
+                    _a.sent();
+                    return [2 /*return*/];
+                case 2:
+                    names = fs.readFileSync(path.resolve(__dirname, "input.txt"), "utf-8");
+                    return [4 /*yield*/, wrap_any(names, 10000)];
+                case 3:
                     result = _a.sent();
-                    end_time = Date.now();
                     console.log(result);
-                    console.log("Node.js \u8017\u65F6: ".concat(end_time - start_time, " ms"));
                     return [2 /*return*/];
             }
         });
