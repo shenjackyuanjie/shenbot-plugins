@@ -170,7 +170,7 @@ def run_fights(msg: ReciveMessage, client) -> None:
         out_result = result.stdout.decode("utf-8")
         err_result = result.stderr.decode("utf-8")
         if out_result.strip() in names:
-            results.append(names.index(out_result.strip()))
+            results.append(f"{names.index(out_result.strip())}")
         else:
             results.append(f"{out_result}{err_result}")
     # 输出
