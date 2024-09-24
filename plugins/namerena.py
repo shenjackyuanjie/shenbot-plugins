@@ -147,7 +147,32 @@ def run_fights(msg: ReciveMessage, client) -> None:
         return
     # 以换行分割
     fights = content.split("\n")
-
+    results = []
+    for fight in fights:
+        # 以 + 分割
+        names = fight.split("+")
+        if len(names) < 2:
+            results.append(f"输入错误, 只有{len(names)} 个部分")
+            continue
+        # 丢进文件里
+        root_path = Path(__file__).parent
+        with open(root_path / "md5" / "input.txt", "w") as f:
+            f.write("\n".join(names))
+        # 执行 node md5-api.js / bun md5-api.ts
+        use_bun = CONFIG_DATA["use_bun"]
+        runner_path = root_path / "md5" / ("md5-api.ts" if use_bun else "md5-api.js")
+        result = subprocess.run(
+            ["bun", "run", runner_path.absolute()] if use_bun else ["node", runner_path.absolute()],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        # 获取结果
+        out_result = result.stdout.decode("utf-8")
+        err_result = result.stderr.decode("utf-8")
+        results.append(f"{out_result}{err_result}")
+    # 输出
+    reply = msg.reply_with(f"{results}")
+    client.send_message(reply)
 
 
 def dispatch_msg(msg: ReciveMessage, client) -> None:
