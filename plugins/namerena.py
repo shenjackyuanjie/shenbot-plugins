@@ -162,16 +162,19 @@ def run_fights(msg: ReciveMessage, client) -> None:
         use_bun = CONFIG_DATA["use_bun"]
         runner_path = root_path / "md5" / ("md5-api.ts" if use_bun else "md5-api.js")
         result = subprocess.run(
-            ["bun", "run", runner_path.absolute()] if use_bun else ["node", runner_path.absolute()],
+            ["bun", "run", runner_path.absolute()] if use_bun else ["node", runner_path.absolute(), "fight"], # 调用
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
         # 获取结果
         out_result = result.stdout.decode("utf-8")
         err_result = result.stderr.decode("utf-8")
-        results.append(f"{out_result}{err_result}")
+        if out_result.strip() in names:
+            results.append(names.index(out_result.strip()))
+        else:
+            results.append(f"{out_result}{err_result}")
     # 输出
-    reply = msg.reply_with(f"{results}")
+    reply = msg.reply_with("|".join(results))
     client.send_message(reply)
 
 
