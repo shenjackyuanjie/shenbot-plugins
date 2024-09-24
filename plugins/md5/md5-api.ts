@@ -201,7 +201,7 @@ async function main() {
 	const process = require("process");
 	// 读取 cli
 	// 有 fight 参数就开启 fight_only模式
-	if ("fight" in process.argv) {
+	if (process.argv.length > 2 && process.argv[2] === "fight") {
 		const names = fs.readFileSync(path.resolve(__dirname, "input.txt"), "utf-8");
 		await fight_only(names);
 		return;
