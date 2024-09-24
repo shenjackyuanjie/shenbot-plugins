@@ -162,7 +162,7 @@ def run_fights(msg: ReciveMessage, client) -> None:
         use_bun = CONFIG_DATA["use_bun"]
         runner_path = root_path / "md5" / ("md5-api.ts" if use_bun else "md5-api.js")
         result = subprocess.run(
-            ["bun", "run", runner_path.absolute()] if use_bun else ["node", runner_path.absolute(), "fight"], # 调用
+            ["bun", "run", runner_path.absolute(), "fight"] if use_bun else ["node", runner_path.absolute(), "fight"], # 调用
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
