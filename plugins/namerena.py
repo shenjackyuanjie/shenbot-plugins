@@ -176,7 +176,7 @@ def run_fights(msg: ReciveMessage, client) -> None:
             results.append(f"{out_result}{err_result}")
     # 输出
     end_time = time.time()
-    reply = msg.reply_with(f"{"|".join(results)}\n耗时:{end_time - start_time:.2f}s\n版本:{_version_}-{'bun' if use_bun else 'node'}")
+    reply = msg.reply_with(f"{'|'.join(results)}\n耗时:{end_time - start_time:.2f}s\n版本:{_version_}-{'bun' if use_bun else 'node'}")
     client.send_message(reply)
 
 
