@@ -41,7 +41,7 @@ EVAL_CMD = "/namerena"
 EVAL_SIMPLE_CMD = f"{CMD_PREFIX}" # 用于简化输入
 CONVERT_CMD = f"{CMD_PREFIX}-peek"
 FIGHT_CMD = f"{CMD_PREFIX}-fight"
-HELP_CMD = f"{EVAL_CMD}-help"
+HELP_CMD = f"{CMD_PREFIX}-help"
 
 HELP_MSG = f"""namerena-v[{_version_}]
 名字竞技场 一款不建议入坑的文字类游戏
