@@ -33,7 +33,7 @@ else:
     TailchatReciveMessage = TypeVar("TailchatReciveMessage")
 
 
-_version_ = "0.7.0"
+_version_ = "0.7.1"
 
 CMD_PREFIX = "/namer"
 
@@ -148,6 +148,7 @@ def run_fights(msg: ReciveMessage, client) -> None:
     # 以换行分割
     fights = content.split("\n")
     results = []
+    start_time = time.time()
     for fight in fights:
         # 以 + 分割
         names = fight.split("+")
@@ -174,7 +175,8 @@ def run_fights(msg: ReciveMessage, client) -> None:
         else:
             results.append(f"{out_result}{err_result}")
     # 输出
-    reply = msg.reply_with("|".join(results))
+    end_time = time.time()
+    reply = msg.reply_with(f"{"|".join(results)}\n耗时:{end_time - start_time:.2f}s\n版本:{_version_}-{'bun' if use_bun else 'node'}")
     client.send_message(reply)
 
 
@@ -193,7 +195,7 @@ def dispatch_msg(msg: ReciveMessage, client) -> None:
     elif msg.content.startswith(EVAL_SIMPLE_CMD):
         # 放在最后, 避免覆盖 前面的命令
         # 同时过滤掉别的 /namer-xxxxx
-        if msg.content.find(" ") != -1:
+        if not msg.content.startswith(f"{EVAL_SIMPLE_CMD}-"):
             eval_fight(msg, client)
 
 
