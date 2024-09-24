@@ -154,8 +154,9 @@ def dispatch_msg(msg: ReciveMessage, client) -> None:
     if msg.is_reply or msg.is_from_self:
         return
     if msg.content == HELP_CMD:
-        client.send_message(msg.reply_with(HELP_MSG))
-    if msg.content.startswith(EVAL_CMD):
+        reply = msg.reply_with(HELP_MSG)
+        client.send_message(reply)
+    elif msg.content.startswith(EVAL_CMD):
         eval_fight(msg, client)
     elif msg.content.startswith(FIGHT_CMD):
         run_fights(msg, client)
@@ -164,8 +165,8 @@ def dispatch_msg(msg: ReciveMessage, client) -> None:
     elif msg.content.startswith(EVAL_SIMPLE_CMD):
         # 放在最后, 避免覆盖 前面的命令
         # 同时过滤掉别的 /namer-xxxxx
-        if msg.content.find(" ") == -1:
-            return
+        if msg.content.find(" ") != -1:
+            eval_fight(msg, client)
 
 
 def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
