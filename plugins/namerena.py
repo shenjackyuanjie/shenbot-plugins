@@ -147,7 +147,7 @@ def run_fights(msg: ReciveMessage, client) -> None:
         return
     # 以换行分割
     fights = content.split("\n")
-    
+
 
 
 def dispatch_msg(msg: ReciveMessage, client) -> None:
@@ -155,12 +155,17 @@ def dispatch_msg(msg: ReciveMessage, client) -> None:
         return
     if msg.content == HELP_CMD:
         client.send_message(msg.reply_with(HELP_MSG))
-    if msg.content.startswith(EVAL_CMD) or msg.content.startswith(EVAL_SIMPLE_CMD):
+    if msg.content.startswith(EVAL_CMD):
         eval_fight(msg, client)
     elif msg.content.startswith(FIGHT_CMD):
         run_fights(msg, client)
     elif msg.content.startswith(CONVERT_CMD):
         convert_name(msg, client)
+    elif msg.content.startswith(EVAL_SIMPLE_CMD):
+        # 放在最后, 避免覆盖 前面的命令
+        # 同时过滤掉别的 /namer-xxxxx
+        if msg.content.find(" ") == -1:
+            return
 
 
 def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
