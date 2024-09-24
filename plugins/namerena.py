@@ -40,7 +40,7 @@ CMD_PREFIX = "/namer"
 EVAL_CMD = "/namerena"
 EVAL_SIMPLE_CMD = f"{CMD_PREFIX}" # 用于简化输入
 CONVERT_CMD = f"{CMD_PREFIX}-peek"
-FIGHT_CMD = f"/{CMD_PREFIX}-fight"
+FIGHT_CMD = f"{CMD_PREFIX}-fight"
 HELP_CMD = f"{EVAL_CMD}-help"
 
 HELP_MSG = f"""namerena-v[{_version_}]
