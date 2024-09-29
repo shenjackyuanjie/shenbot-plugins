@@ -9,10 +9,13 @@ pub type RoomId = i64;
 pub type UserId = i64;
 pub type MessageId = String;
 """
+
+
 class IcaType:
-    RoomId = NewType('RoomId', int)
-    UserId = NewType('UserId', int)
-    MessageId = NewType('MessageId', str)
+    RoomId = NewType("RoomId", int)
+    UserId = NewType("UserId", int)
+    MessageId = NewType("MessageId", str)
+
 
 """
 tailchat.rs
@@ -21,63 +24,56 @@ pub type ConverseId = String;
 pub type UserId = String;
 pub type MessageId = String;
 """
+
+
 class TailchatType:
-    GroupId = NewType('GroupId', str)
-    ConverseId = NewType('ConverseId', str)
-    UserId = NewType('UserId', str)
-    MessageId = NewType('MessageId', str)
+    GroupId = NewType("GroupId", str)
+    ConverseId = NewType("ConverseId", str)
+    UserId = NewType("UserId", str)
+    MessageId = NewType("MessageId", str)
+
 
 class IcaStatus:
     """
     ica状态信息
     此类并不存储信息, 所有方法都是实时获取
     """
+
     @property
-    def qq_login(self) -> bool:
-        ...
+    def qq_login(self) -> bool: ...
     @property
-    def online(self) -> bool:
-        ...
+    def online(self) -> bool: ...
     @property
-    def self_id(self) -> IcaType.UserId:
-        ...
+    def self_id(self) -> IcaType.UserId: ...
     @property
-    def nick_name(self) -> str:
-        ...
+    def nick_name(self) -> str: ...
     @property
-    def ica_version(self) -> str:
-        ...
+    def ica_version(self) -> str: ...
     @property
-    def os_info(self) -> str:
-        ...
+    def os_info(self) -> str: ...
     @property
-    def resident_set_size(self) -> str:
-        ...
+    def resident_set_size(self) -> str: ...
     @property
-    def head_used(self) -> str:
-        ...
+    def head_used(self) -> str: ...
     @property
-    def load(self) -> str:
-        ...
+    def load(self) -> str: ...
 
 
-class IcaReplyMessage:
-    ...
+class IcaReplyMessage: ...
 
 
 class IcaSendMessage:
     @property
-    def content(self) -> str:
-        ...
+    def content(self) -> str: ...
     @content.setter
-    def content(self, value: str) -> None:
-        ...
+    def content(self, value: str) -> None: ...
     def with_content(self, content: str) -> "IcaSendMessage":
         """
         为了链式调用, 返回自身
         """
         self.content = content
         return self
+
     def set_img(self, file: bytes, file_type: str, as_sticker: bool):
         """
         设置消息的图片
@@ -85,54 +81,66 @@ class IcaSendMessage:
         @param file_type: 图片类型 (MIME) (image/png; image/jpeg)
         @param as_sticker: 是否作为贴纸发送
         """
+    def remove_reply(self) -> "IcaSendMessage":
+        """删除回复"""
+        ...
 
 
 class IcaDeleteMessage:
-    def __str__(self) -> str:
-        ...
+    def __str__(self) -> str: ...
 
 
 class IcaNewMessage:
     """
     Icalingua 接收到新消息
     """
+
     def reply_with(self, message: str) -> IcaSendMessage:
         """创建一条 回复这条消息 的可发送消息"""
         ...
+
     def as_deleted(self) -> IcaDeleteMessage:
+        """作为一条要被撤回的消息"""
         ...
-    def __str__(self) -> str:
-        ...
+
+    def __str__(self) -> str: ...
     @property
     def id(self) -> IcaType.MessageId:
+        """消息的 Id"""
         ...
+
     @property
-    def content(self) -> str:
-        ...
+    def content(self) -> str: ...
     @property
     def sender_id(self) -> IcaType.UserId:
         """获取发送人id"""
         ...
+
     @property
     def sender_name(self) -> str:
         """获取发送人名字"""
         ...
+
     @property
     def is_from_self(self) -> bool:
         """是不是自己发的消息"""
         ...
+
     @property
     def is_reply(self) -> bool:
         """是不是回复消息"""
         ...
+
     @property
     def is_room_msg(self) -> bool:
         """是否是群聊消息"""
         ...
+
     @property
     def is_chat_msg(self) -> bool:
         """是否是私聊消息"""
         ...
+
     @property
     def room_id(self) -> IcaType.RoomId:
         """
@@ -146,6 +154,7 @@ class IcaClient:
     """
     Icalingua 的客户端
     """
+
     # @staticmethod
     # async def send_message_a(client: "IcaClient", message: SendMessage) -> bool:
     #     """
@@ -156,41 +165,46 @@ class IcaClient:
     def send_message(self, message: IcaSendMessage) -> bool:
         """发送一条消息"""
         ...
+
     def send_and_warn(self, message: IcaSendMessage) -> bool:
         """发送消息, 并在日志中输出警告信息"""
         self.warn(message.content)
         return self.send_message(message)
-    def delete_message(self, message: IcaDeleteMessage) -> bool:
-        ...
+
+    def delete_message(self, message: IcaDeleteMessage) -> bool: ...
 
     @property
-    def status(self) -> IcaStatus:
-        ...
+    def status(self) -> IcaStatus: ...
     @property
-    def version(self) -> str:
-        ...
+    def version(self) -> str: ...
     @property
     def version_str(self) -> str:
         """获取一个更完善的版本号信息"""
         ...
+
     @property
     def client_id(self) -> str:
         """返回一个"唯一"的客户端id"""
         ...
+
     @property
     def ica_version(self) -> str:
         """shenbot ica 的版本号"""
         ...
+
     @property
     def startup_time(self) -> datetime:
         """请注意, 此时刻为 UTC 时刻"""
         ...
+
     def debug(self, message: str) -> None:
         """向日志中输出调试信息"""
         ...
+
     def info(self, message: str) -> None:
         """向日志中输出信息"""
         ...
+
     def warn(self, message: str) -> None:
         """向日志中输出警告信息"""
         ...
@@ -200,30 +214,31 @@ class TailchatReciveMessage:
     """
     Tailchat 接收到的新消息
     """
+
     @property
-    def id(self) -> TailchatType.MessageId:
-        ...
+    def id(self) -> TailchatType.MessageId: ...
     @property
-    def content(self) -> str:
-        ...
+    def content(self) -> str: ...
     @property
-    def sender_id(self) -> TailchatType.UserId:
-        ...
+    def sender_id(self) -> TailchatType.UserId: ...
     @property
-    def is_from_self(self) -> bool:
-        ...
+    def is_from_self(self) -> bool: ...
     @property
-    def is_reply(self) -> bool:
-        ...
+    def is_reply(self) -> bool: ...
     @property
     def group_id(self) -> Optional[TailchatType.GroupId]:
+        """服务器 Id"""
         ...
+
     @property
     def converse_id(self) -> TailchatType.ConverseId:
+        """会话 Id"""
         ...
+
     def reply_with(self, message: str) -> "TailchatSendingMessage":
         """创建一条 回复这条消息 的可发送消息"""
         ...
+
     def as_reply(self, message: str) -> "TailchatSendingMessage":
         """回复这条消息"""
         ...
@@ -233,30 +248,36 @@ class TailchatSendingMessage:
     """
     Tailchat 将要发送的信息
     """
+
     @property
     def content(self) -> str:
+        """内容"""
         ...
+
     @content.setter
-    def content(self, value: str) -> None:
-        ...
+    def content(self, value: str) -> None: ...
     @property
-    def group_id(self) -> Optional[TailchatType.GroupId]:
-        ...
+    def group_id(self) -> Optional[TailchatType.GroupId]: ...
     @group_id.setter
-    def group_id(self, value: Optional[TailchatType.GroupId]) -> None:
-        ...
+    def group_id(self, value: Optional[TailchatType.GroupId]) -> None: ...
     @property
-    def converse_id(self) -> TailchatType.ConverseId:
-        ...
+    def converse_id(self) -> TailchatType.ConverseId: ...
     @converse_id.setter
-    def converse_id(self, value: TailchatType.ConverseId) -> None:
-        ...
+    def converse_id(self, value: TailchatType.ConverseId) -> None: ...
+    def clear_meta(self) -> "TailchatSendingMessage":
+        """
+        清除所有元数据, 可以用于取消 回复
+        """
+        self.meta = None
+        return self
+
     def with_content(self, content: str) -> "TailchatSendingMessage":
         """
         为了链式调用, 返回自身
         """
         self.content = content
         return self
+
     def set_img(self, file: bytes, file_name: str):
         """
         设置消息的图片
@@ -269,35 +290,49 @@ class TailchatClient:
     """
     Tailchat 的客户端
     """
-    def send_message(self, message: TailchatSendingMessage) -> bool:
-        ...
+
+    def send_message(self, message: TailchatSendingMessage) -> bool: ...
     def send_and_warn(self, message: TailchatSendingMessage) -> bool:
         """发送消息, 并在日志中输出警告信息"""
         self.warn(message.content)
         return self.send_message(message)
-    @property
-    def version(self) -> str:
+
+    def new_message(
+        self,
+        content: str,
+        converse_id: TailchatType.ConverseId,
+        group_id: Optional[TailchatType.GroupId] = None,
+    ) -> "TailchatSendingMessage": 
+        """创建一条新消息, 可用于发送"""
         ...
+    @property
+    def version(self) -> str: ...
     @property
     def version_str(self) -> str:
         """获取一个更完善的版本号信息"""
         ...
+
     @property
     def client_id(self) -> str:
         """返回一个"唯一"的客户端id"""
         ...
+
     @property
     def tailchat_version(self) -> str:
         """tailchat 的版本号"""
         ...
+
     @property
     def startup_time(self) -> datetime:
         """请注意, 此时刻为 UTC 时刻"""
         ...
+
     def debug(self, message: str) -> None:
         """向日志中输出调试信息"""
+
     def info(self, message: str) -> None:
         """向日志中输出信息"""
+
     def warn(self, message: str) -> None:
         """向日志中输出警告信息"""
 
@@ -307,15 +342,16 @@ class ReciveMessage(TailchatReciveMessage, IcaNewMessage):
     继承了两边的消息
     只是用来类型标记, 不能实例化
     """
-    def reply_with(self, message: str) -> Union["IcaReplyMessage", "TailchatSendingMessage"]:  # type: ignore
+
+    def reply_with(
+        self, message: str
+    ) -> Union["IcaReplyMessage", "TailchatSendingMessage"]:  # type: ignore
         ...
 
 
 class ConfigData:
-    def __getitem__(self, key: str):
-        ...
-    def have_key(self, key: str) -> bool:
-        ...
+    def __getitem__(self, key: str): ...
+    def have_key(self, key: str) -> bool: ...
 
 
 on_load = Callable[[IcaClient], None]
