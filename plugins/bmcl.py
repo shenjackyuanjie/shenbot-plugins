@@ -16,7 +16,7 @@ else:
     IcaNewMessage = TypeVar("NewMessage")
     IcaClient = TypeVar("IcaClient")
 
-_version_ = "2.8.1-rs"
+_version_ = "2.8.2-rs"
 backend_version = "unknown"
 
 def format_data_size(data_bytes: float) -> str:
@@ -212,8 +212,8 @@ def bmcl_rank_general(msg, client):
     client.send_message(reply)
 
 
-FULL_DISPLAY = 3
-MAX_DISPLAY = 20
+FULL_DISPLAY = 5
+MAX_DISPLAY = 25
 
 
 def bmcl_rank(msg: IcaNewMessage, client: IcaClient | TailchatClient, name: str) -> None:
@@ -234,7 +234,7 @@ def bmcl_rank(msg: IcaNewMessage, client: IcaClient | TailchatClient, name: str)
     # except Exception as e:
     finds = [name.lower() in n for n in names]
     if not any(finds):
-        reply = msg.reply_with(f"未找到名为{name}的节点")
+        reply = msg.reply_with(f"未找到指定名字的节点")
         client.send_message(reply)
         return
     # 如果找到 > 3 个节点, 则提示 不显示
@@ -242,7 +242,7 @@ def bmcl_rank(msg: IcaNewMessage, client: IcaClient | TailchatClient, name: str)
     ranks = [rank_data[i] for i, f in enumerate(finds) if f]
     if len(counts) > FULL_DISPLAY:
         if len(counts) > MAX_DISPLAY:
-            reply = msg.reply_with(f"搜索|{name}|到{len(counts)}个节点, 请用更精确的名字")
+            reply = msg.reply_with(f"搜索到{len(counts)}个节点, 请用更精确的名字")
         else:
             # 4~10  个节点 只显示名称和次序
             report_msg = display_rank_min(ranks, req_time)
