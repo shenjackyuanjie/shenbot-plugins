@@ -115,7 +115,7 @@ def bmcl_dashboard(msg: IcaNewMessage, client: IcaClient | TailchatClient) -> No
     )
     client.debug(report_msg)
     reply = msg.reply_with(report_msg)
-    client.send_message(reply)
+    client.send_message(reply) # pyright: ignore reportArgumentType
 
 
 def check_is_full_data(data: list) -> bool:
@@ -234,8 +234,8 @@ def bmcl_rank(msg: IcaNewMessage, client: IcaClient | TailchatClient, name: str)
     # except Exception as e:
     finds = [name.lower() in n for n in names]
     if not any(finds):
-        reply = msg.reply_with(f"未找到指定名字的节点")
-        client.send_message(reply)
+        reply = msg.reply_with("未找到指定名字的节点")
+        client.send_message(reply) # pyright: ignore reportArgumentType
         return
     # 如果找到 > 3 个节点, 则提示 不显示
     counts = [f for f in finds if f]
@@ -247,13 +247,13 @@ def bmcl_rank(msg: IcaNewMessage, client: IcaClient | TailchatClient, name: str)
             # 4~10  个节点 只显示名称和次序
             report_msg = display_rank_min(ranks, req_time)
             reply = msg.reply_with(report_msg)
-        client.send_message(reply)
+        client.send_message(reply) # pyright: ignore reportArgumentType
         return
     # 如果找到 <= 3 个节点, 则显示全部信息
     report_msg = display_rank_full(ranks, req_time)
     client.debug(report_msg)
     reply = msg.reply_with(report_msg)
-    client.send_message(reply)
+    client.send_message(reply) # pyright: ignore reportArgumentType
 
 
 # def bangbang_img(msg: IcaNewMessage, client: IcaClient) -> None:
