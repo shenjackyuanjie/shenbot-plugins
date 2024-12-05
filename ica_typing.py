@@ -155,6 +155,20 @@ class IcaClient:
     Icalingua 的客户端
     """
 
+    def send_room_sign_in(self, room_id: IcaType.RoomId) -> bool:
+        """向某个群发送签到
+        于 1.6.5 添加"""
+        if room_id > 0:
+            self.warn("不能向私聊发送签到信息")
+            return False
+        # send
+        return True
+
+    def send_poke(self, room_id: IcaType.RoomId, user_id: IcaType.UserId) -> bool:
+        """向指定群/私聊发送戳一戳
+        于 1.6.5 添加"""
+        ...
+
     # @staticmethod
     # async def send_message_a(client: "IcaClient", message: SendMessage) -> bool:
     #     """
