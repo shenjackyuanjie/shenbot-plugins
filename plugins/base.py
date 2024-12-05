@@ -65,6 +65,10 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
             up_delta = datetime.now(timezone.utc) - uptime
             reply = msg.reply_with(f"Bot 运行时间: {up_delta}")
             client.send_message(reply)
+        elif msg.content == "/bot-poke":
+            client.send_poke(msg.room_id, msg.sender_id)
+        elif msg.content == "/bot-签到":
+            client.send_room_sign_in(msg.room_id)
 
 
 def on_tailchat_message(msg: TailchatReciveMessage, client: TailchatClient) -> None:
