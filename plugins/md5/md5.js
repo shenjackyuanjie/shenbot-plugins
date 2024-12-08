@@ -17495,7 +17495,9 @@ T.Plr.prototype = {
                 if (attrs.length != 8) throw new Error('八围要有八个元素')
             } catch (error) {
                 console.error(error)
-                alert("DIY捏人格式错误, 请检查");
+                if (!run_env.from_code) {
+                    alert("DIY捏人格式错误, 请检查");
+                }
             }
         }
         if (attrs && this.cm == undefined) { //cm -> this.from, 如果是分身的初始化，那么不要更改八围
