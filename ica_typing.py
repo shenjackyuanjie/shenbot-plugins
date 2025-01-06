@@ -210,6 +210,15 @@ class IcaClient:
     def startup_time(self) -> datetime:
         """请注意, 此时刻为 UTC 时刻"""
         ...
+    
+    def reload_plugin_status(self) -> bool:
+        """重载插件状态"""
+        ...
+
+    def reload_plugin(self, plugin_name: str) -> bool:
+        """重载插件"""
+        ...
+
 
     def debug(self, message: str) -> None:
         """向日志中输出调试信息"""
@@ -339,6 +348,14 @@ class TailchatClient:
     @property
     def startup_time(self) -> datetime:
         """请注意, 此时刻为 UTC 时刻"""
+        ...
+    
+    def reload_plugin_status(self) -> bool:
+        """重载插件状态"""
+        ...
+        
+    def reload_plugin(self, plugin_name: str) -> bool:
+        """重载插件"""
         ...
 
     def debug(self, message: str) -> None:
