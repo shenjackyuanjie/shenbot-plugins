@@ -219,6 +219,17 @@ class IcaClient:
         """重载插件"""
         ...
 
+    def set_plugin_status(self, plugin_name: str, status: bool):
+        """设置插件状态"""
+        ...
+    
+    def get_plugin_status(self, plugin_name: str) -> bool:
+        """获取插件状态"""
+        ...
+    
+    def sync_status_to_config(self) -> None:
+        """将插件状态同步到配置文件"""
+        ...
 
     def debug(self, message: str) -> None:
         """向日志中输出调试信息"""
@@ -353,9 +364,21 @@ class TailchatClient:
     def reload_plugin_status(self) -> bool:
         """重载插件状态"""
         ...
-        
+
     def reload_plugin(self, plugin_name: str) -> bool:
         """重载插件"""
+        ...
+
+    def set_plugin_status(self, plugin_name: str, status: bool):
+        """设置插件状态"""
+        ...
+    
+    def get_plugin_status(self, plugin_name: str) -> bool:
+        """获取插件状态"""
+        ...
+    
+    def sync_status_to_config(self) -> None:
+        """将插件状态同步到配置文件"""
         ...
 
     def debug(self, message: str) -> None:
