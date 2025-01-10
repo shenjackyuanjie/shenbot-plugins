@@ -1,6 +1,8 @@
+from __future__ import annotations
+
 # Python 兼容版本 3.8+
 
-from typing import Callable, Tuple, NewType, Optional, Union
+from typing import Callable, Tuple, Optional, Union
 from datetime import datetime
 
 """
@@ -12,9 +14,9 @@ pub type MessageId = String;
 
 
 class IcaType:
-    RoomId = NewType("RoomId", int)
-    UserId = NewType("UserId", int)
-    MessageId = NewType("MessageId", str)
+    RoomId = int
+    UserId = int
+    MessageId = str
 
 
 """
@@ -27,10 +29,10 @@ pub type MessageId = String;
 
 
 class TailchatType:
-    GroupId = NewType("GroupId", str)
-    ConverseId = NewType("ConverseId", str)
-    UserId = NewType("UserId", str)
-    MessageId = NewType("MessageId", str)
+    GroupId = str
+    ConverseId = str
+    UserId = str
+    MessageId = str
 
 
 class IcaStatus:
