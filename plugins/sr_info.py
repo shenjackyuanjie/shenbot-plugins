@@ -136,10 +136,11 @@ def handle_url(msg: IcaNewMessage, client: IcaClient) -> None:
             res = requests.get(f"{API_URL}/info/{ship_id}", timeout=5)
             data = res.json()
         except (requests.RequestException, requests.Timeout) as e:
-            get_infos.append(f"请求中出现问题: {e} {res}")            
+            get_infos.append(f"请求中出现问题: {e} {res}")
+            continue
         if data["code"] != 200:
             get_infos.append(f"请求失败: {data['msg']}")
-        print(fmt_msg)
+            continue
         fmt_msg = f"ID: {data['data']['save_id']}-长度: {format_data_size(data['data']['len'])}\nblake3 hash: {data['data']['blake_hash']}"
         get_infos.append(fmt_msg)
     client.send_message(msg.reply_with("\n\n".join(get_infos)))
