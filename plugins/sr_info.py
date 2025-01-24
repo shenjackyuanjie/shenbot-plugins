@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from ica_typing import IcaNewMessage, IcaClient
 
 
-API_URL = "http://shenjack.top:10002"
+API_URL = "http://192.168.3.22:10002"
 
 CMD_PREFIX = "/sr"
 LAST_CMD = f"{CMD_PREFIX} last"
@@ -53,7 +53,7 @@ def last_data(path: str) -> str:
         res = requests.get(f"{API_URL}/last/{path}", timeout=5)
         data = res.json()
     except (requests.RequestException, requests.Timeout) as e:
-        return f"请求中出现问题: {e} {res}"
+        return f"请求中出现问题: {e}"
 
     if data["code"] != 200:
         return f"请求失败: {data['msg']}"
@@ -139,6 +139,7 @@ def handle_url(msg: IcaNewMessage, client: IcaClient) -> None:
             get_infos.append(f"请求中出现问题: {e} {res}")            
         if data["code"] != 200:
             get_infos.append(f"请求失败: {data['msg']}")
+        print(fmt_msg)
         fmt_msg = f"ID: {data['data']['save_id']}-长度: {format_data_size(data['data']['len'])}\nblake3 hash: {data['data']['blake_hash']}"
         get_infos.append(fmt_msg)
     client.send_message(msg.reply_with("\n\n".join(get_infos)))
