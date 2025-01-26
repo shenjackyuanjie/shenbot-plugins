@@ -21906,7 +21906,8 @@ const runner = {
             main(names);
         })
     },
-    run_env: run_env
+    run_env: run_env,
+    version: _version_,
 };
 
 if (run_env.from_code) {
