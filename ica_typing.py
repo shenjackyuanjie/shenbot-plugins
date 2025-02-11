@@ -216,6 +216,11 @@ class IcaClient:
     def startup_time(self) -> datetime:
         """请注意, 此时刻为 UTC 时刻"""
         ...
+    @property
+    def py_tasks_count(self) -> int:
+        """获取当前正在运行的 Python 任务数量
+        于 1.6.7 添加"""
+        ...
     
     def reload_plugin_status(self) -> bool:
         """重载插件状态"""
@@ -365,6 +370,12 @@ class TailchatClient:
     @property
     def startup_time(self) -> datetime:
         """请注意, 此时刻为 UTC 时刻"""
+        ...
+
+    @property
+    def py_tasks_count(self) -> int:
+        """获取当前正在运行的 Python 任务数量
+        于 1.2.6 添加"""
         ...
     
     def reload_plugin_status(self) -> bool:
