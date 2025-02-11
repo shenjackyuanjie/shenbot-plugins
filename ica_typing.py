@@ -419,12 +419,6 @@ class ReciveMessage(TailchatReciveMessage, IcaNewMessage):
     ) -> Union["IcaReplyMessage", "TailchatSendingMessage"]:  # type: ignore
         ...
 
-
-class ConfigData:
-    def __getitem__(self, key: str): ...
-    def have_key(self, key: str) -> bool: ...
-
-
 on_load = Callable[[IcaClient], None]
 # def on_load(client: IcaClient) -> None:
 #     ...
@@ -441,6 +435,15 @@ on_tailchat_message = Callable[[TailchatClient, TailchatReciveMessage], None]
 # def on_tailchat_message(client: TailchatClient, msg: TailchatReciveMessage) -> None:
 #     ...
 
-on_config = Callable[[None], Tuple[str, str]]
+on_config = Callable[[bytes], None]
+# 输入为配置文件的(字节)内容
+# 需要自行处理文件解析
 
-CONFIG_DATA: ConfigData = ConfigData()
+require_config = Callable[[None], str, bytes | str]
+# file_name, default_data
+# 返回配置文件的内容(字节)
+
+CONFIG_DATA: str | bytes
+# 配置文件的内容 (类型根据 require_config 返回值而定)
+# 无论有没有配置文件, 都会有一个默认的配置文件内容
+
