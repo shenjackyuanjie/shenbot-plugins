@@ -2,7 +2,7 @@ from __future__ import annotations
 
 # Python 兼容版本 3.8+
 
-from typing import Callable, Tuple, Optional, Union
+from typing import Callable, Optional
 from datetime import datetime
 
 """
@@ -221,7 +221,7 @@ class IcaClient:
         """获取当前正在运行的 Python 任务数量
         于 1.6.7 添加"""
         ...
-    
+
     def reload_plugin_status(self) -> bool:
         """重载插件状态"""
         ...
@@ -233,11 +233,11 @@ class IcaClient:
     def set_plugin_status(self, plugin_name: str, status: bool):
         """设置插件状态"""
         ...
-    
+
     def get_plugin_status(self, plugin_name: str) -> bool:
         """获取插件状态"""
         ...
-    
+
     def sync_status_to_config(self) -> None:
         """将插件状态同步到配置文件"""
         ...
@@ -347,7 +347,7 @@ class TailchatClient:
         content: str,
         converse_id: TailchatType.ConverseId,
         group_id: Optional[TailchatType.GroupId] = None,
-    ) -> "TailchatSendingMessage": 
+    ) -> "TailchatSendingMessage":
         """创建一条新消息, 可用于发送"""
         ...
     @property
@@ -377,7 +377,7 @@ class TailchatClient:
         """获取当前正在运行的 Python 任务数量
         于 1.2.6 添加"""
         ...
-    
+
     def reload_plugin_status(self) -> bool:
         """重载插件状态"""
         ...
@@ -389,11 +389,11 @@ class TailchatClient:
     def set_plugin_status(self, plugin_name: str, status: bool):
         """设置插件状态"""
         ...
-    
+
     def get_plugin_status(self, plugin_name: str) -> bool:
         """获取插件状态"""
         ...
-    
+
     def sync_status_to_config(self) -> None:
         """将插件状态同步到配置文件"""
         ...
@@ -416,7 +416,7 @@ class ReciveMessage(TailchatReciveMessage, IcaNewMessage):
 
     def reply_with(
         self, message: str
-    ) -> Union["IcaReplyMessage", "TailchatSendingMessage"]:  # type: ignore
+    ) -> IcaReplyMessage | TailchatSendingMessage:  # type: ignore
         ...
 
 on_load = Callable[[IcaClient], None]
@@ -439,11 +439,10 @@ on_config = Callable[[bytes], None]
 # 输入为配置文件的(字节)内容
 # 需要自行处理文件解析
 
-require_config = Callable[[None], str, bytes | str]
+require_config = Callable[[None], tuple[str, bytes | str]]
 # file_name, default_data
 # 返回配置文件的内容(字节)
 
 CONFIG_DATA: str | bytes
 # 配置文件的内容 (类型根据 require_config 返回值而定)
 # 无论有没有配置文件, 都会有一个默认的配置文件内容
-

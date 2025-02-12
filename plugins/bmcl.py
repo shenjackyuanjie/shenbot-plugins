@@ -9,12 +9,12 @@ import traceback
 from typing import TYPE_CHECKING, TypeVar, Optional, Tuple, List
 
 if TYPE_CHECKING:
-    from ica_typing import IcaNewMessage, IcaClient, ConfigData, TailchatClient
-    CONFIG_DATA: ConfigData
+    from ica_typing import IcaNewMessage, IcaClient, TailchatClient
 else:
-    CONFIG_DATA = None # type: ignore
     IcaNewMessage = TypeVar("NewMessage")
     IcaClient = TypeVar("IcaClient")
+
+COOKIE = None
 
 _version_ = "2.8.2-rs"
 backend_version = "unknown"
@@ -62,11 +62,10 @@ def format_hit_count(count: int) -> str:
 
 def wrap_request(url: str, msg: IcaNewMessage, client: IcaClient | TailchatClient) -> Optional[dict]:
     try:
-        cookie = CONFIG_DATA["cookie"] # type: ignore
-        if cookie == "填写你的 cookie" or cookie is None:
+        if COOKIE is None:
             response = requests.get(url)
         else:
-            response = requests.get(url, cookies={"openbmclapi-jwt": cookie})
+            response = requests.get(url, cookies={"openbmclapi-jwt": COOKIE})
     except requests.exceptions.RequestException:
         warn_msg = f"数据请求失败, 请检查网络\n{traceback.format_exc()}"
         reply = msg.reply_with(warn_msg)
@@ -374,8 +373,15 @@ def on_tailchat_message(msg, client: TailchatClient) -> None:
             reply = msg.reply_with(report_msg)
             client.send_and_warn(reply)
 
-def on_config() -> Tuple[str, str]:
+def require_config() -> Tuple[str, str]:
     return (
         "bmcl.toml",
         """cookie = \"填写你的 cookie\""""
     )
+
+
+def on_config(data: bytes):
+    string = data.decode("utf-8")
+    if string.startswith("cookie = "):
+        global COOKIE
+        COOKIE = string[9:]

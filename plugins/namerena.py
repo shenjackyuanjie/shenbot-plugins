@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import sys
+import json
 import time
 import traceback
 import subprocess
@@ -19,21 +20,20 @@ if TYPE_CHECKING:
     from ica_typing import (
         IcaNewMessage,
         IcaClient,
-        ConfigData,
         ReciveMessage,
         TailchatReciveMessage,
     )
 
-    CONFIG_DATA: ConfigData
 else:
-    CONFIG_DATA = None  # type: ignore
     IcaNewMessage = TypeVar("NewMessage")
     IcaClient = TypeVar("IcaClient")
     ReciveMessage = TypeVar("ReciveMessage")
     TailchatReciveMessage = TypeVar("TailchatReciveMessage")
 
 
-_version_ = "0.8.0"
+USE_BUN = True
+
+_version_ = "0.9.0"
 
 CMD_PREFIX = "/namer"
 
@@ -63,7 +63,7 @@ HELP_MSG = f"""namerena-v[{_version_}]
 
 
 def out_msg(cost_time: float) -> str:
-    use_bun = CONFIG_DATA["use_bun"]
+    use_bun = USE_BUN
     return f"耗时: {cost_time:.3f}s\n版本: {_version_}-{'bun' if use_bun else 'node'}"
 
 
@@ -99,7 +99,7 @@ def convert_name(msg: ReciveMessage, client) -> None:
 def run_namerena(input_text: str, fight_mode: bool = False) -> tuple[str, float]:
     """运行namerena"""
     root_path = Path(__file__).parent
-    use_bun = CONFIG_DATA["use_bun"]
+    use_bun = USE_BUN
     runner_path = root_path / "md5" / ("md5-api.ts" if use_bun else "md5-api.js")
     if not runner_path.exists():
         return "未找到namerena运行文件", 0.0
@@ -250,5 +250,12 @@ def on_tailchat_message(msg: TailchatReciveMessage, client) -> None:
     dispatch_msg(msg, client)  # type: ignore
 
 
-def on_config() -> tuple[str, str]:
-    return ("namer.toml", "use_bun = false # 是否使用 bun")
+def require_config() -> tuple[str, str]:
+    return ("namer.json", "use_bun = false # 是否使用 bun")
+
+
+def on_config(data: bytes):
+    global USE_BUN
+    string = data.decode("utf-8")
+    config = json.loads(string)
+    USE_BUN = config.get("use_bun", False)

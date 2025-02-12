@@ -57,7 +57,7 @@ def last_data(path: str) -> str:
 
     if data["code"] != 200:
         return f"请求失败: {data['msg']}"
-    
+
     ship = data["data"]
     if path == "data":
         d_type_str = f"类型: {data_type_fmt(ship['save_type'])}"
@@ -78,13 +78,13 @@ def get_ship_info(msg: IcaNewMessage, client: IcaClient):
         res = requests.get(f"{API_URL}/info/{ship_id}", timeout=5)
         data = res.json()
     except (requests.RequestException, requests.Timeout) as e:
-        client.send_and_warn(msg.reply_with(f"请求中出现问题: {e} {res}"))
+        client.send_and_warn(msg.reply_with(f"请求中出现问题: {e}"))
         return
-    
+
     if data["code"] != 200:
         client.send_and_warn(msg.reply_with(f"请求失败: {data['msg']}"))
         return
-    
+
     ship = data["data"]
     formatted = f"ID: {ship['save_id']}\n类型: {data_type_fmt(ship['save_type'])}\n数据长度: {format_data_size(ship['len'])}\nblake3 hash: {ship['blake_hash']}"
     client.send_message(msg.reply_with(formatted))
@@ -136,7 +136,7 @@ def handle_url(msg: IcaNewMessage, client: IcaClient) -> None:
             res = requests.get(f"{API_URL}/info/{ship_id}", timeout=5)
             data = res.json()
         except (requests.RequestException, requests.Timeout) as e:
-            get_infos.append(f"请求中出现问题: {e} {res}")
+            get_infos.append(f"请求中出现问题: {e}")
             continue
         if data["code"] != 200:
             get_infos.append(f"请求失败: {data['msg']}")
@@ -144,12 +144,12 @@ def handle_url(msg: IcaNewMessage, client: IcaClient) -> None:
         fmt_msg = f"ID: {data['data']['save_id']}-长度: {format_data_size(data['data']['len'])}\nblake3 hash: {data['data']['blake_hash']}"
         get_infos.append(fmt_msg)
     client.send_message(msg.reply_with("\n\n".join(get_infos)))
-        
+
 
 def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
     if msg.is_from_self or not msg.is_room_msg:
         return
-    
+
     if msg.content.startswith(CMD_PREFIX):
         return handle_command(msg, client)
 
