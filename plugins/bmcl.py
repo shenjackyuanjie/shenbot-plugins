@@ -1,6 +1,7 @@
 from __future__ import annotations
 import io
 import time
+import tomli
 import requests
 import traceback
 
@@ -16,7 +17,7 @@ else:
 
 COOKIE = None
 
-_version_ = "2.8.2-rs"
+_version_ = "2.9.0-rs"
 backend_version = "unknown"
 
 def format_data_size(data_bytes: float) -> str:
@@ -65,6 +66,7 @@ def wrap_request(url: str, msg: IcaNewMessage, client: IcaClient | TailchatClien
         if COOKIE is None:
             response = requests.get(url)
         else:
+            print(f"cookie: |{COOKIE}|")
             response = requests.get(url, cookies={"openbmclapi-jwt": COOKIE})
     except requests.exceptions.RequestException:
         warn_msg = f"数据请求失败, 请检查网络\n{traceback.format_exc()}"
@@ -335,7 +337,7 @@ def on_tailchat_message(msg, client: TailchatClient) -> None:
         if '\n' in msg.content:
             return
         try:
-            if not msg.content.startswith("/b"):
+            if not msg.content.startswith("/bm") or not msg.content.startswith("/brrs"):
                 return
             global backend_version
             if backend_version == "unknown":
@@ -382,6 +384,9 @@ def require_config() -> Tuple[str, str]:
 
 def on_config(data: bytes):
     string = data.decode("utf-8")
-    if string.startswith("cookie = "):
-        global COOKIE
-        COOKIE = string[9:]
+    load_data = tomli.loads(string)
+    global COOKIE
+    if "cookie" in load_data:
+        if load_data["cookie"] == "填写你的 cookie":
+            return
+        COOKIE = load_data["cookie"]
