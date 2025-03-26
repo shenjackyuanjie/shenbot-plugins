@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import io
 import sys
-import json
+import tomli
 import time
 import traceback
 import subprocess
@@ -251,11 +251,11 @@ def on_tailchat_message(msg: TailchatReciveMessage, client) -> None:
 
 
 def require_config() -> tuple[str, str]:
-    return ("namer.json", "use_bun = false # 是否使用 bun")
+    return ("namer.toml", "use_bun = false # 是否使用 bun")
 
 
 def on_config(data: bytes):
     global USE_BUN
     string = data.decode("utf-8")
-    config = json.loads(string)
+    config = tomli.loads(string)
     USE_BUN = config.get("use_bun", False)
