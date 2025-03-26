@@ -66,7 +66,7 @@ def wrap_request(url: str, msg: IcaNewMessage, client: IcaClient | TailchatClien
         if COOKIE is None:
             response = requests.get(url)
         else:
-            print(f"cookie: |{COOKIE}|")
+            # print(f"cookie: |{COOKIE}|")
             response = requests.get(url, cookies={"openbmclapi-jwt": COOKIE})
     except requests.exceptions.RequestException:
         warn_msg = f"数据请求失败, 请检查网络\n{traceback.format_exc()}"
