@@ -76,8 +76,8 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
             for room in all_room:
                 if room.is_group:
                     client.send_room_sign_in(room.room_id)
-                    signed.append(room.room_id)
-                    time.sleep(3)
+                    signed.append(str(room.room_id))
+                    time.sleep(0.1)
             reply = msg.reply_with(f"已签到房间: {', '.join(signed)}")
             client.send_message(reply)
 
