@@ -71,16 +71,16 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
             client.send_poke(msg.room_id, msg.sender_id)
         elif msg.content == "/bot-签到":
             client.send_room_sign_in(msg.room_id)
-        elif msg.content == "/bot-sign-all":
-            all_room = client.status.rooms
-            signed = []
-            for room in all_room:
-                if room.is_group:
-                    client.send_room_sign_in(room.room_id)
-                    signed.append(str(room.room_id))
-                    time.sleep(random.random())
-            reply = msg.reply_with(f"已签到房间: {', '.join(signed)}")
-            client.send_message(reply)
+        # elif msg.content == "/bot-sign-all":
+        #     all_room = client.status.rooms
+        #     signed = []
+        #     for room in all_room:
+        #         if room.is_group and room.room_id < 0:
+        #             client.send_room_sign_in(room.room_id)
+        #             signed.append(str(room.room_id))
+        #             time.sleep(random.random())
+        #     reply = msg.reply_with(f"已签到房间: {', '.join(signed)}")
+        #     client.send_message(reply)
 
 
 def on_tailchat_message(msg: TailchatReciveMessage, client: TailchatClient) -> None:
