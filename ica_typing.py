@@ -59,7 +59,45 @@ class IcaStatus:
     def head_used(self) -> str: ...
     @property
     def load(self) -> str: ...
+    @property
+    def rooms(self) -> list[IcaRoom]:
+        """
+        于 2.0.1 添加
+        获取当前用户加入的所有房间
+        @return: 房间列表
+        """
+        ...
 
+
+class IcaRoom:
+    """
+    于 2.0.1 添加, 用于获取房间信息
+    """
+    @property
+    def room_id(self) -> IcaType.RoomId: ...
+    @property
+    def room_name(self) -> str: ...
+    @property
+    def unread_count(self) -> int: ...
+    def is_group(self) -> bool:
+        """
+        判断是否为群聊
+        @return: 是否为群聊
+        """
+        ...
+    def is_chat(self) -> bool:
+        """
+        判断是否为私聊
+        @return: 是否为私聊
+        """
+        ...
+    def new_message_to(self, content: str) -> IcaSendMessage:
+        """
+        创建一条发送到这个房间的消息
+        @param content: 消息内容
+        @return: 消息对象
+        """
+        ...
 
 class IcaReplyMessage: ...
 
@@ -73,7 +111,7 @@ class IcaSendMessage:
     def room_id(self) -> IcaType.RoomId: ...
     @room_id.setter
     def room_id(self, value: IcaType.RoomId) -> None: ...
-    def with_content(self, content: str) -> "IcaSendMessage":
+    def with_content(self, content: str) -> IcaSendMessage:
         """
         为了链式调用, 返回自身
         """
@@ -87,7 +125,7 @@ class IcaSendMessage:
         @param file_type: 图片类型 (MIME) (image/png; image/jpeg)
         @param as_sticker: 是否作为贴纸发送
         """
-    def remove_reply(self) -> "IcaSendMessage":
+    def remove_reply(self) -> IcaSendMessage:
         """删除回复"""
         ...
 
