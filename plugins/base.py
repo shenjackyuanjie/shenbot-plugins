@@ -1,6 +1,7 @@
 import io
 import time
 import psutil
+import random
 import platform
 from pathlib import Path
 from datetime import datetime, timezone
@@ -77,7 +78,7 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
                 if room.is_group:
                     client.send_room_sign_in(room.room_id)
                     signed.append(str(room.room_id))
-                    time.sleep(0.1)
+                    time.sleep(random.random())
             reply = msg.reply_with(f"已签到房间: {', '.join(signed)}")
             client.send_message(reply)
 
