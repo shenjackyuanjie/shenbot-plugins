@@ -10,14 +10,33 @@ import requests
 if TYPE_CHECKING:
     from ica_typing import IcaNewMessage, IcaClient
 
+_version_ = "0.2.0"
 
 API_URL = "http://0.0.0.0:10002"
 
 CMD_PREFIX = "/sr"
+HELP_CMD = f"{CMD_PREFIX} help"
 LAST_CMD = f"{CMD_PREFIX} last"
 LAST_SHIP_CMD = f"{CMD_PREFIX} last ship"
 LAST_SAVE_CMD = f"{CMD_PREFIX} last save"
 INFO_CMD = f"{CMD_PREFIX} info" # info xxxxx(int)
+
+HELP_MSG = f"""sr info-{_version_}
+在 QQ 群内获取 SimpleRockets (1) 的存档/飞船信息
+
+命令列表：
+{HELP_CMD} - 显示本帮助信息
+{LAST_CMD} - 显示最新数据（自动识别类型）
+{LAST_SHIP_CMD} - 显示最新飞船数据
+{LAST_SAVE_CMD} - 显示最新存档数据
+{INFO_CMD} [ID] - 查询指定ID的数据信息（示例：/sr info 123456）
+
+功能特性：
+• 自动识别游戏飞船链接（格式：http://jundroo.com/ViewShip.html?id=XXXXXX）
+• 支持查询数据的哈希校验值
+• 显示数据体积的智能单位转换
+
+数据来源：{API_URL}"""
 
 # http://jundroo.com/ViewShip.html?id=1323466
 SHIP_URL_PREFIX = "http://jundroo.com/ViewShip.html?id="
@@ -116,6 +135,8 @@ def handle_command(msg: IcaNewMessage, client: IcaClient) -> None:
         client.send_message(msg.reply_with(last_data("save")))
     elif msg.content == LAST_CMD:
         client.send_message(msg.reply_with(last_data("data")))
+    elif msg.content == HELP_CMD:
+        client.send_message(msg.reply_with(HELP_MSG))
     elif msg.content.startswith(INFO_CMD):
         get_ship_info(msg, client)
 
