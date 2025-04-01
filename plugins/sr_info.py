@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
 _version_ = "0.2.0"
 
-API_URL = "http://0.0.0.0:10002"
+API_URL = "http://0.0.0.0:5110"
 
 CMD_PREFIX = "/sr"
 HELP_CMD = f"{CMD_PREFIX} help"
