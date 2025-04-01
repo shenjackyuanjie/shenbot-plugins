@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from ica_typing import IcaNewMessage, IcaClient
 
 
-API_URL = "http://192.168.3.47:10002"
+API_URL = "http://0.0.0.0:10002"
 
 CMD_PREFIX = "/sr"
 LAST_CMD = f"{CMD_PREFIX} last"
