@@ -214,18 +214,17 @@ def handle_real_time(msg: IcaNewMessage, client: IcaClient) -> None:
     prev_h = random.randint(0, 360)
 
     for i, item in enumerate(real_time):
-        # 生成新颜色，确保与前一颜色色调差至少10度
         while True:
             new_h = random.randint(0, 360)
             diff = abs(new_h - prev_h)
             min_diff = min(diff, 360 - diff)
-            if min_diff >= 10:
+            if min_diff >= 50:
                 break
 
         # 更新颜色参数
         prev_h = new_h
-        s = random.uniform(0.7, 1.0)  # 饱和度（鲜艳度）
-        v = random.uniform(0.3, 0.6)  # 明度（避免太亮或太暗）
+        s = random.uniform(0.8, 1.0)  # 饱和度（鲜艳度）
+        v = random.uniform(0.4, 0.6)  # 明度（避免太亮或太暗）
 
         # 手动转换 HSV → RGB
         r, g, b = hsv_to_rgb(new_h, s, v)
@@ -238,11 +237,11 @@ def handle_real_time(msg: IcaNewMessage, client: IcaClient) -> None:
 
         draw.text((2, y_1), f"{release_info}", font=normal_font, fill=color)
         draw.text((100, y_1), f"{item.movieInfo.movieName}", font=normal_font, fill=(0, 0, 0))
-        draw.text((name_width_max + 115, y_1), f"票房:{item.sumBoxDesc:<7} 占比:{item.boxRate}\n场均人次:{item.avgShowView:<3}", font=normal_font, fill=color)
+        draw.text((name_width_max + 115, y_1), f"票房:{item.sumBoxDesc:<7} 占比:{item.boxRate}", font=normal_font, fill=color)
         draw.text((2, y_2), f"排片量:{item.showCount:<7} {item.showCountRate:<5}", font=normal_font, fill=color)
 
         # 画分割线
-        draw.line((0, y_2 + line_height + 1, img_width, y_2 + line_height + 1), fill=(0, 0, 0), width=1)
+        draw.line((0, y_2 + line_height + 0, img_width, y_2 + line_height + 0), fill=(0, 0, 0), width=1)
 
     # 画纵列分割线
     draw.line((name_width_max + 110, 0, name_width_max + 100, img_height), fill=(0, 0, 0), width=1)
