@@ -67,6 +67,21 @@ class IcaStatus:
         @return: 房间列表
         """
         ...
+    @property
+    def admins(self) -> list[IcaType.UserId]:
+        """
+        于 2.0.1 添加
+        获取所有管理员
+        """
+        ...
+    @property
+    def filtered(self) -> list[IcaType.UserId]:
+        """
+        于 2.0.1 添加
+        获取所有被过滤的用户
+        (好像没啥用就是了, 反正被过滤的不会给到插件)
+        """
+        ...
 
 
 class IcaRoom:
