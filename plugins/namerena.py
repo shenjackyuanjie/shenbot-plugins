@@ -61,10 +61,10 @@ HELP_MSG = f"""namerena-v[{_version_}]
     - 例如: "AAA+BBB+seed:123@!" 表示 AAA 和 BBB 以 123@! 为种子进行战斗
     - 可以输入多行"""
 
-
+bun_hint = "bun\npowered by https://bun.sh"
 def out_msg(cost_time: float) -> str:
     use_bun = USE_BUN
-    return f"耗时: {cost_time:.3f}s\n版本: {_version_}-{'bun\npowered by https://bun.sh' if use_bun else 'node'}"
+    return f"耗时: {cost_time:.3f}s\n版本: {_version_}-{bun_hint if use_bun else 'node'}"
 
 
 def convert_name(msg: ReciveMessage, client) -> None:
