@@ -33,7 +33,7 @@ else:
 
 USE_BUN = True
 
-_version_ = "0.9.0"
+_version_ = "0.9.1"
 
 CMD_PREFIX = "/namer"
 
