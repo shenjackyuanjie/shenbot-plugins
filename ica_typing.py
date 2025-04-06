@@ -94,6 +94,20 @@ class IcaRoom:
     def room_name(self) -> str: ...
     @property
     def unread_count(self) -> int: ...
+    @property
+    def priority(self) -> int:
+        """
+        房间优先级
+        @return: 优先级
+        """
+        ...
+    @property
+    def utime(self) -> int:
+        """
+        房间最后更新时间
+        @return: 时间戳 (time.time * 1000)
+        """
+        ...
     def is_group(self) -> bool:
         """
         判断是否为群聊
