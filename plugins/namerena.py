@@ -64,7 +64,7 @@ HELP_MSG = f"""namerena-v[{_version_}]
 
 def out_msg(cost_time: float) -> str:
     use_bun = USE_BUN
-    return f"耗时: {cost_time:.3f}s\n版本: {_version_}-{'bun' if use_bun else 'node'}"
+    return f"耗时: {cost_time:.3f}s\n版本: {_version_}-{'bun\npowered by https://bun.sh' if use_bun else 'node'}"
 
 
 def convert_name(msg: ReciveMessage, client) -> None:
