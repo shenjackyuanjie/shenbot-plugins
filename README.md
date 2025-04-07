@@ -1,6 +1,6 @@
 # shenbot 的 插件市场 (bushi)
 
-欢迎来到 shenbot 的插件市场
+欢迎来到 [shenbot](https://github.com/shenjackyuanjie/icalingua-bridge-bot) 的插件市场
 
 这里有一堆插件
 
