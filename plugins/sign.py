@@ -10,6 +10,7 @@ else:
     IcaNewMessage = TypeVar("NewMessage")
     IcaClient = TypeVar("IcaClient")
 
+
 def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
     if msg.is_from_self or msg.sender_id in client.status.admins:
             # 上号发的消息 / 管理员发的消息
@@ -29,7 +30,7 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
                 cost_time = time.time() - start_time
                 reply = msg.reply_with(f"✅已签到 {len(signed)} 个 群\n耗时 {cost_time:.2f} 秒")
                 client.send_message(reply)
-            elif msg.content == "/bot-sign-hot":
+            elif msg.content == "/bot-sign-warm":
                 all_room = client.status.rooms
                 hot_room = []
                 signed = []
@@ -47,7 +48,7 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
                 #     fmt_time = datetime.fromtimestamp(r.utime // 1000).strftime("%Y-%m-%d %H:%M:%S")
                 #     reply.write(f"{abs(r.room_id)} 上次活跃: {fmt_time}\n")
                 # client.send_message(msg.reply_with(reply.getvalue().strip()))
-                reply = msg.reply_with(f"将要签到 {len(hot_room)} 个 7天内有活动的群\n预计需要 {len(hot_room) * 3 / 2}\n秒(random摇出来的，只能说大概这么久)")
+                reply = msg.reply_with(f"将要签到 {len(hot_room)} 个 7天内有活动的群\n预计需要 {len(hot_room) * 3 / 2}秒\n(random摇出来的，只能说大概这么久)")
                 client.send_message(reply)
 
                 for room in hot_room:
@@ -57,8 +58,24 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
                 cost_time = time.time() - start_time
                 reply = msg.reply_with(f"✅已签到 {len(signed)} 个 7天内有活动的群，耗时{cost_time:.2f}秒")
                 client.send_message(reply)
-            elif msg.content == "/bot-wait":
-                for x in range(10):
-                    print(f"等待中 {x}")
-                    time.sleep(1)
-                print("等待结束")
+
+            elif msg.content == "/bot-sign-hot":
+                all_room = client.status.rooms
+                hot_room = []
+                signed = []
+                for room in all_room:
+                    last_time = room.utime // 1000
+                    if start_time - last_time < 43200 and room.is_group():
+                        hot_room.append(room)
+                # 排序
+                hot_room.sort(key=lambda x: x.utime, reverse=True)
+                reply = msg.reply_with(f"将要签到 {len(hot_room)} 个 半天内有活动的群\n预计需要 {len(hot_room) * 3 / 2}秒\n(random摇出来的，只能说大概这么久)")
+                client.send_message(reply)
+
+                for room in hot_room:
+                    client.send_room_sign_in(room.room_id)
+                    signed.append(str(room.room_id))
+                    time.sleep(random.random() * 3)
+                cost_time = time.time() - start_time
+                reply = msg.reply_with(f"✅已签到 {len(signed)} 个 半天内有活动的群，耗时{cost_time:.2f}秒")
+                client.send_message(reply)
