@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import io
 import time
 import random
@@ -15,7 +17,9 @@ from shenbot_api import Scheduler
 _version_ = "0.2.0"
 
 """记录哪些群已经签过了"""
-SIGN_REC = []
+SIGN_REC: dict[int, datetime] = {}
+"""记录明天计划啥时候签到"""
+SIGN_PLAN: dict[int, datetime] = {}
 
 SIGN_TIME = datetime.now()
 
@@ -31,10 +35,12 @@ HELP_MSG = f"""bot sign v{_version_} - 似乎有点用的自动签到
 def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
     now = datetime.now()
     # 看看是不是同一天
-    global SIGN_TIME, SIGN_REC
+    global SIGN_TIME, SIGN_REC, SIGN_PLAN
     if now.date() != SIGN_TIME.date():
         SIGN_TIME = now
-        SIGN_REC = []
+        SIGN_REC = SIGN_PLAN.copy()
+        SIGN_PLAN = {}
+
     if msg.is_from_self or msg.sender_id in client.status.admins:
         # 上号发的消息 / 管理员发的消息
         start_time = time.time()
@@ -51,7 +57,7 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
                 client.send_room_sign_in(room.room_id)
                 signed.append(str(room.room_id))
                 time.sleep(random.random() * 3)
-                SIGN_REC.append(room.room_id)
+                SIGN_REC[room.room_id] = datetime.now()
             # reply = msg.reply_with(f"已签到房间: {', '.join(signed)}")
             # client.send_message(reply)
             cost_time = time.time() - start_time
@@ -86,6 +92,7 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
                 client.send_room_sign_in(room.room_id)
                 signed.append(str(room.room_id))
                 time.sleep(random.random() * 3)
+                SIGN_REC[room.room_id] = datetime.now()
             cost_time = time.time() - start_time
             reply = msg.reply_with(f"✅已签到 {len(signed)} 个 7天内有活动的群，耗时{cost_time:.2f}秒")
             client.send_message(reply)
@@ -111,16 +118,13 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
                 client.send_room_sign_in(room.room_id)
                 signed.append(str(room.room_id))
                 time.sleep(random.random() * 3)
-                SIGN_REC.append(room.room_id)
+                SIGN_REC[room.room_id] = datetime.now()
             cost_time = time.time() - start_time
             reply = msg.reply_with(f"✅已签到 {len(signed)} 个 半天内有活动的群，耗时{cost_time:.2f}秒")
             client.send_message(reply)
 
         elif msg.content.startswith("/bot-sign want"):
             room_id = msg.room_id
-            if room_id in SIGN_REC:
-                client.send_message(msg.reply_with("拜托, 签过了欸"))
-                return
             try:
                 # 提取用户输入的时间（例如："12:34"）
                 time_str = msg.content.split()[2]
@@ -133,15 +137,29 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
                 # 如果当前时间已过目标时间，则计划到明天
                 if now >= want_time:
                     want_time += timedelta(days=1)
+                    if room_id in SIGN_PLAN:
+                        if SIGN_PLAN[room_id] >= want_time:
+                            SIGN_PLAN[room_id] = want_time
+                            fmt_time = want_time.strftime("%m-%d %H:%M")
+                            client.send_message(msg.reply_with(f"将提前到 {fmt_time} 开始签到"))
+                        else:
+                            fmt_time = want_time.strftime("%H:%M")
+                            client.send_message(msg.reply_with(f"不是说在 {fmt_time} 签到吗, 怎么延后了"))
+                            return
+                else:
+                    if room_id in SIGN_REC:
+                        client.send_message(msg.reply_with("拜托, 签过了欸"))
+                        return
 
-                fmt_time = want_time.strftime("%Y-%m-%d %H:%M:%S")
-                client.send_message(msg.reply_with(f"将在 {fmt_time} 开始签到"))
+                    fmt_time = want_time.strftime("%m-%d %H:%M")
+                    client.send_message(msg.reply_with(f"将在 {fmt_time} 开始签到"))
+
 
                 time_d = want_time - now
 
                 def callback():
                     client.send_room_sign_in(room_id)
-                    SIGN_REC.append(room_id)
+                    SIGN_REC[room_id] = datetime.now()
                     client.send_message(msg.reply_with(f"已签到 {room_id}"))
 
                 caller = Scheduler(callback, time_d)
