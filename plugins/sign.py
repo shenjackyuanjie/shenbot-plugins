@@ -11,11 +11,26 @@ else:
     IcaClient = TypeVar("IcaClient")
 
 
+_version_ = "0.2.0"
+
+
+HELP_MSG = f"""bot sign v{_version_} - 似乎有点用的自动签到
+/bot-sign all - 签到所有群
+/bot-sign warm - 签到7天内有活动的群
+/bot-sign hot - 签到半天内有活动的群
+/bot-sign want <24小时制(10:00)> - 在下一次指定时间签到当前群
+/bot-sign help - 查看帮助信息
+/bot-sign - 查看帮助信息
+"""
+
 def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
     if msg.is_from_self or msg.sender_id in client.status.admins:
             # 上号发的消息 / 管理员发的消息
             start_time = time.time()
-            if msg.content == "/bot-sign-all":
+
+            if msg.content == "/bot-sign" or msg.content == "/bot-sign help":
+                client.send_message(msg.reply_with(HELP_MSG))
+            elif msg.content == "/bot-sign all":
 
                 all_room = [room for room in client.status.rooms if room.is_group()]
                 signed = []
@@ -30,7 +45,7 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
                 cost_time = time.time() - start_time
                 reply = msg.reply_with(f"✅已签到 {len(signed)} 个 群\n耗时 {cost_time:.2f} 秒")
                 client.send_message(reply)
-            elif msg.content == "/bot-sign-warm":
+            elif msg.content == "/bot-sign warm":
                 all_room = client.status.rooms
                 hot_room = []
                 signed = []
@@ -59,7 +74,7 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
                 reply = msg.reply_with(f"✅已签到 {len(signed)} 个 7天内有活动的群，耗时{cost_time:.2f}秒")
                 client.send_message(reply)
 
-            elif msg.content == "/bot-sign-hot":
+            elif msg.content == "/bot-sign hot":
                 all_room = client.status.rooms
                 hot_room = []
                 signed = []
@@ -79,3 +94,6 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
                 cost_time = time.time() - start_time
                 reply = msg.reply_with(f"✅已签到 {len(signed)} 个 半天内有活动的群，耗时{cost_time:.2f}秒")
                 client.send_message(reply)
+
+            elif msg.content.startswith("/bot-sign want"):
+                # /bot-sign want xx:xx
