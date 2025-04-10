@@ -1,7 +1,7 @@
 import io
 import time
 import random
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import TYPE_CHECKING, TypeVar
 
 if TYPE_CHECKING:
@@ -10,6 +10,7 @@ else:
     IcaNewMessage = TypeVar("NewMessage")
     IcaClient = TypeVar("IcaClient")
 
+from shenbot_api import Scheduler
 
 _version_ = "0.2.0"
 
@@ -96,4 +97,32 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
                 client.send_message(reply)
 
             elif msg.content.startswith("/bot-sign want"):
-                # /bot-sign want xx:xx
+                try:
+                    # 提取用户输入的时间（例如："12:34"）
+                    time_str = msg.content.split()[2]
+                    user_time = datetime.strptime(time_str, "%H:%M").time()
+                    now = datetime.now()
+
+                    # 创建目标时间（使用当前日期）
+                    want_time = datetime.combine(now.date(), user_time)
+
+                    # 如果当前时间已过目标时间，则计划到明天
+                    if now >= want_time:
+                        want_time += timedelta(days=1)
+
+                    fmt_time = want_time.strftime("%Y-%m-%d %H:%M:%S")
+                    client.send_message(msg.reply_with(f"将在 {fmt_time} 开始签到"))
+
+                    room_id = msg.room_id
+                    time_d = want_time - now
+
+                    def callback():
+                        client.send_room_sign_in(room_id)
+                        # client.send_message(msg.reply_with(f"已签到 {room_id}"))
+
+                    caller = Scheduler(callback, time_d)
+                    caller.start()
+
+                except (IndexError, ValueError) as e:
+                    # 处理输入格式错误
+                    print(f"Invalid input: {e}")
