@@ -45,6 +45,7 @@ class Counter:
 
 COUNTER = Counter(120)
 
+
 def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
     if msg.is_from_self:
         return

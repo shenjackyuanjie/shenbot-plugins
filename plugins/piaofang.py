@@ -34,6 +34,7 @@ HELP_MSG = f"""piaofang-{_version_}: 获取电影票房信息
 
 CACHE_FONT = None
 
+
 def get_fonts() -> tuple[ImageFont.FreeTypeFont, ImageFont.FreeTypeFont]:
     global CACHE_FONT
     font_path = Path(__file__).parent / "NotoSansMonoCJKsc-VF.ttf"
@@ -109,27 +110,29 @@ class SplitUnit(BaseModel):
     num: str
     unit: str
 
+
 class MovieInfo(BaseModel):
     movieId: int
     movieName: str
     releaseInfo: str
 
+
 class RealTimeItem(BaseModel):
-    avgSeatView: str          # 场均人次（百分比字符串格式）
-    avgShowView: str          # 平均场次（数值型字符串）
-    boxRate: str              # 票房占比（百分比）
-    boxSplitUnit: SplitUnit   # 票房分账单元（含加密数值和单位）
-    movieInfo: MovieInfo      # 电影元信息（嵌套对象）
-    showCount: int            # 排片场次（整数）
-    showCountRate: str        # 排片占比（百分比）
-    splitBoxRate: str         # 分账票房占比（百分比）
+    avgSeatView: str  # 场均人次（百分比字符串格式）
+    avgShowView: str  # 平均场次（数值型字符串）
+    boxRate: str  # 票房占比（百分比）
+    boxSplitUnit: SplitUnit  # 票房分账单元（含加密数值和单位）
+    movieInfo: MovieInfo  # 电影元信息（嵌套对象）
+    showCount: int  # 排片场次（整数）
+    showCountRate: str  # 排片占比（百分比）
+    splitBoxRate: str  # 分账票房占比（百分比）
     splitBoxSplitUnit: SplitUnit  # 分账票房单元（含加密数值和单位）
-    sumBoxDesc: str           # 累计票房描述（含单位）
-    sumSplitBoxDesc: str      # 分账票房总额描述（含单位）
+    sumBoxDesc: str  # 累计票房描述（含单位）
+    sumSplitBoxDesc: str  # 分账票房总额描述（含单位）
 
 
 class HistoryItem(BaseModel):
-    rank: float = Field(...,alias="box", description="票房数据（单位：亿）")
+    rank: float = Field(..., alias="box", description="票房数据（单位：亿）")
     force: bool = Field(..., description="是否强制上榜")
     movie_id: int = Field(..., alias="movieId", description="电影ID")
     movie_name: str = Field(..., alias="movieName", description="电影名称")
@@ -172,9 +175,13 @@ def handle_history(msg: IcaNewMessage, client: IcaClient) -> None:
     for item in history:
         if item.force:
             # 强制的, 加个标记
-            result.write(f"* {item.release_time} {item.movie_name} {item.fmt_raw_value()}\n")
+            result.write(
+                f"* {item.release_time} {item.movie_name} {item.fmt_raw_value()}\n"
+            )
         else:
-            result.write(f"{item.release_time} {item.movie_name} {item.fmt_raw_value()}\n")
+            result.write(
+                f"{item.release_time} {item.movie_name} {item.fmt_raw_value()}\n"
+            )
 
     client.send_message(msg.reply_with(result.getvalue().strip()))
 
@@ -203,7 +210,7 @@ def handle_real_time(msg: IcaNewMessage, client: IcaClient) -> None:
 
     img_width = 600
     img_height = round(line_height * len(real_time) * 2) + 7
-    img = Image.new('RGB', (img_width, img_height), color=(255, 255, 255))
+    img = Image.new("RGB", (img_width, img_height), color=(255, 255, 255))
     draw = ImageDraw.Draw(img)
 
     name_width_max = 0
@@ -236,19 +243,39 @@ def handle_real_time(msg: IcaNewMessage, client: IcaClient) -> None:
         release_info = item.movieInfo.releaseInfo or "未知"
 
         draw.text((2, y_1), f"{release_info}", font=normal_font, fill=color)
-        draw.text((100, y_1), f"{item.movieInfo.movieName}", font=normal_font, fill=(0, 0, 0))
-        draw.text((name_width_max + 115, y_1), f"票房:{item.sumBoxDesc:<7} 占比:{item.boxRate}", font=normal_font, fill=color)
-        draw.text((2, y_2), f"排片量:{item.showCount:<7} {item.showCountRate:<5}", font=normal_font, fill=color)
+        draw.text(
+            (100, y_1), f"{item.movieInfo.movieName}", font=normal_font, fill=(0, 0, 0)
+        )
+        draw.text(
+            (name_width_max + 115, y_1),
+            f"票房:{item.sumBoxDesc:<7} 占比:{item.boxRate}",
+            font=normal_font,
+            fill=color,
+        )
+        draw.text(
+            (2, y_2),
+            f"排片量:{item.showCount:<7} {item.showCountRate:<5}",
+            font=normal_font,
+            fill=color,
+        )
 
         # 画分割线
-        draw.line((0, y_2 + line_height + 0, img_width, y_2 + line_height + 0), fill=(0, 0, 0), width=1)
+        draw.line(
+            (0, y_2 + line_height + 0, img_width, y_2 + line_height + 0),
+            fill=(0, 0, 0),
+            width=1,
+        )
 
     # 画纵列分割线
-    draw.line((name_width_max + 110, 0, name_width_max + 100, img_height), fill=(0, 0, 0), width=1)
+    draw.line(
+        (name_width_max + 110, 0, name_width_max + 100, img_height),
+        fill=(0, 0, 0),
+        width=1,
+    )
 
     # 输出图片到内存
     img_bytes = io.BytesIO()
-    img.save(img_bytes, format='PNG')
+    img.save(img_bytes, format="PNG")
     img_bytes.seek(0)
     img_bytes = img_bytes.getvalue()
 

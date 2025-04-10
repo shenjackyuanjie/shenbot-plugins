@@ -19,7 +19,7 @@ HELP_CMD = f"{CMD_PREFIX} help"
 LAST_CMD = f"{CMD_PREFIX} last"
 LAST_SHIP_CMD = f"{CMD_PREFIX} last ship"
 LAST_SAVE_CMD = f"{CMD_PREFIX} last save"
-INFO_CMD = f"{CMD_PREFIX} info" # info xxxxx(int)
+INFO_CMD = f"{CMD_PREFIX} info"  # info xxxxx(int)
 
 HELP_MSG = f"""sr info-{_version_}
 在 QQ 群内获取 SimpleRockets (1) 的存档/飞船信息
@@ -40,6 +40,7 @@ HELP_MSG = f"""sr info-{_version_}
 
 # http://jundroo.com/ViewShip.html?id=1323466
 SHIP_URL_PREFIX = "http://jundroo.com/ViewShip.html?id="
+
 
 def data_type_fmt(data_type: str) -> str:
     if data_type == "ship":
@@ -89,7 +90,7 @@ def get_ship_info(msg: IcaNewMessage, client: IcaClient):
     if len(msg.content) <= len(INFO_CMD) + 1:
         client.send_message(msg.reply_with("参数不足"))
         return
-    ship_id = msg.content[len(INFO_CMD) + 1:]
+    ship_id = msg.content[len(INFO_CMD) + 1 :]
     if not ship_id.isdigit():
         client.send_message(msg.reply_with("ID 必须是数字"))
         return
@@ -109,7 +110,7 @@ def get_ship_info(msg: IcaNewMessage, client: IcaClient):
     client.send_message(msg.reply_with(formatted))
 
 
-NUM_PATTERN = re.compile(r'(\d+)')
+NUM_PATTERN = re.compile(r"(\d+)")
 
 
 def parse_url(url: str) -> int | None:
@@ -122,7 +123,7 @@ def parse_url(url: str) -> int | None:
     Returns:
         int | None: 解析完的 id
     """
-    match = re.match(r'(\d+)', url)
+    match = re.match(r"(\d+)", url)
     if match:
         return int(match.group(1))
     return None

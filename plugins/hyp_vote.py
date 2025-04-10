@@ -11,8 +11,10 @@ else:
 
 VERSION = "1.2.0"
 
+
 def gen_room() -> dict[int, dict[int, str]]:
     return {i: {} for i in range(0, 24)}
+
 
 VOTE: dict[int, dict[int, dict[int, str]]] = {}
 
@@ -47,6 +49,7 @@ AUTHOR
         shenjack(bugfixs)
 """
 
+
 def hypvote(msg: IcaNewMessage, client: IcaClient):
     global VOTE
     matchs = re.match("/hyp (.+)", msg.content + " ")
@@ -71,7 +74,9 @@ def hypvote(msg: IcaNewMessage, client: IcaClient):
         VOTE[msg.room_id] = gen_room()
     elif arg[0] == "view":
         replys = "\n".join(
-            f"{x}: {','.join(VOTE[msg.room_id][int(x) % 24].values())}" for x in arg[1:] if x.isdigit()
+            f"{x}: {','.join(VOTE[msg.room_id][int(x) % 24].values())}"
+            for x in arg[1:]
+            if x.isdigit()
         )
         reply = msg.reply_with(replys)
         client.send_message(reply)

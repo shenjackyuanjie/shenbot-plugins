@@ -5,7 +5,7 @@ import platform
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, TypeVar
-from PIL import (Image, ImageDraw, ImageFont)
+from PIL import Image, ImageDraw, ImageFont
 
 if TYPE_CHECKING:
     from ica_typing import IcaNewMessage, IcaClient
@@ -24,19 +24,26 @@ def local_env_info() -> str:
     cache.write(f"系统: {platform.platform()}\n")
     # 处理器
     try:
-        cache.write("|".join([f"{x}%" for x in psutil.cpu_percent(interval=1, percpu=True)]))
+        cache.write(
+            "|".join([f"{x}%" for x in psutil.cpu_percent(interval=1, percpu=True)])
+        )
         cache.write("\n")
     except OSError:
         cache.write("CPU: 未知\n")
     # Python 版本信息
-    cache.write(f"{platform.python_implementation()}: {platform.python_version()}-{platform.python_branch()}({platform.python_compiler()})\n")
+    cache.write(
+        f"{platform.python_implementation()}: {platform.python_version()}-{platform.python_branch()}({platform.python_compiler()})\n"
+    )
     # 内存信息
     try:
         memory = psutil.virtual_memory()
-        cache.write(f"内存: {memory.free / 1024 / 1024 / 1024:.3f}GB/{memory.total / 1024 / 1024 / 1024:.3f}GB\n")
+        cache.write(
+            f"内存: {memory.free / 1024 / 1024 / 1024:.3f}GB/{memory.total / 1024 / 1024 / 1024:.3f}GB\n"
+        )
     except OSError:
         cache.write("内存: 未知\n")
     return cache.getvalue()
+
 
 # def local_env_image() -> bytes:
 #     print(Path.cwd())
@@ -51,10 +58,13 @@ def local_env_info() -> str:
 #     img_cache.close()
 #     return raw_img
 
+
 def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
     if not (msg.is_from_self or msg.is_reply):
         if msg.content == "/bot-py":
-            reply = msg.reply_with(f"ica-async-rs({client.version})-sync-py {client.ica_version}")
+            reply = msg.reply_with(
+                f"ica-async-rs({client.version})-sync-py {client.ica_version}"
+            )
             client.send_message(reply)
         elif msg.content == "/bot-sys":
             datas = local_env_info()
@@ -75,7 +85,9 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
 def on_tailchat_message(msg: TailchatReciveMessage, client: TailchatClient) -> None:
     if not (msg.is_reply or msg.is_from_self):
         if msg.content == "/bot-py":
-            reply = msg.reply_with(f"tailchat-async-rs({client.version})-sync-py {client.tailchat_version}")
+            reply = msg.reply_with(
+                f"tailchat-async-rs({client.version})-sync-py {client.tailchat_version}"
+            )
             client.send_message(reply)
         elif msg.content == "/bot-sys":
             datas = local_env_info()

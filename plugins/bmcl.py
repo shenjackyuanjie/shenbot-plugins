@@ -20,6 +20,7 @@ COOKIE = None
 _version_ = "2.9.0-rs"
 backend_version = "unknown"
 
+
 def format_data_size(data_bytes: float) -> str:
     data_lens = ["B", "KB", "MB", "GB", "TB"]
     data_len = "0B"
@@ -56,12 +57,14 @@ def format_hit_count(count: int) -> str:
         # 再插入
         # 最后再倒序
         count_str = count_str[::-1]
-        count_str = "_".join([count_str[i:i+4] for i in range(0, count_len, 4)])
+        count_str = "_".join([count_str[i : i + 4] for i in range(0, count_len, 4)])
         count_str = count_str[::-1]
         return count_str
 
 
-def wrap_request(url: str, msg: IcaNewMessage, client: IcaClient | TailchatClient) -> Optional[dict]:
+def wrap_request(
+    url: str, msg: IcaNewMessage, client: IcaClient | TailchatClient
+) -> Optional[dict]:
     try:
         if COOKIE is None:
             response = requests.get(url)
@@ -89,8 +92,12 @@ def wrap_request(url: str, msg: IcaNewMessage, client: IcaClient | TailchatClien
 def bmcl_dashboard(msg: IcaNewMessage, client: IcaClient | TailchatClient) -> None:
     req_time = time.time()
     # 记录请求时间
-    data = wrap_request("https://bd.bangbang93.com/openbmclapi/metric/dashboard", msg, client)
-    dashboard_status = wrap_request("https://bd.bangbang93.com/openbmclapi/metric/version", msg, client)
+    data = wrap_request(
+        "https://bd.bangbang93.com/openbmclapi/metric/dashboard", msg, client
+    )
+    dashboard_status = wrap_request(
+        "https://bd.bangbang93.com/openbmclapi/metric/version", msg, client
+    )
     if data is None or dashboard_status is None:
         return
     global backend_version
@@ -112,15 +119,15 @@ def bmcl_dashboard(msg: IcaNewMessage, client: IcaClient | TailchatClient) -> No
         f"负载: {load_str:.2f}%  带宽: {data_bandwidth:.2f}Mbps\n"
         f"当日请求: {hits_count} 数据量: {data_len}\n"
         f"请求时间: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(req_time))}\n"
-         "数据源: https://bd.bangbang93.com/pages/dashboard"
+        "数据源: https://bd.bangbang93.com/pages/dashboard"
     )
     client.debug(report_msg)
     reply = msg.reply_with(report_msg)
-    client.send_message(reply) # pyright: ignore reportArgumentType
+    client.send_message(reply)  # pyright: ignore reportArgumentType
 
 
 def check_is_full_data(data: list) -> bool:
-    return 'user' in data[0]
+    return "user" in data[0]
 
 
 def display_rank_min(ranks: list, req_time) -> str:
@@ -129,20 +136,22 @@ def display_rank_min(ranks: list, req_time) -> str:
     if check_is_full_data(ranks):
         cache.write("完整\n")
         for rank in ranks:
-            cache.write('✅' if rank['isEnabled'] else '❌')
-            if 'fullSize' in rank:
-                cache.write('🌕' if rank['fullSize'] else '🌘')
-            if 'version' in rank:
-                cache.write('🟢' if rank['version'] == backend_version else '🟠')
+            cache.write("✅" if rank["isEnabled"] else "❌")
+            if "fullSize" in rank:
+                cache.write("🌕" if rank["fullSize"] else "🌘")
+            if "version" in rank:
+                cache.write("🟢" if rank["version"] == backend_version else "🟠")
             cache.write(f"-{rank['index']+1:3}")
             cache.write(f"|{rank['name']}\n")
     else:
         cache.write("无cookie\n")
         for rank in ranks:
-            cache.write('✅' if rank['isEnabled'] else '❌')
+            cache.write("✅" if rank["isEnabled"] else "❌")
             cache.write(f"-{rank['index']+1:3}")
             cache.write(f"|{rank['name']}\n")
-    cache.write(f"请求时间: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(req_time))}")
+    cache.write(
+        f"请求时间: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(req_time))}"
+    )
     return cache.getvalue()
 
 
@@ -153,51 +162,57 @@ def display_rank_full(ranks: list, req_time) -> str:
         cache.write("完整\n")
         for rank in ranks:
             # 基本信息
-            cache.write('✅' if rank['isEnabled'] else '❌')
-            if 'fullSize' in rank:
-                cache.write('🌕' if rank['fullSize'] else '🌘')
+            cache.write("✅" if rank["isEnabled"] else "❌")
+            if "fullSize" in rank:
+                cache.write("🌕" if rank["fullSize"] else "🌘")
             cache.write(f"|{rank['index']+1:3}|")
             cache.write(f"{rank['name']}")
-            if 'version' in rank:
+            if "version" in rank:
                 cache.write(f"|{rank['version']}")
-                cache.write('🟢' if rank['version'] == backend_version else '🟠')
-            cache.write('\n')
+                cache.write("🟢" if rank["version"] == backend_version else "🟠")
+            cache.write("\n")
             # 用户/赞助信息
-            if ('user' in rank) and (rank['user'] is not None):
+            if ("user" in rank) and (rank["user"] is not None):
                 cache.write(f"所有者:{rank['user']['name']}")
-            if 'sponsor' in rank:
+            if "sponsor" in rank:
                 cache.write(f"|赞助者:{rank['sponsor']['name']}")
-            if 'sponsor' in rank or ('user' in rank and rank['user'] is not None):
-                cache.write('\n')
+            if "sponsor" in rank or ("user" in rank and rank["user"] is not None):
+                cache.write("\n")
             # 数据信息
-            if 'metric' in rank:
-                hits = format_hit_count(rank['metric']['hits'])
-                data = format_data_size(rank['metric']['bytes'])
+            if "metric" in rank:
+                hits = format_hit_count(rank["metric"]["hits"])
+                data = format_data_size(rank["metric"]["bytes"])
                 cache.write(f"hit/data|{hits}|{data}")
-                cache.write('\n')
+                cache.write("\n")
     else:
         cache.write("无cookie\n")
         for rank in ranks:
-            cache.write('✅' if rank['isEnabled'] else '❌')
+            cache.write("✅" if rank["isEnabled"] else "❌")
             cache.write(f"-{rank['index']+1:3}")
             cache.write(f"|{rank['name']}|\n")
-            if 'sponsor' in rank:
+            if "sponsor" in rank:
                 cache.write(f"赞助者: {rank['sponsor']['name']}|")
-            if 'metric' in rank:
-                cache.write(f"hit/data|{format_hit_count(rank['metric']['hits'])}|{format_data_size(rank['metric']['bytes'])}\n")
-    cache.write(f"请求时间: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(req_time))}")
+            if "metric" in rank:
+                cache.write(
+                    f"hit/data|{format_hit_count(rank['metric']['hits'])}|{format_data_size(rank['metric']['bytes'])}\n"
+                )
+    cache.write(
+        f"请求时间: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(req_time))}"
+    )
     return cache.getvalue()
 
 
 def bmcl_rank_general(msg, client):
     req_time = time.time()
     # 记录请求时间
-    rank_data = wrap_request("https://bd.bangbang93.com/openbmclapi/metric/rank", msg, client)
+    rank_data = wrap_request(
+        "https://bd.bangbang93.com/openbmclapi/metric/rank", msg, client
+    )
     if rank_data is None:
         return
     # 预处理数据
     for i, r in enumerate(rank_data):
-        r['index'] = i
+        r["index"] = i
     # 显示前3名
     ranks = rank_data[:3]
     # ranks = rank_data
@@ -217,15 +232,19 @@ FULL_DISPLAY = 5
 MAX_DISPLAY = 25
 
 
-def bmcl_rank(msg: IcaNewMessage, client: IcaClient | TailchatClient, name: str) -> None:
+def bmcl_rank(
+    msg: IcaNewMessage, client: IcaClient | TailchatClient, name: str
+) -> None:
     req_time = time.time()
     # 记录请求时间
-    rank_data = wrap_request("https://bd.bangbang93.com/openbmclapi/metric/rank", msg, client)
+    rank_data = wrap_request(
+        "https://bd.bangbang93.com/openbmclapi/metric/rank", msg, client
+    )
     if rank_data is None:
         return
     # 预处理数据
     for i, r in enumerate(rank_data):
-        r['index'] = i
+        r["index"] = i
     # 搜索是否有这个名字的节点
     names: List[str] = [r["name"].lower() for r in rank_data]
     # try:
@@ -236,7 +255,7 @@ def bmcl_rank(msg: IcaNewMessage, client: IcaClient | TailchatClient, name: str)
     finds = [name.lower() in n for n in names]
     if not any(finds):
         reply = msg.reply_with("未找到指定名字的节点")
-        client.send_message(reply) # pyright: ignore reportArgumentType
+        client.send_message(reply)  # pyright: ignore reportArgumentType
         return
     # 如果找到 > 3 个节点, 则提示 不显示
     counts = [f for f in finds if f]
@@ -248,13 +267,13 @@ def bmcl_rank(msg: IcaNewMessage, client: IcaClient | TailchatClient, name: str)
             # 4~10  个节点 只显示名称和次序
             report_msg = display_rank_min(ranks, req_time)
             reply = msg.reply_with(report_msg)
-        client.send_message(reply) # pyright: ignore reportArgumentType
+        client.send_message(reply)  # pyright: ignore reportArgumentType
         return
     # 如果找到 <= 3 个节点, 则显示全部信息
     report_msg = display_rank_full(ranks, req_time)
     client.debug(report_msg)
     reply = msg.reply_with(report_msg)
-    client.send_message(reply) # pyright: ignore reportArgumentType
+    client.send_message(reply)  # pyright: ignore reportArgumentType
 
 
 # def bangbang_img(msg: IcaNewMessage, client: IcaClient) -> None:
@@ -288,16 +307,19 @@ help = f"""/bmcl -> dashboard
 """
 # /bm93 -> 随机怪图
 
+
 def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
     if not (msg.is_from_self or msg.is_reply):
-        if '\n' in msg.content:
+        if "\n" in msg.content:
             return
         try:
             if not msg.content.startswith("/b"):
                 return
             global backend_version
             if backend_version == "unknown":
-                dashboard_status = wrap_request("https://bd.bangbang93.com/openbmclapi/metric/version", msg, client)
+                dashboard_status = wrap_request(
+                    "https://bd.bangbang93.com/openbmclapi/metric/version", msg, client
+                )
                 if dashboard_status is None:
                     return
                 backend_version = dashboard_status["version"]
@@ -327,21 +349,23 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
             report_msg = f"bmcl插件发生错误,请呼叫shenjack\n{traceback.format_exc()}"
             client.warn(report_msg)
             if len(report_msg) > 200:
-                report_msg = report_msg[:200] + "..."   # 防止消息过长
+                report_msg = report_msg[:200] + "..."  # 防止消息过长
             reply = msg.reply_with(report_msg)
             client.send_and_warn(reply)
 
 
 def on_tailchat_message(msg, client: TailchatClient) -> None:
     if not msg.is_reply:
-        if '\n' in msg.content:
+        if "\n" in msg.content:
             return
         try:
             if not msg.content.startswith("/bm") or not msg.content.startswith("/brrs"):
                 return
             global backend_version
             if backend_version == "unknown":
-                dashboard_status = wrap_request("https://bd.bangbang93.com/openbmclapi/metric/version", msg, client)
+                dashboard_status = wrap_request(
+                    "https://bd.bangbang93.com/openbmclapi/metric/version", msg, client
+                )
                 if dashboard_status is None:
                     return
                 backend_version = dashboard_status["version"]
@@ -371,15 +395,13 @@ def on_tailchat_message(msg, client: TailchatClient) -> None:
             report_msg = f"bmcl插件发生错误,请呼叫shenjack\n{traceback.format_exc()}"
             client.warn(report_msg)
             if len(report_msg) > 200:
-                report_msg = report_msg[:200] + "..."   # 防止消息过长
+                report_msg = report_msg[:200] + "..."  # 防止消息过长
             reply = msg.reply_with(report_msg)
             client.send_and_warn(reply)
 
+
 def require_config() -> Tuple[str, str]:
-    return (
-        "bmcl.toml",
-        """cookie = \"填写你的 cookie\""""
-    )
+    return ("bmcl.toml", """cookie = \"填写你的 cookie\"""")
 
 
 def on_config(data: bytes):

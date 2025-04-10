@@ -70,7 +70,6 @@ def safe_eval(code: str, msg: IcaNewMessage) -> str:
         result = f"error:\n{error}"
         return result
 
-
 def on_message(message: IcaNewMessage, client: IcaClient) -> None:
     if not (message.is_from_self or message.is_reply):
         if message.content.startswith("/="):
