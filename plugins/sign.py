@@ -40,6 +40,7 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
         SIGN_TIME = now
         SIGN_REC = SIGN_PLAN.copy()
         SIGN_PLAN = {}
+    msg_room_id = msg.room_id
 
     if msg.is_from_self or msg.sender_id in client.status.admins:
         # 上号发的消息 / 管理员发的消息
@@ -49,7 +50,7 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
             client.send_message(msg.reply_with(HELP_MSG))
         elif msg.content == "/bot-sign all":
 
-            all_room = [room for room in client.status.rooms if room.is_group() and not room.room_id in SIGN_REC]
+            all_room = [room for room in client.status.rooms if room.is_group() and not (room.room_id in SIGN_REC and SIGN_REC[room.room_id] > now)]
             signed = []
             reply = msg.reply_with(f"将要签到 {len(all_room)} 个 群\n预计需要 {len(all_room) * 3 / 2} 秒\n(random摇出来的，只能说大概这么久)")
             client.send_message(reply)
@@ -68,7 +69,7 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
             hot_room = []
             signed = []
             for room in all_room:
-                if room.room_id in SIGN_REC:
+                if room.room_id in SIGN_REC and SIGN_REC[room.room_id] > now:
                     continue
                 if not room.is_group():
                     continue
@@ -102,7 +103,7 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
             hot_room = []
             signed = []
             for room in all_room:
-                if room.room_id in SIGN_REC:
+                if room.room_id in SIGN_REC and SIGN_REC[room.room_id] > now:
                     continue
                 if not room.is_group():
                     continue
@@ -124,7 +125,7 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
             client.send_message(reply)
 
         elif msg.content.startswith("/bot-sign want"):
-            room_id = msg.room_id
+            msg_room_id = msg.room_id
             try:
                 # 提取用户输入的时间（例如："12:34"）
                 time_str = msg.content.split()[2]
@@ -137,9 +138,9 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
                 # 如果当前时间已过目标时间，则计划到明天
                 if now >= want_time:
                     want_time += timedelta(days=1)
-                    if room_id in SIGN_PLAN:
-                        if SIGN_PLAN[room_id] >= want_time:
-                            SIGN_PLAN[room_id] = want_time
+                    if msg_room_id in SIGN_PLAN:
+                        if SIGN_PLAN[msg_room_id] >= want_time:
+                            SIGN_PLAN[msg_room_id] = want_time
                             fmt_time = want_time.strftime("%m-%d %H:%M")
                             client.send_message(msg.reply_with(f"将提前到 {fmt_time} 开始签到"))
                         else:
@@ -147,7 +148,7 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
                             client.send_message(msg.reply_with(f"不是说在 {fmt_time} 签到吗, 怎么延后了"))
                             return
                 else:
-                    if room_id in SIGN_REC:
+                    if msg_room_id in SIGN_REC:
                         client.send_message(msg.reply_with("拜托, 签过了欸"))
                         return
 
@@ -158,9 +159,9 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
                 time_d = want_time - now
 
                 def callback():
-                    client.send_room_sign_in(room_id)
-                    SIGN_REC[room_id] = datetime.now()
-                    client.send_message(msg.reply_with(f"已签到 {room_id}"))
+                    client.send_room_sign_in(msg_room_id)
+                    SIGN_REC[msg_room_id] = datetime.now()
+                    client.send_message(msg.reply_with(f"已签到 {msg_room_id}"))
 
                 caller = Scheduler(callback, time_d)
                 caller.start()
