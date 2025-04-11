@@ -205,7 +205,6 @@ def handle_real_time(msg: IcaNewMessage, client: IcaClient) -> None:
     # 画图
     normal_font, title_font = get_fonts()
     text_box = normal_font.getbbox("啊")
-    width = text_box[2] - text_box[0]
     line_height = text_box[3] - text_box[1] + 5
 
     name_width_max = 0
@@ -213,7 +212,7 @@ def handle_real_time(msg: IcaNewMessage, client: IcaClient) -> None:
         name_box = normal_font.getbbox(item.movieInfo.movieName)
         name_width_max = max(name_width_max, name_box[2] - name_box[0])
 
-    img_width = 800
+    img_width = 700
     img_height = round(line_height * len(real_time) * 2) + 7
     img = Image.new("RGB", (img_width, img_height), color=(255, 255, 255))
     draw = ImageDraw.Draw(img)
