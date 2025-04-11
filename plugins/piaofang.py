@@ -22,7 +22,7 @@ HISTORY_CMD = f"{CMD_PREFIX} history"
 REAL_TIME_CMD = f"{CMD_PREFIX} realtime"
 
 FONT_PATH = "NotoSansMonoCJKsc-VF.ttf"
-UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36 Edg/134.0.0.0"
+UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36 Edg/135.0.0.0"
 HISTORY_API = "https://piaofang.maoyan.com/i/api/rank/globalBox/historyRankList"
 REAL_TIME_API = "https://piaofang.maoyan.com/dashboard-ajax/movie"
 
@@ -208,15 +208,16 @@ def handle_real_time(msg: IcaNewMessage, client: IcaClient) -> None:
     width = text_box[2] - text_box[0]
     line_height = text_box[3] - text_box[1] + 5
 
-    img_width = 600
-    img_height = round(line_height * len(real_time) * 2) + 7
-    img = Image.new("RGB", (img_width, img_height), color=(255, 255, 255))
-    draw = ImageDraw.Draw(img)
-
     name_width_max = 0
     for item in real_time:
         name_box = normal_font.getbbox(item.movieInfo.movieName)
         name_width_max = max(name_width_max, name_box[2] - name_box[0])
+
+    img_width = 800
+    img_height = round(line_height * len(real_time) * 2) + 7
+    img = Image.new("RGB", (img_width, img_height), color=(255, 255, 255))
+    draw = ImageDraw.Draw(img)
+
 
     prev_h = random.randint(0, 360)
 

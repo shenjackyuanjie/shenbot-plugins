@@ -10,9 +10,9 @@ import requests
 if TYPE_CHECKING:
     from ica_typing import IcaNewMessage, IcaClient
 
-_version_ = "0.2.0"
-
 API_URL = "http://0.0.0.0:5110"
+
+_version_ = "0.2.0"
 
 CMD_PREFIX = "/sr"
 HELP_CMD = f"{CMD_PREFIX} help"
