@@ -4,19 +4,63 @@ import datetime
 
 from typing import Callable
 
-class ConfigStorage:
-    def __init__(self, **request_config):
-        """
-        通过 ConfigStorage 来请求配置信息
+__version__: str = "0.9.0"
+_version_: str = __version__
 
-        GLOBAL_CONFIG = ConfigStorage(some_key='default_value')
+_ica_version_: str = "2.0.1"
+_tailchat_version_: str = "2.0.0"
 
-        def aaa():
-            use_config = GLOBAL_CONFIG.get('some_key')
-            print(f"Using config: {use_config}")
-        """
+
+class ConfigTable:
+    """
+    如果你的配置项目多到了得要用子页面
+    那就用我吧
+
+    ```python
+    sub_config = ConfigTable(some_thing=None)
+    # xxx=xxx only
+    sub_config.add(key='value')
+    ```
+
+    """
+    def __init__(self, **kwargs):
         ...
 
+    def add(self, **kwargs):
+        ...
+
+class PluginConfigs:
+    """
+    用于请求配置信息
+
+    ```python
+    from shenbot_api import ConfigStorage, ConfigTable
+
+    table = ConfigTable(some_thing=None)
+    GLOBAL_CONFIG = ConfigStorage(some_key='default_value')
+    GLOBAL_CONFIG = ConfigStorage()
+                        .add(somekey="default_value")
+
+    def aaa():
+        use_config = GLOBAL_CONFIG.get('some_key')
+        print(f"Using config: {use_config}")
+
+    ```
+    ```python
+    class Cfg(ConfigStorage):
+        some_value: str = "default_value"
+        some_other_value: int = 123
+
+    GLOBAL_CONFIG = Cfg.default()
+    ```
+
+    """
+    def __init__(self, **request_config):
+        ...
+
+    @classmethod
+    def default(cls):
+        return cls()
 
 class Scheduler:
     def __init__(self, func: Callable, schdule_time: datetime.timedelta) -> None:
@@ -32,3 +76,13 @@ class Scheduler:
 
     def start(self):
         """开始任务"""
+
+
+
+class CommanderHelper:
+    """
+    用来帮助注册+处理消息
+    """
+
+    def __init__(self):
+        ...
