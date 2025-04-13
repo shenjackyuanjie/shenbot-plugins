@@ -13,7 +13,7 @@ else:
 
 from shenbot_api import Scheduler
 
-_version_ = "0.3.0"
+_version_ = "0.3.1"
 
 """记录哪些群已经签过了"""
 SIGN_REC: dict[int, datetime] = {}
@@ -168,7 +168,7 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
                                 msg.reply_with(f"将提前到 {fmt_time} 开始签到")
                             )
                         else:
-                            fmt_time = want_time.strftime("%H:%M")
+                            fmt_time = SIGN_PLAN[msg_room_id].strftime("%H:%M")
                             client.send_message(
                                 msg.reply_with(
                                     f"不是说在 {fmt_time} 签到吗, 怎么延后了"
