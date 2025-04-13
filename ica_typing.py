@@ -252,6 +252,13 @@ class IcaClient:
     def send_message(self, message: IcaSendMessage) -> bool:
         """发送一条消息"""
         ...
+    def send_raw_message(self, raw_msg: str, room_id: IcaType.RoomId) -> bool:
+        """
+        发送一条原始信息
+        警告: 小心使用
+        于 2.0.1 添加
+        """
+        ...
 
     def send_and_warn(self, message: IcaSendMessage) -> bool:
         """发送消息, 并在日志中输出警告信息"""
