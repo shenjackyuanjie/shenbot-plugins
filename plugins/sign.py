@@ -175,6 +175,10 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
                                 )
                             )
                             return
+                    else:
+                        SIGN_PLAN[msg_room_id] = want_time
+                        fmt_time = want_time.strftime("%m-%d %H:%M")
+                        client.send_message(msg.reply_with(f"将在 {fmt_time} 开始签到"))
                 else:
                     if msg_room_id in SIGN_REC:
                         client.send_message(msg.reply_with("拜托, 签过了欸"))
