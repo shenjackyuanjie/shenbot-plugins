@@ -155,7 +155,7 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
                 now = datetime.now()
 
                 # 创建目标时间（使用当前日期）
-                want_time = datetime.combine(now.date(), user_time)
+                want_time = now.replace(hour=user_time.hour, minute=user_time.minute, second=0, microsecond=0)
 
                 # 如果当前时间已过目标时间，则计划到明天
                 if now >= want_time:
