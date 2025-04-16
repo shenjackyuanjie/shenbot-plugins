@@ -138,7 +138,7 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
             for (t, room) in zip(sign_plan, hot_room):
                 client.send_room_sign_in(room.room_id)
                 signed.append(str(room.room_id))
-
+                time.sleep(t)
                 SIGN_REC[room.room_id] = datetime.now()
             cost_time = time.time() - start_time
             reply = msg.reply_with(
