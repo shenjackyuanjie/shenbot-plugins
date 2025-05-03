@@ -517,6 +517,18 @@ require_config = Callable[[None], tuple[str, bytes | str]]
 # file_name, default_data
 # 返回配置文件的内容(字节)
 
+on_load = Callable[[], None]
+# 插件加载完成后调用, 仅在插件加载时调用一次
+# added: bot 0.9.0
+
+on_unload = Callable[[], None]
+# 插件卸载之前调用, 仅在插件卸载时调用一次
+# added: bot 0.9.0
+
+on_reload = Callable[[], None]
+# 插件重载时调用, 仅在插件重载时调用一次
+# added: bot 0.9.0
+
 CONFIG_DATA: str | bytes
 # 配置文件的内容 (类型根据 require_config 返回值而定)
 # 无论有没有配置文件, 都会有一个默认的配置文件内容
