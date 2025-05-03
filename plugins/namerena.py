@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import io
 import sys
-import tomli
 import time
+import tomli
+import sqlite3
 import traceback
 import subprocess
 
@@ -62,6 +63,10 @@ HELP_MSG = f"""namerena-v[{_version_}]
     - 可以输入多行"""
 
 bun_hint = "bun\npowered by https://bun.sh"
+
+
+def init_sqlite_db():
+    ...
 
 
 def out_msg(cost_time: float) -> str:
