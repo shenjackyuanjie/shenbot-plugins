@@ -135,6 +135,7 @@ def get_db_connection() -> sqlite3.Connection:
         result TEXT NOT NULL
         );"""
     cursor.execute(table_fight_create)
+    conn.commit()
     return conn
 
 
@@ -337,3 +338,8 @@ def on_config(data: bytes):
     string = data.decode("utf-8")
     config = tomli.loads(string)
     USE_BUN = config.get("use_bun", False)
+
+
+def on_load() -> None:
+    conn = get_db_connection()
+    conn.close()
