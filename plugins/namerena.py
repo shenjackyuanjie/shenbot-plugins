@@ -31,10 +31,11 @@ else:
     ReciveMessage = TypeVar("ReciveMessage")
     TailchatReciveMessage = TypeVar("TailchatReciveMessage")
 
+from shenbot_api import python_config_path
 
 USE_BUN = True
 
-_version_ = "0.9.1"
+_version_ = "0.10.0"
 
 CMD_PREFIX = "/namer"
 
@@ -64,9 +65,61 @@ HELP_MSG = f"""namerena-v[{_version_}]
 
 bun_hint = "bun\npowered by https://bun.sh"
 
+DB_PATH = Path(f"{python_config_path()}") / "md5.db"
 
-def init_sqlite_db():
+
+def merge_db(conn: sqlite3.Connection) -> None:
+    cursor = conn.cursor()
     ...
+
+
+def get_db_connection() -> sqlite3.Connection:
+    if DB_PATH.exists():
+        conn = sqlite3.connect(DB_PATH)
+        merge_db(conn)
+        return conn
+    print("没创建过数据库, 现在给你整一个")
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    # table version: 
+    # version INTEGER NOT NULL PRIMARY KEY
+    table_ver_create = """CREATE TABLE IF NOT EXISTS version (
+        version INTEGER NOT NULL PRIMARY KEY
+        );"""
+    cursor.execute(table_ver_create)
+    # 加一条数据进去
+    cursor.execute("INSERT OR IGNORE INTO version (version) VALUES (1);")
+    # table peek:
+    # time INTEGER NOT NULL PRIMARY KEY
+    # name TEXT NOT NULL
+    # data TEXT NOT NULL
+    table_peek_create = """CREATE TABLE IF NOT EXISTS peek (
+        time INTEGER NOT NULL PRIMARY KEY,
+        name TEXT NOT NULL,
+        data TEXT NOT NULL
+        );"""
+    cursor.execute(table_peek_create)
+    # table bench:
+    # time INTEGER NOT NULL PRIMARY KEY
+    # name TEXT NOT NULL
+    # data TEXT NOT NULL
+    table_bench_create = """CREATE TABLE IF NOT EXISTS bench (
+        time INTEGER NOT NULL PRIMARY KEY,
+        name TEXT NOT NULL,
+        data TEXT NOT NULL
+        );"""
+    cursor.execute(table_bench_create)
+    # table others:
+    # time INTEGER NOT NULL PRIMARY KEY
+    # request TEXT NOT NULL
+    # result TEXT NOT NULL
+    table_fight_create = """CREATE TABLE IF NOT EXISTS fight (
+        time INTEGER NOT NULL PRIMARY KEY,
+        request TEXT NOT NULL,
+        result TEXT NOT NULL
+        );"""
+    cursor.execute(table_fight_create)
+    return conn
 
 
 def out_msg(cost_time: float) -> str:
