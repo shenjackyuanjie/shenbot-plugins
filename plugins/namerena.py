@@ -66,11 +66,27 @@ HELP_MSG = f"""namerena-v[{_version_}]
 bun_hint = "bun\npowered by https://bun.sh"
 
 DB_PATH = Path(f"{python_config_path()}") / "md5.db"
+DB_VERSION = 1
+"""
+数据库版本号
+- 1: 20250504 初始版本
+"""
 
 
 def merge_db(conn: sqlite3.Connection) -> None:
+    """
+    更新数据库版本
+    """
     cursor = conn.cursor()
-    ...
+    # 获取当前版本
+    cursor.execute("SELECT version FROM version;")
+    current_version = cursor.fetchone()
+    if current_version is None:
+        # 如果没有版本号, 则插入一个
+        cursor.execute(f"INSERT INTO version (version) VALUES ({DB_VERSION});")
+        conn.commit()
+        return
+    current_version = current_version[0]
 
 
 def get_db_connection() -> sqlite3.Connection:
@@ -88,7 +104,7 @@ def get_db_connection() -> sqlite3.Connection:
         );"""
     cursor.execute(table_ver_create)
     # 加一条数据进去
-    cursor.execute("INSERT OR IGNORE INTO version (version) VALUES (1);")
+    cursor.execute(f"INSERT OR IGNORE INTO version (version) VALUES ({DB_VERSION});")
     # table peek:
     # time INTEGER NOT NULL PRIMARY KEY
     # name TEXT NOT NULL
