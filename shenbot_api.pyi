@@ -11,6 +11,19 @@ _ica_version_: str = "2.0.1"
 _tailchat_version_: str = "2.0.0"
 
 
+def python_plugin_path() -> str:
+    """
+    返回 Python 插件的目录
+    added: 2.0.1
+    """
+
+def python_config_path() -> str:
+    """
+    返回 Python 插件配置的目录
+    added: 2.0.1
+    """
+
+
 class ConfigTable:
     """
     如果你的配置项目多到了得要用子页面
