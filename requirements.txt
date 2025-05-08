@@ -1,0 +1,7 @@
+pillow
+lib-not-dr
+requests
+psutil
+tomli
+pydantic
+psycopg
