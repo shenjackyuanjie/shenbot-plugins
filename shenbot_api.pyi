@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import datetime
 
-from typing import Callable
+from typing import Callable, Union
 
 __version__: str = "0.9.0"
 _version_: str = __version__
@@ -24,23 +24,41 @@ def python_config_path() -> str:
     """
 
 
-class ConfigTable:
+class ConfigStorage:
     """
     如果你的配置项目多到了得要用子页面
     那就用我吧
 
     ```python
-    sub_config = ConfigTable(some_thing=None)
+    sub_config = ConfigStorage(some_thing=None)
     # xxx=xxx only
     sub_config.add(key='value')
     ```
 
     """
+    value_type = Union[str, int, float, bool, list, dict]
+
     def __init__(self, **kwargs):
         ...
 
-    def add(self, **kwargs):
+    def add_item(self, key: str, value: value_type, replace: bool = True) -> bool:
         ...
+    
+    def have_value(self, layer1: str, layer2: str | None = None) -> bool:
+        ...
+    
+    def get_value(self, layer1: str, layer2: str | None = None) -> value_type:
+        ...
+
+    def get_default_toml(self) -> str:
+        ...
+    
+    def get_current_toml(self) -> str:
+        ...
+    
+    def read_toml_str(self, value: str) -> str:
+        ...
+
 
 class PluginConfigs:
     """
