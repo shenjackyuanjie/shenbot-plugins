@@ -268,7 +268,7 @@ def handle_real_time(msg: IcaNewMessage, client: IcaClient) -> None:
 
     # 画纵列分割线
     draw.line(
-        (name_width_max + 110, 0, name_width_max + 100, img_height),
+        (name_width_max + 110, 0, name_width_max + 110, img_height),
         fill=(0, 0, 0),
         width=1,
     )
