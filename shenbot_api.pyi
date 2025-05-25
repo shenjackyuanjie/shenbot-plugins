@@ -26,15 +26,13 @@ def python_config_path() -> str:
 
 class ConfigStorage:
     """
-    如果你的配置项目多到了得要用子页面
-    那就用我吧
-
     ```python
     sub_config = ConfigStorage(some_thing=None)
     # xxx=xxx only
     sub_config.add(key='value')
     ```
 
+    added: bot-0.9.0
     """
     value_type = Union[str, int, float, bool, list, dict]
 
@@ -60,38 +58,27 @@ class ConfigStorage:
         ...
 
 
-class PluginConfigs:
+class PluginInfo:
     """
-    用于请求配置信息
+    用于写入基本信息
 
     ```python
-    from shenbot_api import ConfigStorage, ConfigTable
+    from shenbot_api import ConfigStorage
 
-    table = ConfigTable(some_thing=None)
     GLOBAL_CONFIG = ConfigStorage(some_key='default_value')
     GLOBAL_CONFIG = ConfigStorage()
                         .add(somekey="default_value")
 
     def aaa():
-        use_config = GLOBAL_CONFIG.get('some_key')
+        use_config = GLOBAL_CONFIG.get_value('some_key')
         print(f"Using config: {use_config}")
 
     ```
-    ```python
-    class Cfg(ConfigStorage):
-        some_value: str = "default_value"
-        some_other_value: int = 123
-
-    GLOBAL_CONFIG = Cfg.default()
-    ```
-
+    added: bot-0.9.0
     """
     def __init__(self, **request_config):
         ...
 
-    @classmethod
-    def default(cls):
-        return cls()
 
 class Scheduler:
     def __init__(self, func: Callable, schdule_time: datetime.timedelta) -> None:
@@ -101,7 +88,7 @@ class Scheduler:
         func: 要执行的函数
         schdule_time: 计划任务的等待时长
 
-        added: 0.9.0
+        added: bot-0.9.0
         """
         ...
 
