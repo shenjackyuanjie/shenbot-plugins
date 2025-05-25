@@ -22,7 +22,7 @@ HISTORY_CMD = f"{CMD_PREFIX} history"
 REAL_TIME_CMD = f"{CMD_PREFIX} realtime"
 
 FONT_PATH = "NotoSansMonoCJKsc-VF.ttf"
-UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36 Edg/135.0.0.0"
+UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36 Edg/136.0.0.0"
 HISTORY_API = "https://piaofang.maoyan.com/i/api/rank/globalBox/historyRankList"
 REAL_TIME_API = "https://piaofang.maoyan.com/dashboard-ajax/movie"
 
