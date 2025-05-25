@@ -58,7 +58,7 @@ class ConfigStorage:
         ...
 
 
-class PluginInfo:
+class PluginDefine:
     """
     用于写入基本信息
 
@@ -76,7 +76,23 @@ class PluginInfo:
     ```
     added: bot-0.9.0
     """
-    def __init__(self, **request_config):
+    plugin_id: str
+    plugin_name: str
+    version: str
+    description: str | None
+    authors: list[str]
+    homepage: str | None
+    config: dict[str, ConfigStorage]
+    
+    def __init__(self,
+                 plugin_id: str,
+                 plugin_name: str,
+                 version: str,
+                 description: str | None,
+                 config: dict[str, ConfigStorage] | None = None,
+                 authors: list[str] | None = None,
+                 homepage: str | None = None
+                 ) -> None:
         ...
 
 
