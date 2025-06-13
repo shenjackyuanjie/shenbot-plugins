@@ -77,7 +77,7 @@ class PluginDefine:
     added: bot-0.9.0
     """
     plugin_id: str
-    plugin_name: str
+    name: str
     version: str
     description: str | None
     authors: list[str]
@@ -86,13 +86,16 @@ class PluginDefine:
     
     def __init__(self,
                  plugin_id: str,
-                 plugin_name: str,
+                 name: str,
                  version: str,
-                 description: str | None,
+                 description: str | None = None,
                  config: dict[str, ConfigStorage] | None = None,
                  authors: list[str] | None = None,
                  homepage: str | None = None
                  ) -> None:
+        ...
+    
+    def __str__(self) -> str:
         ...
 
 
