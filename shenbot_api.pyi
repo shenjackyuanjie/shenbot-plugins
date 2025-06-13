@@ -58,7 +58,7 @@ class ConfigStorage:
         ...
 
 
-class PluginDefine:
+class PluginManifest:
     """
     用于写入基本信息
 
@@ -84,15 +84,16 @@ class PluginDefine:
     homepage: str | None
     config: dict[str, ConfigStorage]
     
-    def __init__(self,
-                 plugin_id: str,
-                 name: str,
-                 version: str,
-                 description: str | None = None,
-                 config: dict[str, ConfigStorage] | None = None,
-                 authors: list[str] | None = None,
-                 homepage: str | None = None
-                 ) -> None:
+    def __init__(
+        self,
+        plugin_id: str,
+        name: str,
+        version: str,
+        description: str | None = None,
+        config: dict[str, ConfigStorage] | None = None,
+        authors: list[str] | None = None,
+        homepage: str | None = None
+    ) -> None:
         ...
     
     def __str__(self) -> str:
@@ -116,7 +117,7 @@ class Scheduler:
 
 
 
-class CommanderHelper:
+class CommandHelper:
     """
     用来帮助注册+处理消息
     """
