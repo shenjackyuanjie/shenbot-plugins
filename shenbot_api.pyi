@@ -41,19 +41,19 @@ class ConfigStorage:
 
     def add_item(self, key: str, value: value_type, replace: bool = True) -> bool:
         ...
-    
+
     def have_value(self, layer1: str, layer2: str | None = None) -> bool:
         ...
-    
+
     def get_value(self, layer1: str, layer2: str | None = None) -> value_type:
         ...
 
     def get_default_toml(self) -> str:
         ...
-    
+
     def get_current_toml(self) -> str:
         ...
-    
+
     def read_toml_str(self, value: str) -> str:
         ...
 
@@ -82,8 +82,8 @@ class PluginManifest:
     description: str | None
     authors: list[str]
     homepage: str | None
-    config: dict[str, ConfigStorage]
-    
+    # config: dict[str, ConfigStorage]
+
     def __init__(
         self,
         plugin_id: str,
@@ -95,8 +95,11 @@ class PluginManifest:
         homepage: str | None = None
     ) -> None:
         ...
-    
+
     def __str__(self) -> str:
+        ...
+
+    def config_str(self) -> str:
         ...
 
 
