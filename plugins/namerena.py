@@ -4,7 +4,6 @@ import io
 import sys
 import time
 import tomli
-import sqlite3
 import traceback
 import subprocess
 
@@ -16,6 +15,13 @@ if str(Path(__file__).parent.absolute()) not in sys.path:
     sys.path.append(str(Path(__file__).parent.absolute()))
 
 import name_utils
+
+TELEMETRY = False
+try:
+    import psycopg
+    TELEMETRY = True
+except ImportError:
+    pass
 
 if TYPE_CHECKING:
     from ica_typing import (
@@ -65,78 +71,11 @@ HELP_MSG = f"""namerena-v[{_version_}]
 
 bun_hint = "bun\npowered by https://bun.sh"
 
-DB_PATH = Path(f"{python_config_path()}") / "md5.db"
 DB_VERSION = 1
 """
 数据库版本号
 - 1: 20250504 初始版本
 """
-
-
-def merge_db(conn: sqlite3.Connection) -> None:
-    """
-    更新数据库版本
-    """
-    cursor = conn.cursor()
-    # 获取当前版本
-    cursor.execute("SELECT version FROM version;")
-    current_version = cursor.fetchone()
-    if current_version is None:
-        # 如果没有版本号, 则插入一个
-        cursor.execute(f"INSERT INTO version (version) VALUES ({DB_VERSION});")
-        conn.commit()
-        return
-    current_version = current_version[0]
-
-
-def get_db_connection() -> sqlite3.Connection:
-    if DB_PATH.exists():
-        conn = sqlite3.connect(DB_PATH)
-        merge_db(conn)
-        return conn
-    print("没创建过数据库, 现在给你整一个")
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    # table version: 
-    # version INTEGER NOT NULL PRIMARY KEY
-    table_ver_create = """CREATE TABLE IF NOT EXISTS version (
-        version INTEGER NOT NULL PRIMARY KEY
-        );"""
-    cursor.execute(table_ver_create)
-    # 加一条数据进去
-    cursor.execute(f"INSERT OR IGNORE INTO version (version) VALUES ({DB_VERSION});")
-    # table peek:
-    # time INTEGER NOT NULL PRIMARY KEY
-    # name TEXT NOT NULL
-    # data TEXT NOT NULL
-    table_peek_create = """CREATE TABLE IF NOT EXISTS peek (
-        time INTEGER NOT NULL PRIMARY KEY,
-        name TEXT NOT NULL,
-        data TEXT NOT NULL
-        );"""
-    cursor.execute(table_peek_create)
-    # table bench:
-    # time INTEGER NOT NULL PRIMARY KEY
-    # name TEXT NOT NULL
-    # data TEXT NOT NULL
-    table_bench_create = """CREATE TABLE IF NOT EXISTS bench (
-        time INTEGER NOT NULL PRIMARY KEY,
-        name TEXT NOT NULL,
-        data TEXT NOT NULL
-        );"""
-    cursor.execute(table_bench_create)
-    # table others:
-    # time INTEGER NOT NULL PRIMARY KEY
-    # request TEXT NOT NULL
-    # result TEXT NOT NULL
-    table_fight_create = """CREATE TABLE IF NOT EXISTS fight (
-        time INTEGER NOT NULL PRIMARY KEY,
-        request TEXT NOT NULL,
-        result TEXT NOT NULL
-        );"""
-    cursor.execute(table_fight_create)
-    conn.commit()
-    return conn
 
 
 def out_msg(cost_time: float) -> str:
@@ -341,5 +280,6 @@ def on_config(data: bytes):
 
 
 def on_load() -> None:
-    conn = get_db_connection()
-    conn.close()
+    # conn = get_db_connection()
+    # conn.close()
+    ...

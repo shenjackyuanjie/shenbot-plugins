@@ -1,11 +1,11 @@
 import io
-import time
+# import time
 import psutil
 import platform
-from pathlib import Path
+# from pathlib import Path
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, TypeVar
-from PIL import Image, ImageDraw, ImageFont
+# from PIL import Image, ImageDraw, ImageFont
 
 if TYPE_CHECKING:
     from ica_typing import IcaNewMessage, IcaClient
