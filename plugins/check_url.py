@@ -89,6 +89,9 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
                 continue
             # 就这样了
             NEED_PING.append(name)
+    elif msg.content == "/检查ping":
+        new_msg = msg.reply_with(f"更新了!!\n{gen_at_by_msg(msg)}\n{'\n'.join(NEED_PING)}")
+        ICA_CLIENT.send_message(new_msg)
 
         
 

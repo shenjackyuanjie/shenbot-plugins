@@ -37,8 +37,6 @@ else:
     ReciveMessage = TypeVar("ReciveMessage")
     TailchatReciveMessage = TypeVar("TailchatReciveMessage")
 
-from shenbot_api import python_config_path
-
 USE_BUN = True
 
 _version_ = "0.10.0"
