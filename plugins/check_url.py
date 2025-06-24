@@ -90,7 +90,8 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
             # 就这样了
             NEED_PING.append(name)
     elif msg.content == "/检查ping":
-        new_msg = msg.reply_with(f"更新了!!\n{gen_at_by_msg(msg)}\n{'\n'.join(NEED_PING)}")
+        ping_msg = '\n'.join(NEED_PING)
+        new_msg = msg.reply_with(f"更新了!!\n{gen_at_by_msg(msg)}\n{ping_msg}")
         ICA_CLIENT.send_message(new_msg)
 
         
@@ -109,7 +110,8 @@ def check_urls_thread() -> None:
         update_urls = check_urls()
         if update_urls and ICA_CLIENT is not None:
             for (room_id, msg) in 检测群.items():
-                new_msg = msg.reply_with(f"{update_urls}\n更新了!!\n{gen_at_by_msg(msg)}\n{'\n'.join(NEED_PING)}")
+                ping_msg = '\n'.join(NEED_PING)
+                new_msg = msg.reply_with(f"{update_urls}\n更新了!!\n{gen_at_by_msg(msg)}\n{ping_msg}")
                 ICA_CLIENT.send_message(new_msg)
             break
         time.sleep(检查频率)
