@@ -35,6 +35,18 @@ def get_url(url: str) -> str | None:
         return None
 
 
+def gen_at(user_id: int, user_name: str) -> str:
+    """
+    source:
+    https://github.com/Icalingua-plus-plus/Icalingua-plus-plus/blob/51ae7d2f2403188c08b942ea7e4bd538725dbfaa/icalingua/src/main/adapters/oicqAdapter.ts#L1517-L1533
+    """
+    return f"<IcalinguaAt qq={user_id}>@{user_name}</IcalinguaAt>"
+
+
+def gen_at_by_msg(msg: IcaNewMessage) -> str:
+    return gen_at(msg.sender_id, msg.sender_name)
+
+
 def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
     global ICA_CLIENT
     ICA_CLIENT = client
@@ -64,7 +76,7 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
         else:
             client.send_message(msg.reply_with("当前群未开启"))
     elif msg.content == "/检查 test":
-        reply = msg.reply_with(f"测试 @{msg.sender_name}")
+        reply = msg.reply_with(f"测试 @ {gen_at_by_msg(msg)}")
         client.send_message(reply)
 
 
