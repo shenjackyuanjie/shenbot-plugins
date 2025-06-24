@@ -77,6 +77,7 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
             client.send_message(msg.reply_with("当前群未开启"))
     elif msg.content == "/检查 test":
         reply = msg.reply_with(f"测试 @ {gen_at_by_msg(msg)}")
+        reply.remove_reply()
         client.send_message(reply)
 
 
