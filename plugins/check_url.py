@@ -15,7 +15,7 @@ else:
     IcaNewMessage = TypeVar("NewMessage")
     IcaClient = TypeVar("IcaClient")
 
-检查频率 = 1
+检查频率 = 10
 """
 几秒 检查一下
 """
@@ -40,7 +40,7 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
     ICA_CLIENT = client
     if (msg.is_from_self or msg.is_reply):
         return
-    
+
     if msg.content == "/开启检查":
         if msg.room_id not in 检测群:
             检测群[msg.room_id] = msg
