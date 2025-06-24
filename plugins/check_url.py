@@ -26,6 +26,7 @@ WORK = {
 
 检测群: dict[int, IcaNewMessage] = {}
 ICA_CLIENT: IcaClient | None = None
+NEED_PING: list[str] = []
 
 def get_url(url: str) -> str | None:
     try:
@@ -75,11 +76,21 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
             client.send_message(msg.reply_with(f"当前群已开启\n{任务}"))
         else:
             client.send_message(msg.reply_with("当前群未开启"))
-    elif msg.content == "/检查 test":
-        reply = msg.reply_with(f"测试 @ {gen_at_by_msg(msg)}")
-        reply.remove_reply()
-        client.send_message(reply)
+    elif msg.content.startswith("/添加ping"):
+        """
+        /添加ping @xxxx @xxxx
+        """
+        names = msg.content.split(" ")[1:]
+        for name in names:
+            # 检查是否为合法 @
+            if not name.startswith("<IcalinguaAt"):
+                continue
+            if not name.endswith("</IcalinguaAt>"):
+                continue
+            # 就这样了
+            NEED_PING.append(name)
 
+        
 
 def check_urls() -> list[str]:
     update = []
@@ -95,7 +106,7 @@ def check_urls_thread() -> None:
         update_urls = check_urls()
         if update_urls and ICA_CLIENT is not None:
             for (room_id, msg) in 检测群.items():
-                new_msg = msg.reply_with(f"{update_urls}\n更新了!!")
+                new_msg = msg.reply_with(f"{update_urls}\n更新了!!\n{gen_at_by_msg(msg)}\n{'\n'.join(NEED_PING)}")
                 ICA_CLIENT.send_message(new_msg)
             break
         time.sleep(检查频率)
