@@ -63,6 +63,9 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
             client.send_message(msg.reply_with(f"当前群已开启\n{任务}"))
         else:
             client.send_message(msg.reply_with("当前群未开启"))
+    elif msg.content == "/检查 test":
+        reply = msg.reply_with(f"测试 @{msg.sender_name}")
+        client.send_message(reply)
 
 
 def check_urls() -> list[str]:
