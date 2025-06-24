@@ -60,7 +60,7 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
         """
         if msg.room_id in 检测群:
             任务 = "\n".join(f"url: {url}\nmsg: {check_msg}" for (url, check_msg) in WORK.items())
-            client.send_message(msg.reply_with("当前群已开启\n{任务}"))
+            client.send_message(msg.reply_with(f"当前群已开启\n{任务}"))
         else:
             client.send_message(msg.reply_with("当前群未开启"))
 
