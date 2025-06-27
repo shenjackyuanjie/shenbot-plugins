@@ -16,6 +16,18 @@ else:
     TailchatReciveMessage = TypeVar("TailchatReciveMessage")
     TailchatClient = TypeVar("TailchatClient")
 
+from shenbot_api import PluginManifest
+
+PLUGIN_MANIFEST = PluginManifest(
+    plugin_id="base",
+    name="基本插件",
+    version="0.0.1",
+    description="提供基本功能的插件",
+    authors=[
+        "shenjack"
+    ]
+)
+
 
 # 生成一张本地信息图
 def local_env_info() -> str:

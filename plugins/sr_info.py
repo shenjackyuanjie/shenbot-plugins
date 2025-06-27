@@ -41,6 +41,17 @@ HELP_MSG = f"""sr info-{_version_}
 # http://jundroo.com/ViewShip.html?id=1323466
 SHIP_URL_PREFIX = "http://jundroo.com/ViewShip.html?id="
 
+from shenbot_api import PluginManifest
+
+PLUGIN_MANIFEST = PluginManifest(
+    plugin_id="sr_info",
+    name="sr数据库信息",
+    version=_version_,
+    description="查询 sr 云存档的数据库信息",
+    authors=[
+        "shenjack"
+    ]
+)
 
 def data_type_fmt(data_type: str) -> str:
     if data_type == "ship":

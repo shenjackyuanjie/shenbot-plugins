@@ -31,6 +31,18 @@ HELP_MSG = f"""bot sign v{_version_} - 似乎有点用的自动签到
 /bot-sign - 查看帮助信息
 """
 
+from shenbot_api import PluginManifest
+
+PLUGIN_MANIFEST = PluginManifest(
+    plugin_id="signer",
+    name="签到器",
+    version=_version_,
+    description="自动签到",
+    authors=[
+        "shenjack"
+    ]
+)
+
 
 def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
     now = datetime.now()

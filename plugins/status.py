@@ -13,6 +13,17 @@ else:
     TailchatReciveMessage = TypeVar("TailchatReciveMessage")
     TailchatClient = TypeVar("TailchatClient")
 
+from shenbot_api import PluginManifest
+
+PLUGIN_MANIFEST = PluginManifest(
+    plugin_id="status",
+    name="计数插件",
+    version="0.0.1",
+    description="用来计数有多少条消息",
+    authors=[
+        "shenjack"
+    ]
+)
 
 class Counter:
     def __init__(self, count_time: int = 60):
