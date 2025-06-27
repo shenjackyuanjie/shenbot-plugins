@@ -15,10 +15,23 @@ else:
     IcaNewMessage = TypeVar("NewMessage")
     IcaClient = TypeVar("IcaClient")
 
+
 COOKIE = None
 
 _version_ = "2.9.0-rs"
 backend_version = "unknown"
+
+from shenbot_api import PluginManifest
+
+PLUGIN_MANIFEST = PluginManifest(
+    plugin_id="bmcl",
+    name="openbmclapi查询",
+    version=_version_,
+    description="查询 openbmclapi 的各项数据",
+    authors=[
+        "shenjack"
+    ]
+)
 
 
 def format_data_size(data_bytes: float) -> str:

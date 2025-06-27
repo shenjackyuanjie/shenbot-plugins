@@ -11,6 +11,18 @@ else:
 
 VERSION = "1.2.0"
 
+from shenbot_api import PluginManifest
+
+PLUGIN_MANIFEST = PluginManifest(
+    plugin_id="hyp_vote",
+    name="vote for hypixel time",
+    version=VERSION,
+    description="投票选出群友玩hyp的时间吧",
+    authors=[
+        "dongdigua",
+        "shenjack",
+    ]
+)
 
 def gen_room() -> dict[int, dict[int, str]]:
     return {i: {} for i in range(0, 24)}
