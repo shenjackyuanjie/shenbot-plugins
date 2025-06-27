@@ -18,7 +18,7 @@ else:
 
 COOKIE = None
 
-_version_ = "2.9.0-rs"
+_version_ = "2.9.1-rs"
 backend_version = "unknown"
 
 from shenbot_api import PluginManifest
@@ -128,8 +128,8 @@ def bmcl_dashboard(msg: IcaNewMessage, client: IcaClient | TailchatClient) -> No
     report_msg = (
         f"OpenBMCLAPI 面板v{_version_}-状态\n"
         f"api版本 {backend_version} commit:{backend_commit}\n"
-        f"实时信息: {online_node}  带宽: {online_bandwidth}Mbps\n"
-        f"负载: {load_str:.2f}%  带宽: {data_bandwidth:.2f}Mbps\n"
+        f"实时信息: {online_node}  理论可用带宽: {online_bandwidth}Mbps\n"
+        f"负载: {load_str:.2f}% 实际带宽: {data_bandwidth:.2f}Mbps\n"
         f"当日请求: {hits_count} 数据量: {data_len}\n"
         f"请求时间: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(req_time))}\n"
         "数据源: https://bd.bangbang93.com/pages/dashboard"
