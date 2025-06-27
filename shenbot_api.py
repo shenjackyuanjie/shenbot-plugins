@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import datetime
 
-from typing import Callable, Union
+from typing import Callable, Union, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ica_typing import IcaSendMessage
 
 __version__: str = "0.9.0"
 _version_: str = __version__
