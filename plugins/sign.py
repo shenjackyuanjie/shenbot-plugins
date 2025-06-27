@@ -11,7 +11,7 @@ else:
     IcaNewMessage = TypeVar("NewMessage")
     IcaClient = TypeVar("IcaClient")
 
-from shenbot_api import Scheduler
+from shenbot_api import Scheduler, PluginManifest
 
 _version_ = "0.3.1"
 
@@ -30,8 +30,6 @@ HELP_MSG = f"""bot sign v{_version_} - 似乎有点用的自动签到
 /bot-sign help - 查看帮助信息
 /bot-sign - 查看帮助信息
 """
-
-from shenbot_api import PluginManifest
 
 PLUGIN_MANIFEST = PluginManifest(
     plugin_id="signer",
@@ -107,6 +105,8 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
             signed = []
             # 排序
             hot_room.sort(key=lambda x: x.utime, reverse=True)
+            if len(hot_room) == 0:
+                return
 
             reply = msg.reply_with(
                 f"将要签到 {len(hot_room)} 个 7天内有活动的群\n需要 {use_time} 秒"
@@ -142,6 +142,8 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
             signed = []
             # 排序
             hot_room.sort(key=lambda x: x.utime, reverse=True)
+            if len(hot_room) == 0:
+                return
             reply = msg.reply_with(
                 f"将要签到 {len(hot_room)} 个 半天内有活动的群\n需要{use_time}秒"
             )
