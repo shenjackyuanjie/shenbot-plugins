@@ -64,7 +64,7 @@ HELP_MSG = f"""namerena-v[{_version_}]
 - {EVAL_SIMPLE_CMD} - 简化输入
 - {CMD_PREFIX}-[pd|pd|qp|qd] - 你懂的评分
     - 一行一个名字/+连接的多个名字
-- {CONVERT_CMD} - 查看一个名字的属性, 每一行一个名字
+# - {CONVERT_CMD} - 查看一个名字的属性, 每一行一个名字
 - {FIGHT_CMD} - 1v1 战斗, 格式是 "AAA+BBB+[seed]"
     - 例如: "AAA+BBB+seed:123@!" 表示 AAA 和 BBB 以 123@! 为种子进行战斗
     - 可以输入多行"""
@@ -94,33 +94,33 @@ def out_msg(cost_time: float) -> str:
     )
 
 
-def convert_name(msg: ReciveMessage, client) -> None:
-    # 也是多行
-    if msg.content.find("\n") == -1:
-        client.send_message(
-            msg.reply_with(
-                f"请使用 {CONVERT_CMD} 命令，然后换行输入名字，例如：\n{CONVERT_CMD}\n张三\n李四\n王五\n"
-            )
-        )
-        return
-    # 去掉 prefix
-    names = msg.content[len(CONVERT_CMD) :]
-    # 去掉第一个 \n
-    names = names[names.find("\n") + 1 :]
-    cache = io.StringIO()
-    raw_players = [x for x in names.split("\n") if x != ""]
-    players = [name_utils.Player() for _ in raw_players]
-    for i, player in enumerate(players):
-        if not player.load(raw_players[i]):
-            cache.write(f"{i+1} {raw_players[i]} 无法解析\n")
-            raw_players[i] = ""
-    for i, player in enumerate(players):
-        if raw_players[i] == "":
-            continue
-        cache.write(player.display())
-        cache.write("\n")
-    reply = msg.reply_with(f"{cache.getvalue()}版本:{_version_}")
-    client.send_message(reply)
+# def convert_name(msg: ReciveMessage, client) -> None:
+#     # 也是多行
+#     if msg.content.find("\n") == -1:
+#         client.send_message(
+#             msg.reply_with(
+#                 f"请使用 {CONVERT_CMD} 命令，然后换行输入名字，例如：\n{CONVERT_CMD}\n张三\n李四\n王五\n"
+#             )
+#         )
+#         return
+#     # 去掉 prefix
+#     names = msg.content[len(CONVERT_CMD) :]
+#     # 去掉第一个 \n
+#     names = names[names.find("\n") + 1 :]
+#     cache = io.StringIO()
+#     raw_players = [x for x in names.split("\n") if x != ""]
+#     players = [name_utils.Player() for _ in raw_players]
+#     for i, player in enumerate(players):
+#         if not player.load(raw_players[i]):
+#             cache.write(f"{i+1} {raw_players[i]} 无法解析\n")
+#             raw_players[i] = ""
+#     for i, player in enumerate(players):
+#         if raw_players[i] == "":
+#             continue
+#         cache.write(player.display())
+#         cache.write("\n")
+#     reply = msg.reply_with(f"{cache.getvalue()}版本:{_version_}")
+#     client.send_message(reply)
 
 
 def run_namerena(input_text: str, fight_mode: bool = False) -> tuple[str, float]:
@@ -252,8 +252,8 @@ def dispatch_msg(msg: ReciveMessage, client) -> None:
         eval_fight(msg, client)
     elif msg.content.startswith(FIGHT_CMD):
         run_fights(msg, client)
-    elif msg.content.startswith(CONVERT_CMD):
-        convert_name(msg, client)
+    # elif msg.content.startswith(CONVERT_CMD):
+    #     convert_name(msg, client)
     elif msg.content.startswith(EVAL_PP_CMD):
         eval_score(msg, client, "!test!\n\n{test}")
     elif msg.content.startswith(EVAL_PD_CMD):
