@@ -37,6 +37,8 @@ else:
     ReciveMessage = TypeVar("ReciveMessage")
     TailchatReciveMessage = TypeVar("TailchatReciveMessage")
 
+from shenbot_api import PluginManifest
+
 USE_BUN = True
 
 _version_ = "0.10.0"
@@ -75,6 +77,15 @@ DB_VERSION = 1
 - 1: 20250504 初始版本
 """
 
+PLUGIN_MANIFEST = PluginManifest(
+    plugin_id="namer",
+    name="名竞小工具",
+    version=_version_,
+    description="namerena 的一堆小工具",
+    authors=[
+        "shenjack"
+    ]
+)
 
 def out_msg(cost_time: float) -> str:
     use_bun = USE_BUN
