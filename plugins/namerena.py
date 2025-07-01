@@ -38,7 +38,7 @@ else:
     ReciveMessage = TypeVar("ReciveMessage")
     TailchatReciveMessage = TypeVar("TailchatReciveMessage")
 
-from shenbot_api import PluginManifest
+from shenbot_api import PluginManifest, ConfigStorage
 
 USE_BUN = True
 
@@ -81,12 +81,17 @@ DB_VERSION = 1
 - 1: 20250504 初始版本
 """
 
+cfg = ConfigStorage(
+    use_bun = False # use bun?
+)
+
 PLUGIN_MANIFEST = PluginManifest(
     plugin_id="namer",
     name="名竞小工具",
     version=_version_,
     description="namerena 的一堆小工具",
     authors=["shenjack"],
+    config={"main": cfg},
 )
 
 
@@ -286,7 +291,7 @@ def score_all(msg: ReciveMessage, client) -> None:
         results.append(["|".join(scores), all_time])
     end_time = time.time()
     content = "\n".join((f"{score}-{cost_time:.2f}s" for (score, cost_time) in results))
-    reply = msg.reply_with(f"{content}\n{out_msg(end_time - start_time)}")
+    reply = msg.reply_with(f"pp|pd|qp|qd\n{content}\n{out_msg(end_time - start_time)}")
     client.send_message(reply)
 
 
@@ -327,15 +332,15 @@ def on_tailchat_message(msg: TailchatReciveMessage, client) -> None:
     dispatch_msg(msg, client)  # type: ignore
 
 
-def require_config() -> tuple[str, str]:
-    return ("namer.toml", "use_bun = false # 是否使用 bun")
+# def require_config() -> tuple[str, str]:
+#     return ("namer.toml", "use_bun = false # 是否使用 bun")
 
 
-def on_config(data: bytes):
-    global USE_BUN
-    string = data.decode("utf-8")
-    config = tomli.loads(string)
-    USE_BUN = config.get("use_bun", False)
+# def on_config(data: bytes):
+#     global USE_BUN
+#     string = data.decode("utf-8")
+#     config = tomli.loads(string)
+#     USE_BUN = config.get("use_bun", False)
 
 
 def on_load() -> None:
