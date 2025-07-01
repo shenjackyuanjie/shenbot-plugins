@@ -28,9 +28,7 @@ PLUGIN_MANIFEST = PluginManifest(
     name="openbmclapi查询",
     version=_version_,
     description="查询 openbmclapi 的各项数据",
-    authors=[
-        "shenjack"
-    ]
+    authors=["shenjack"],
 )
 
 
@@ -154,13 +152,13 @@ def display_rank_min(ranks: list, req_time) -> str:
                 cache.write("🌕" if rank["fullSize"] else "🌘")
             if "version" in rank:
                 cache.write("🟢" if rank["version"] == backend_version else "🟠")
-            cache.write(f"-{rank['index']+1:3}")
+            cache.write(f"-{rank['index'] + 1:3}")
             cache.write(f"|{rank['name']}\n")
     else:
         cache.write("无cookie\n")
         for rank in ranks:
             cache.write("✅" if rank["isEnabled"] else "❌")
-            cache.write(f"-{rank['index']+1:3}")
+            cache.write(f"-{rank['index'] + 1:3}")
             cache.write(f"|{rank['name']}\n")
     cache.write(
         f"请求时间: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(req_time))}"
@@ -178,7 +176,7 @@ def display_rank_full(ranks: list, req_time) -> str:
             cache.write("✅" if rank["isEnabled"] else "❌")
             if "fullSize" in rank:
                 cache.write("🌕" if rank["fullSize"] else "🌘")
-            cache.write(f"|{rank['index']+1:3}|")
+            cache.write(f"|{rank['index'] + 1:3}|")
             cache.write(f"{rank['name']}")
             if "version" in rank:
                 cache.write(f"|{rank['version']}")
@@ -201,7 +199,7 @@ def display_rank_full(ranks: list, req_time) -> str:
         cache.write("无cookie\n")
         for rank in ranks:
             cache.write("✅" if rank["isEnabled"] else "❌")
-            cache.write(f"-{rank['index']+1:3}")
+            cache.write(f"-{rank['index'] + 1:3}")
             cache.write(f"|{rank['name']}|\n")
             if "sponsor" in rank:
                 cache.write(f"赞助者: {rank['sponsor']['name']}|")
@@ -315,8 +313,8 @@ help = f"""/bmcl -> dashboard
 /brrs <name> -> rank of <name>
 搜索限制:
 1-{FULL_DISPLAY} 显示全部信息
-{FULL_DISPLAY+1}-{MAX_DISPLAY} 显示状态、名称
-{MAX_DISPLAY+1}+  不显示
+{FULL_DISPLAY + 1}-{MAX_DISPLAY} 显示状态、名称
+{MAX_DISPLAY + 1}+  不显示
 """
 # /bm93 -> 随机怪图
 

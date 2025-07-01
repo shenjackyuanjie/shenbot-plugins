@@ -48,10 +48,9 @@ PLUGIN_MANIFEST = PluginManifest(
     name="sr数据库信息",
     version=_version_,
     description="查询 sr 云存档的数据库信息",
-    authors=[
-        "shenjack"
-    ]
+    authors=["shenjack"],
 )
+
 
 def data_type_fmt(data_type: str) -> str:
     if data_type == "ship":

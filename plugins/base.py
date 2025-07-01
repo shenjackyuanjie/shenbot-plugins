@@ -1,7 +1,9 @@
 import io
+
 # import time
 import psutil
 import platform
+
 # from pathlib import Path
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, TypeVar
@@ -23,9 +25,7 @@ PLUGIN_MANIFEST = PluginManifest(
     name="基本插件",
     version="0.0.1",
     description="提供基本功能的插件",
-    authors=[
-        "shenjack"
-    ]
+    authors=["shenjack"],
 )
 
 

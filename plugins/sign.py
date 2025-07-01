@@ -36,9 +36,7 @@ PLUGIN_MANIFEST = PluginManifest(
     name="签到器",
     version=_version_,
     description="自动签到",
-    authors=[
-        "shenjack"
-    ]
+    authors=["shenjack"],
 )
 
 
@@ -70,7 +68,7 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
                     # 他先签到的
                     continue
                 sign_room.append(room)
-            sign_plan = sign_plan[:len(sign_room)]
+            sign_plan = sign_plan[: len(sign_room)]
             signed = []
 
             reply = msg.reply_with(f"将要签到{len(sign_room)}个群\n需要 {use_time} 秒")
@@ -101,7 +99,7 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
                     # 7天前的群
                     continue
                 hot_room.append(room)
-            sign_plan = sign_plan[:len(hot_room)]
+            sign_plan = sign_plan[: len(hot_room)]
             signed = []
             # 排序
             hot_room.sort(key=lambda x: x.utime, reverse=True)
@@ -138,7 +136,7 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
                     # 12小时前的群
                     continue
                 hot_room.append(room)
-            sign_plan = sign_plan[:len(hot_room)]
+            sign_plan = sign_plan[: len(hot_room)]
             signed = []
             # 排序
             hot_room.sort(key=lambda x: x.utime, reverse=True)
@@ -149,7 +147,7 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
             )
             client.send_message(reply)
 
-            for (t, room) in zip(sign_plan, hot_room):
+            for t, room in zip(sign_plan, hot_room):
                 client.send_room_sign_in(room.room_id)
                 signed.append(str(room.room_id))
                 time.sleep(t)
@@ -169,7 +167,12 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
                 now = datetime.now()
 
                 # 创建目标时间（使用当前日期）
-                want_time = now.replace(hour=user_time.hour, minute=user_time.minute, second=0, microsecond=0)
+                want_time = now.replace(
+                    hour=user_time.hour,
+                    minute=user_time.minute,
+                    second=0,
+                    microsecond=0,
+                )
 
                 # 如果当前时间已过目标时间，则计划到明天
                 if now >= want_time:

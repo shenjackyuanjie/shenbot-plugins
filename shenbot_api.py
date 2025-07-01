@@ -21,6 +21,7 @@ def python_plugin_path() -> str:
     """
     ...
 
+
 def python_config_path() -> str:
     """
     返回 Python 插件配置的目录
@@ -39,28 +40,22 @@ class ConfigStorage:
 
     added: bot-0.9.0
     """
+
     value_type = Union[str, int, float, bool, list, dict]
 
-    def __init__(self, **kwargs):
-        ...
+    def __init__(self, **kwargs): ...
 
-    def add_item(self, key: str, value: value_type, replace: bool = True) -> bool:
-        ...
+    def add_item(self, key: str, value: value_type, replace: bool = True) -> bool: ...
 
-    def have_value(self, layer1: str, layer2: str | None = None) -> bool:
-        ...
+    def have_value(self, layer1: str, layer2: str | None = None) -> bool: ...
 
-    def get_value(self, layer1: str, layer2: str | None = None) -> value_type:
-        ...
+    def get_value(self, layer1: str, layer2: str | None = None) -> value_type: ...
 
-    def get_default_toml(self) -> str:
-        ...
+    def get_default_toml(self) -> str: ...
 
-    def get_current_toml(self) -> str:
-        ...
+    def get_current_toml(self) -> str: ...
 
-    def read_toml_str(self, value: str) -> str:
-        ...
+    def read_toml_str(self, value: str) -> str: ...
 
 
 class PluginManifest:
@@ -81,6 +76,7 @@ class PluginManifest:
     ```
     added: bot-0.9.0
     """
+
     plugin_id: str
     name: str
     version: str
@@ -97,15 +93,12 @@ class PluginManifest:
         description: str | None = None,
         config: dict[str, ConfigStorage] | None = None,
         authors: list[str] | None = None,
-        homepage: str | None = None
-    ) -> None:
-        ...
+        homepage: str | None = None,
+    ) -> None: ...
 
-    def __str__(self) -> str:
-        ...
+    def __str__(self) -> str: ...
 
-    def config_str(self) -> str:
-        ...
+    def config_str(self) -> str: ...
 
 
 class Scheduler:
@@ -124,11 +117,9 @@ class Scheduler:
         """开始任务"""
 
 
-
 class CommandHelper:
     """
     用来帮助注册+处理消息
     """
 
-    def __init__(self):
-        ...
+    def __init__(self): ...

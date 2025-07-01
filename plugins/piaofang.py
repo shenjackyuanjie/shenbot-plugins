@@ -217,7 +217,6 @@ def handle_real_time(msg: IcaNewMessage, client: IcaClient) -> None:
     img = Image.new("RGB", (img_width, img_height), color=(255, 255, 255))
     draw = ImageDraw.Draw(img)
 
-
     prev_h = random.randint(0, 360)
 
     for i, item in enumerate(real_time):

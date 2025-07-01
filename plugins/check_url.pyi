@@ -35,7 +35,6 @@ def get_url(url: str) -> str | None:
     except Exception:
         return None
 
-
 def gen_at(user_id: int, user_name: str) -> str:
     """
     source:
@@ -43,15 +42,13 @@ def gen_at(user_id: int, user_name: str) -> str:
     """
     return f"<IcalinguaAt qq={user_id}>@{user_name}</IcalinguaAt>"
 
-
 def gen_at_by_msg(msg: IcaNewMessage) -> str:
     return gen_at(msg.sender_id, msg.sender_name)
-
 
 def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
     global ICA_CLIENT
     ICA_CLIENT = client
-    if (msg.is_from_self or msg.is_reply):
+    if msg.is_from_self or msg.is_reply:
         return
 
     if msg.content == "/开启检查":
@@ -72,7 +69,9 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
         msg: xxxx
         """
         if msg.room_id in 检测群:
-            任务 = "\n".join(f"url: {url}\nmsg: {check_msg}" for (url, check_msg) in WORK.items())
+            任务 = "\n".join(
+                f"url: {url}\nmsg: {check_msg}" for (url, check_msg) in WORK.items()
+            )
             client.send_message(msg.reply_with(f"当前群已开启\n{任务}"))
         else:
             client.send_message(msg.reply_with("当前群未开启"))
@@ -94,24 +93,23 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
     #     new_msg = msg.reply_with(f"更新了!!\n{gen_at_by_msg(msg)}\n{ping_msg}")
     #     ICA_CLIENT.send_message(new_msg)
 
-        
-
 def check_urls() -> list[str]:
     update = []
-    for (url, msg) in WORK.items():
+    for url, msg in WORK.items():
         if (content := get_url(url)) is not None:
             if msg not in content:
                 update.append(url)
     return update
 
-
 def check_urls_thread() -> None:
     while True:
         update_urls = check_urls()
         if update_urls and ICA_CLIENT is not None:
-            for (room_id, msg) in 检测群.items():
-                ping_msg = '\n'.join(NEED_PING)
-                new_msg = msg.reply_with(f"{update_urls}\n更新了!!\n{gen_at_by_msg(msg)}\n{ping_msg}")
+            for room_id, msg in 检测群.items():
+                ping_msg = "\n".join(NEED_PING)
+                new_msg = msg.reply_with(
+                    f"{update_urls}\n更新了!!\n{gen_at_by_msg(msg)}\n{ping_msg}"
+                )
                 ICA_CLIENT.send_message(new_msg)
             break
         time.sleep(检查频率)

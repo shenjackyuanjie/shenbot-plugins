@@ -67,6 +67,7 @@ class IcaStatus:
         @return: 房间列表
         """
         ...
+
     @property
     def admins(self) -> list[IcaType.UserId]:
         """
@@ -74,6 +75,7 @@ class IcaStatus:
         获取所有管理员
         """
         ...
+
     @property
     def filtered(self) -> list[IcaType.UserId]:
         """
@@ -88,6 +90,7 @@ class IcaRoom:
     """
     于 2.0.1 添加, 用于获取房间信息
     """
+
     @property
     def room_id(self) -> IcaType.RoomId: ...
     @property
@@ -101,6 +104,7 @@ class IcaRoom:
         @return: 优先级
         """
         ...
+
     @property
     def utime(self) -> int:
         """
@@ -108,18 +112,21 @@ class IcaRoom:
         @return: 时间戳 (time.time * 1000)
         """
         ...
+
     def is_group(self) -> bool:
         """
         判断是否为群聊
         @return: 是否为群聊
         """
         ...
+
     def is_chat(self) -> bool:
         """
         判断是否为私聊
         @return: 是否为私聊
         """
         ...
+
     def new_message_to(self, content: str) -> IcaSendMessage:
         """
         创建一条发送到这个房间的消息
@@ -127,6 +134,7 @@ class IcaRoom:
         @return: 消息对象
         """
         ...
+
 
 class IcaReplyMessage: ...
 
@@ -154,6 +162,7 @@ class IcaSendMessage:
         @param file_type: 图片类型 (MIME) (image/png; image/jpeg)
         @param as_sticker: 是否作为贴纸发送
         """
+
     def remove_reply(self) -> IcaSendMessage:
         """删除回复"""
         ...
@@ -252,6 +261,7 @@ class IcaClient:
     def send_message(self, message: IcaSendMessage) -> bool:
         """发送一条消息"""
         ...
+
     def send_raw_message(self, raw_msg: str, room_id: IcaType.RoomId) -> bool:
         """
         发送一条原始信息
@@ -290,6 +300,7 @@ class IcaClient:
     def startup_time(self) -> datetime:
         """请注意, 此时刻为 UTC 时刻"""
         ...
+
     @property
     def py_tasks_count(self) -> int:
         """获取当前正在运行的 Python 任务数量
@@ -424,6 +435,7 @@ class TailchatClient:
     ) -> "TailchatSendingMessage":
         """创建一条新消息, 可用于发送"""
         ...
+
     @property
     def version(self) -> str: ...
     @property
@@ -488,10 +500,9 @@ class ReciveMessage(TailchatReciveMessage, IcaNewMessage):
     只是用来类型标记, 不能实例化
     """
 
-    def reply_with(
-        self, message: str
-    ) -> IcaReplyMessage | TailchatSendingMessage:  # type: ignore
+    def reply_with(self, message: str) -> IcaReplyMessage | TailchatSendingMessage:  # type: ignore
         ...
+
 
 on_load = Callable[[IcaClient], None]
 # def on_load(client: IcaClient) -> None:

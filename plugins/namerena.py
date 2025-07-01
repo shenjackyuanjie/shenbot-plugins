@@ -19,6 +19,7 @@ import name_utils
 TELEMETRY = False
 try:
     import psycopg
+
     TELEMETRY = True
 except ImportError:
     pass
@@ -41,7 +42,7 @@ from shenbot_api import PluginManifest
 
 USE_BUN = True
 
-_version_ = "0.10.0"
+_version_ = "0.10.1"
 
 CMD_PREFIX = "/namer"
 
@@ -52,19 +53,22 @@ EVAL_PP_CMD = f"{CMD_PREFIX}-pp"
 EVAL_PD_CMD = f"{CMD_PREFIX}-pd"
 EVAL_QP_CMD = f"{CMD_PREFIX}-qp"
 EVAL_QD_CMD = f"{CMD_PREFIX}-qd"
+EVAL_PF_CMD = f"{CMD_PREFIX}-pf"
 CONVERT_CMD = f"{CMD_PREFIX}-peek"
 FIGHT_CMD = f"{CMD_PREFIX}-fight"
 HELP_CMD = f"{CMD_PREFIX}-help"
 
 HELP_MSG = f"""namerena-v[{_version_}]
 名字竞技场 一款不建议入坑的文字类游戏
-
+PF
 - {HELP_CMD} - 查看帮助
 - {EVAL_CMD} - 运行名字竞技场, 每一行是一个输入, 输入格式与网页版相同
 - {EVAL_SIMPLE_CMD} - 简化输入
 - {CMD_PREFIX}-[pd|pd|qp|qd] - 你懂的评分
     - 一行一个名字/+连接的多个名字
-# - {CONVERT_CMD} - 查看一个名字的属性, 每一行一个名字
+- {EVAL_PF_CMD} - 一下子全评
+    - 一行一个名字/+连接的多个名字
+- {CONVERT_CMD} - 查看一个名字的属性, 每一行一个名字
 - {FIGHT_CMD} - 1v1 战斗, 格式是 "AAA+BBB+[seed]"
     - 例如: "AAA+BBB+seed:123@!" 表示 AAA 和 BBB 以 123@! 为种子进行战斗
     - 可以输入多行"""
@@ -82,10 +86,9 @@ PLUGIN_MANIFEST = PluginManifest(
     name="名竞小工具",
     version=_version_,
     description="namerena 的一堆小工具",
-    authors=[
-        "shenjack"
-    ]
+    authors=["shenjack"],
 )
+
 
 def out_msg(cost_time: float) -> str:
     use_bun = USE_BUN
@@ -112,7 +115,7 @@ def convert_name(msg: ReciveMessage, client) -> None:
     players = [name_utils.Player() for _ in raw_players]
     for i, player in enumerate(players):
         if not player.load(raw_players[i]):
-            cache.write(f"{i+1} {raw_players[i]} 无法解析\n")
+            cache.write(f"{i + 1} {raw_players[i]} 无法解析\n")
             raw_players[i] = ""
     for i, player in enumerate(players):
         if raw_players[i] == "":
@@ -242,6 +245,51 @@ def eval_score(msg: ReciveMessage, client, template: str) -> None:
     client.send_message(reply)
 
 
+def score_all(msg: ReciveMessage, client) -> None:
+    content = msg.content[len(EVAL_PP_CMD) :]
+    # 去掉第一个 \n
+    content = content[content.find("\n") + 1 :]
+    # 判空, 别报错了
+    if content.strip() == "":
+        client.send_message(msg.reply_with("请输入名字"))
+        return
+    names = content.split("\n")
+    results = []
+    client.send_message(msg.reply_with(f"开始计算, 预计一个至少需要11s的时间, 大约需要 {len(names) * 11}s"))
+    start_time = time.time()
+    runs = [
+        "!test!\n\n{test}",
+        "!test!\n\n{test}\n{test}",
+        "!test!\n!\n\n{test}",
+        "!test!\n!\n\n{test}\n{test}",
+    ]
+    for name in names:
+        scores = []
+        all_time = 0
+        for run in runs:
+            if name.strip() == "":
+                continue
+            name = name.split("+")
+            name = "\n".join(name)
+            bench = run.format(test=name)
+            result = run_namerena(bench)
+            cost_time = result[1]
+            all_time += cost_time
+            # 只取最后一行括号之前的内容
+            last_line = result[0].split("\n")[-1]
+            last_line = last_line.split("(")[0]
+            if last_line.endswith(".00"):
+                last_line = last_line[:-3]
+            scores.append(last_line)
+        if all(x.isdigit() for x in scores):
+            scores.append(str(sum(map(int, scores))))
+        results.append(["|".join(scores), all_time])
+    end_time = time.time()
+    content = "\n".join((f"{score}-{cost_time:.2f}s" for (score, cost_time) in results))
+    reply = msg.reply_with(f"{content}\n{out_msg(end_time - start_time)}")
+    client.send_message(reply)
+
+
 def dispatch_msg(msg: ReciveMessage, client) -> None:
     if msg.is_reply or msg.is_from_self:
         return
@@ -262,6 +310,8 @@ def dispatch_msg(msg: ReciveMessage, client) -> None:
         eval_score(msg, client, "!test!\n!\n\n{test}")
     elif msg.content.startswith(EVAL_QD_CMD):
         eval_score(msg, client, "!test!\n!\n\n{test}\n{test}")
+    elif msg.content.startswith(EVAL_PF_CMD):
+        score_all(msg, client)
     elif msg.content.startswith(EVAL_SIMPLE_CMD):
         # 放在最后, 避免覆盖 前面的命令
         # 同时过滤掉别的 /namer-xxxxx

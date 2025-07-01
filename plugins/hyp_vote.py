@@ -21,8 +21,9 @@ PLUGIN_MANIFEST = PluginManifest(
     authors=[
         "dongdigua",
         "shenjack",
-    ]
+    ],
 )
+
 
 def gen_room() -> dict[int, dict[int, str]]:
     return {i: {} for i in range(0, 24)}
