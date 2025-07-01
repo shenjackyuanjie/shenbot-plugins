@@ -3,13 +3,12 @@ from __future__ import annotations
 import io
 import sys
 import time
-import tomli
 import traceback
 import subprocess
 
 from pathlib import Path
-
 from typing import TYPE_CHECKING, TypeVar
+from shenbot_api import PluginManifest, ConfigStorage
 
 if str(Path(__file__).parent.absolute()) not in sys.path:
     sys.path.append(str(Path(__file__).parent.absolute()))
@@ -37,10 +36,6 @@ else:
     IcaClient = TypeVar("IcaClient")
     ReciveMessage = TypeVar("ReciveMessage")
     TailchatReciveMessage = TypeVar("TailchatReciveMessage")
-
-from shenbot_api import PluginManifest, ConfigStorage
-
-USE_BUN = True
 
 _version_ = "0.10.1"
 
@@ -82,7 +77,10 @@ DB_VERSION = 1
 """
 
 cfg = ConfigStorage(
-    use_bun = False # use bun?
+    # 是否启用 bun
+    use_bun = False,
+    # 是否启用遥测
+    telemetry = True,
 )
 
 PLUGIN_MANIFEST = PluginManifest(
@@ -94,6 +92,7 @@ PLUGIN_MANIFEST = PluginManifest(
     config={"main": cfg},
 )
 
+USE_BUN = False
 
 def out_msg(cost_time: float) -> str:
     use_bun = USE_BUN
@@ -135,6 +134,7 @@ def run_namerena(input_text: str, fight_mode: bool = False) -> tuple[str, float]
     """运行namerena"""
     root_path = Path(__file__).parent
     use_bun = USE_BUN
+    print(use_bun)
     runner_path = root_path / "md5" / ("md5-api.ts" if use_bun else "md5-api.js")
     if not runner_path.exists():
         return "未找到namerena运行文件", 0.0
@@ -332,18 +332,8 @@ def on_tailchat_message(msg: TailchatReciveMessage, client) -> None:
     dispatch_msg(msg, client)  # type: ignore
 
 
-# def require_config() -> tuple[str, str]:
-#     return ("namer.toml", "use_bun = false # 是否使用 bun")
-
-
-# def on_config(data: bytes):
-#     global USE_BUN
-#     string = data.decode("utf-8")
-#     config = tomli.loads(string)
-#     USE_BUN = config.get("use_bun", False)
-
-
 def on_load() -> None:
+    global USE_BUN
+    USE_BUN = PLUGIN_MANIFEST.config_unchecked("main").get_value("use_bun") or False
     # conn = get_db_connection()
     # conn.close()
-    ...

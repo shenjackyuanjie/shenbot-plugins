@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from shenbot_api import PluginManifest, ConfigStorage
 
 import re
 
@@ -9,8 +10,6 @@ import requests
 
 if TYPE_CHECKING:
     from ica_typing import IcaNewMessage, IcaClient
-
-API_URL = "http://0.0.0.0:5110"
 
 _version_ = "0.2.0"
 
@@ -34,14 +33,16 @@ HELP_MSG = f"""sr info-{_version_}
 功能特性：
 • 自动识别游戏飞船链接（格式：http://jundroo.com/ViewShip.html?id=XXXXXX）
 • 支持查询数据的哈希校验值
-• 显示数据体积的智能单位转换
-
-数据来源：{API_URL}"""
+• 显示数据体积的智能单位转换"""
 
 # http://jundroo.com/ViewShip.html?id=1323466
 SHIP_URL_PREFIX = "http://jundroo.com/ViewShip.html?id="
 
-from shenbot_api import PluginManifest
+API_URL: str
+
+cfg = ConfigStorage(
+    api_url = "http://192.168.3.46:5110"
+)
 
 PLUGIN_MANIFEST = PluginManifest(
     plugin_id="sr_info",
@@ -49,6 +50,7 @@ PLUGIN_MANIFEST = PluginManifest(
     version=_version_,
     description="查询 sr 云存档的数据库信息",
     authors=["shenjack"],
+    config={"main": cfg}
 )
 
 
@@ -187,3 +189,8 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
 
     if SHIP_URL_PREFIX in msg.content:
         handle_url(msg, client)
+
+
+def on_load():
+    global API_URL
+    API_URL = PLUGIN_MANIFEST.config_unchecked("main").get_value("api_url") or ""

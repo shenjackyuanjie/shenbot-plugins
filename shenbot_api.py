@@ -100,6 +100,10 @@ class PluginManifest:
 
     def config_str(self) -> str: ...
 
+    def config(self, key: str) -> ConfigStorage | None: ...
+
+    def config_unchecked(self, key: str) -> ConfigStorage: ...
+
 
 class Scheduler:
     def __init__(self, func: Callable, schdule_time: datetime.timedelta) -> None:
