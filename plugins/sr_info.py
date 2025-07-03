@@ -193,4 +193,4 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
 
 def on_load():
     global API_URL
-    API_URL = PLUGIN_MANIFEST.config_unchecked("main").get_value("api_url") or ""
+    API_URL = str(PLUGIN_MANIFEST.config_unchecked("main").get_value("api_url")) or ""
