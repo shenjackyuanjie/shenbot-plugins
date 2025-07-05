@@ -9,7 +9,6 @@ import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeVar
 from shenbot_api import PluginManifest, ConfigStorage
-from distutils.version import StrictVersion
 
 if str(Path(__file__).parent.absolute()) not in sys.path:
     sys.path.append(str(Path(__file__).parent.absolute()))
@@ -134,7 +133,7 @@ def convert_name(msg: ReciveMessage, client) -> None:
     client.send_message(reply)
 
 def convert_base(msg: ReciveMessage, client) -> None:
-    if StrictVersion(sqrtools.SQRTOOLS_VERSION)<StrictVersion("3.3"):
+    if int(sqrtools.SQRTOOLS_VERSION.split()[1])<3:
         client.send_message(
             msg.reply_with(
                 "错误: 内部依赖库版本错误\n"
