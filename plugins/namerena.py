@@ -133,7 +133,7 @@ def convert_name(msg: ReciveMessage, client) -> None:
     client.send_message(reply)
 
 def convert_base(msg: ReciveMessage, client) -> None:
-    if int(sqrtools.SQRTOOLS_VERSION.split()[1])<3:
+    if int(sqrtools.SQRTOOLS_VERSION.split('.')[1])<3:
         client.send_message(
             msg.reply_with(
                 "错误: 内部依赖库版本错误\n"
