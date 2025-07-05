@@ -168,7 +168,7 @@ def convert_base(msg: ReciveMessage, client) -> None:
             )
         )
         return
-    r=name.namebase[0:32]
+    r=current_player.namebase[0:32]
     hpcache='('+','.join(str(i) for i in r[0:10])+')\n'
     r[0:10]=sorted(r[0:10])
     cache.write("HP: "+str(154+sum(r[3:7]))+' / '+str(154+sum(r[4:8]))+'\n')
@@ -181,19 +181,19 @@ def convert_base(msg: ReciveMessage, client) -> None:
         cache.write("-> "+str(r[i+1]+36)+' / '+str(r[i+2]+36)+'\n')
         propcnt+=1
     cache.write('\n')
-    name.calcskill(False)
+    current_player.calcskill(False)
     doubleflag=-1
     for i in range(15,-1,-1):
-        if name.nameskill[i][1]>0 and name.nameskill[i][0]<25:
+        if current_player.nameskill[i][1]>0 and current_player.nameskill[i][0]<25:
             doubleflag=i
             break
     for i in range(16):
-        cache.write("#"+str(i).zfill(2)+' '+sqrtools.sklname[name.nameskill[i][0]])
-        if name.nameskill[i][0]>=35:
+        cache.write("#"+str(i).zfill(2)+' '+sqrtools.sklname[current_player.nameskill[i][0]])
+        if current_player.nameskill[i][0]>=35:
             cache.write('\n')
         else:
-            r=name.namebase[i*4+64:i*4+68]
-            cache.write(': '+' '.join(str(j).zfill(2) for j in r)+" -> "+str(name.nameskill[i][1]).zfill(2)+' / ')
+            r=current_player.namebase[i*4+64:i*4+68]
+            cache.write(': '+' '.join(str(j).zfill(2) for j in r)+" -> "+str(current_player.nameskill[i][1]).zfill(2)+' / ')
             r=sorted(r)
             if i<14:
                 if doubleflag==i:
@@ -201,13 +201,13 @@ def convert_base(msg: ReciveMessage, client) -> None:
                 else:
                     cache.write(str(r[1]-10 if r[1]>10 else 0).zfill(2)+'\n')
             else:
-                if name.nameskill[i][1]>0:
+                if current_player.nameskill[i][1]>0:
                     if doubleflag==i:
                         cache.write(str((r[1]-10)*2 if r[1]>10 else 0).zfill(2)+"\n    ↑末尾主动\n")
                     else:
-                        a=r[1]-10+min([r[1]-10]+name.namebase[32+i*2:34+i*2])
-                        b=r[0]-10+min(r[0]-10,max(name.namebase[32+i*2:34+i*2]))
-                        cache.write(str(a if a>b else b).zfill(2)+"\n    ↑末尾座位加成: "+' '.join(str(j).zfill(2) for j in name.namebase[32+i*2:34+i*2])+'\n')
+                        a=r[1]-10+min([r[1]-10]+current_player.namebase[32+i*2:34+i*2])
+                        b=r[0]-10+min(r[0]-10,max(current_player.namebase[32+i*2:34+i*2]))
+                        cache.write(str(a if a>b else b).zfill(2)+"\n    ↑末尾座位加成: "+' '.join(str(j).zfill(2) for j in current_player.namebase[32+i*2:34+i*2])+'\n')
                 else:
                     cache.write(str(r[1]-10 if r[1]>10 else 0).zfill(2)+'\n')
     cache.write('\n')
