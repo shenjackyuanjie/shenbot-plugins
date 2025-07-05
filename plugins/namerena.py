@@ -9,11 +9,13 @@ import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeVar
 from shenbot_api import PluginManifest, ConfigStorage
+from distutils.version import StrictVersion
 
 if str(Path(__file__).parent.absolute()) not in sys.path:
     sys.path.append(str(Path(__file__).parent.absolute()))
 
 import name_utils
+import sqrtools
 
 TELEMETRY = False
 try:
@@ -50,6 +52,7 @@ EVAL_QP_CMD = f"{CMD_PREFIX}-qp"
 EVAL_QD_CMD = f"{CMD_PREFIX}-qd"
 EVAL_PF_CMD = f"{CMD_PREFIX}-pf"
 CONVERT_CMD = f"{CMD_PREFIX}-peek"
+BASE_CMD = f"{CMD_PREFIX}-base"
 FIGHT_CMD = f"{CMD_PREFIX}-fight"
 HELP_CMD = f"{CMD_PREFIX}-help"
 
@@ -64,6 +67,7 @@ PF
 - {EVAL_PF_CMD} - 一下子全评
     - 一行一个名字/+连接的多个名字
 - {CONVERT_CMD} - 查看一个名字的属性, 每一行一个名字
+- {BASE_CMD} - base 工具, 只支持单个名字 (避免刷屏)
 - {FIGHT_CMD} - 1v1 战斗, 格式是 "AAA+BBB+[seed]"
     - 例如: "AAA+BBB+seed:123@!" 表示 AAA 和 BBB 以 123@! 为种子进行战斗
     - 可以输入多行"""
@@ -129,6 +133,87 @@ def convert_name(msg: ReciveMessage, client) -> None:
     reply = msg.reply_with(f"{cache.getvalue()}版本:{_version_}")
     client.send_message(reply)
 
+def convert_base(msg: ReciveMessage, client) -> None:
+    if StrictVersion(sqrtools.SQRTOOLS_VERSION)<StrictVersion("3.3"):
+        client.send_message(
+            msg.reply_with(
+                "错误: 内部依赖库版本错误\n"
+            )
+        )
+        return
+    if msg.content.find("\n") == -1:
+        client.send_message(
+            msg.reply_with(
+                f"请使用 {BASE_CMD} 命令\n为防止刷屏，一次只能转换一个名字\n"
+            )
+        )
+        return
+    # 去掉 prefix
+    names = msg.content[len(BASE_CMD) :]
+    # 去掉第一个 \n
+    names = names[names.find("\n") + 1 :]
+    cache = io.StringIO()
+    raw_players = [x for x in names.split("\n") if x != ""]
+    if len(raw_players) != 1:
+        client.send_message(
+            msg.reply_with(
+                "请输入名字\n为防止刷屏，一次只能转换一个名字\n"
+            )
+        )
+        return
+    current_player = sqrtools.Name()
+    if not current_player.load(raw_players[0]):
+        client.send_message(
+            msg.reply_with(
+                "错误: 名字载入失败\n"
+            )
+        )
+        return
+    r=name.namebase[0:32]
+    hpcache='('+','.join(str(i) for i in r[0:10])+')\n'
+    r[0:10]=sorted(r[0:10])
+    cache.write("HP: "+str(154+sum(r[3:7]))+' / '+str(154+sum(r[4:8]))+'\n')
+    cache.write(hpcache)
+    propcnt=1
+    for i in range(10,31,3):
+        cache.write(sqrtools.propname[propcnt]+': ')
+        cache.write(' '.join(str(j).zfill(2) for j in r[i:i+3])+' ')
+        r[i:i+3]=sorted(r[i:i+3])
+        cache.write("-> "+str(r[i+1]+36)+' / '+str(r[i+2]+36)+'\n')
+        propcnt+=1
+    cache.write('\n')
+    name.calcskill(False)
+    doubleflag=-1
+    for i in range(15,-1,-1):
+        if name.nameskill[i][1]>0 and name.nameskill[i][0]<25:
+            doubleflag=i
+            break
+    for i in range(16):
+        cache.write("#"+str(i).zfill(2)+' '+sqrtools.sklname[name.nameskill[i][0]])
+        if name.nameskill[i][0]>=35:
+            cache.write('\n')
+        else:
+            r=name.namebase[i*4+64:i*4+68]
+            cache.write(': '+' '.join(str(j).zfill(2) for j in r)+" -> "+str(name.nameskill[i][1]).zfill(2)+' / ')
+            r=sorted(r)
+            if i<14:
+                if doubleflag==i:
+                    cache.write(str((r[1]-10)*2 if r[1]>10 else 0).zfill(2)+"\n    ↑末尾主动\n")
+                else:
+                    cache.write(str(r[1]-10 if r[1]>10 else 0).zfill(2)+'\n')
+            else:
+                if name.nameskill[i][1]>0:
+                    if doubleflag==i:
+                        cache.write(str((r[1]-10)*2 if r[1]>10 else 0).zfill(2)+"\n    ↑末尾主动\n")
+                    else:
+                        a=r[1]-10+min([r[1]-10]+name.namebase[32+i*2:34+i*2])
+                        b=r[0]-10+min(r[0]-10,max(name.namebase[32+i*2:34+i*2]))
+                        cache.write(str(a if a>b else b).zfill(2)+"\n    ↑末尾座位加成: "+' '.join(str(j).zfill(2) for j in name.namebase[32+i*2:34+i*2])+'\n')
+                else:
+                    cache.write(str(r[1]-10 if r[1]>10 else 0).zfill(2)+'\n')
+    cache.write('\n')
+    reply = msg.reply_with(f"{cache.getvalue()}版本: {_version_} (sqrtools {sqrtools.SQRTOOLS_VERSION})")
+    client.send_message(reply)
 
 def run_namerena(input_text: str, fight_mode: bool = False) -> tuple[str, float]:
     """运行namerena"""
@@ -307,6 +392,8 @@ def dispatch_msg(msg: ReciveMessage, client) -> None:
         run_fights(msg, client)
     elif msg.content.startswith(CONVERT_CMD):
         convert_name(msg, client)
+    elif msg.content.startswith(BASE_CMD):
+        convert_base(msg, client)
     elif msg.content.startswith(EVAL_PP_CMD):
         eval_score(msg, client, "!test!\n\n{test}")
     elif msg.content.startswith(EVAL_PD_CMD):
