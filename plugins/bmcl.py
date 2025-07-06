@@ -1,7 +1,6 @@
 from __future__ import annotations
 import io
 import time
-import tomli
 import requests
 import traceback
 
@@ -21,7 +20,11 @@ COOKIE = None
 _version_ = "2.9.1-rs"
 backend_version = "unknown"
 
-from shenbot_api import PluginManifest
+from shenbot_api import PluginManifest, ConfigStorage
+
+cfg = ConfigStorage(
+    cookie = None
+)
 
 PLUGIN_MANIFEST = PluginManifest(
     plugin_id="bmcl",
@@ -29,7 +32,15 @@ PLUGIN_MANIFEST = PluginManifest(
     version=_version_,
     description="查询 openbmclapi 的各项数据",
     authors=["shenjack"],
+    config={"main": cfg}
 )
+
+
+def on_load():
+    global COOKIE
+    cfg = PLUGIN_MANIFEST.config_unchecked("main").get_value("cookie")
+    if cfg is not None:
+        COOKIE = str(cfg)
 
 
 def format_data_size(data_bytes: float) -> str:
@@ -410,16 +421,3 @@ def on_tailchat_message(msg, client: TailchatClient) -> None:
             reply = msg.reply_with(report_msg)
             client.send_and_warn(reply)
 
-
-def require_config() -> Tuple[str, str]:
-    return ("bmcl.toml", """cookie = \"填写你的 cookie\"""")
-
-
-def on_config(data: bytes):
-    string = data.decode("utf-8")
-    load_data = tomli.loads(string)
-    global COOKIE
-    if "cookie" in load_data:
-        if load_data["cookie"] == "填写你的 cookie":
-            return
-        COOKIE = load_data["cookie"]
