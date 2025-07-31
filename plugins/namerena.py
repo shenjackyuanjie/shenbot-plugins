@@ -81,9 +81,9 @@ DB_VERSION = 1
 
 cfg = ConfigStorage(
     # 是否启用 bun
-    use_bun = False,
+    use_bun=False,
     # 是否启用遥测
-    telemetry = True,
+    telemetry=True,
 )
 
 PLUGIN_MANIFEST = PluginManifest(
@@ -96,6 +96,7 @@ PLUGIN_MANIFEST = PluginManifest(
 )
 
 USE_BUN = False
+
 
 def out_msg(cost_time: float) -> str:
     use_bun = USE_BUN
@@ -132,13 +133,10 @@ def convert_name(msg: ReciveMessage, client) -> None:
     reply = msg.reply_with(f"{cache.getvalue()}版本:{_version_}")
     client.send_message(reply)
 
+
 def convert_base(msg: ReciveMessage, client) -> None:
-    if int(sqrtools.SQRTOOLS_VERSION.split('.')[1])<3:
-        client.send_message(
-            msg.reply_with(
-                "错误: 内部依赖库版本错误\n"
-            )
-        )
+    if int(sqrtools.SQRTOOLS_VERSION.split(".")[1]) < 3:
+        client.send_message(msg.reply_with("错误: 内部依赖库版本错误\n"))
         return
     if msg.content.find("\n") == -1:
         client.send_message(
@@ -155,64 +153,102 @@ def convert_base(msg: ReciveMessage, client) -> None:
     raw_players = [x for x in names.split("\n") if x != ""]
     if len(raw_players) != 1:
         client.send_message(
-            msg.reply_with(
-                "请输入名字\n为防止刷屏，一次只能转换一个名字\n"
-            )
+            msg.reply_with("请输入名字\n为防止刷屏，一次只能转换一个名字\n")
         )
         return
     current_player = sqrtools.Name()
     if not current_player.load(raw_players[0]):
-        client.send_message(
-            msg.reply_with(
-                "错误: 名字载入失败\n"
-            )
-        )
+        client.send_message(msg.reply_with("错误: 名字载入失败\n"))
         return
-    r=current_player.namebase[0:32]
-    hpcache='('+','.join(str(i) for i in r[0:10])+')\n'
-    r[0:10]=sorted(r[0:10])
-    cache.write("HP: "+str(154+sum(r[3:7]))+' / '+str(154+sum(r[4:8]))+'\n')
+    r = current_player.namebase[0:32]
+    hpcache = "(" + ",".join(str(i) for i in r[0:10]) + ")\n"
+    r[0:10] = sorted(r[0:10])
+    cache.write("HP: " + str(154 + sum(r[3:7])) + " / " + str(154 + sum(r[4:8])) + "\n")
     cache.write(hpcache)
-    propcnt=1
-    for i in range(10,31,3):
-        cache.write(sqrtools.propname[propcnt]+': ')
-        cache.write(' '.join(str(j).zfill(2) for j in r[i:i+3])+' ')
-        r[i:i+3]=sorted(r[i:i+3])
-        cache.write("-> "+str(r[i+1]+36)+' / '+str(r[i+2]+36)+'\n')
-        propcnt+=1
-    cache.write('\n')
+    propcnt = 1
+    for i in range(10, 31, 3):
+        cache.write(sqrtools.propname[propcnt] + ": ")
+        cache.write(" ".join(str(j).zfill(2) for j in r[i : i + 3]) + " ")
+        r[i : i + 3] = sorted(r[i : i + 3])
+        cache.write("-> " + str(r[i + 1] + 36) + " / " + str(r[i + 2] + 36) + "\n")
+        propcnt += 1
+    cache.write("\n")
     current_player.calcskill(False)
-    doubleflag=-1
-    for i in range(15,-1,-1):
-        if current_player.nameskill[i][1]>0 and current_player.nameskill[i][0]<25:
-            doubleflag=i
+    doubleflag = -1
+    for i in range(15, -1, -1):
+        if current_player.nameskill[i][1] > 0 and current_player.nameskill[i][0] < 25:
+            doubleflag = i
             break
     for i in range(16):
-        cache.write("#"+str(i).zfill(2)+' '+sqrtools.sklname[current_player.nameskill[i][0]])
-        if current_player.nameskill[i][0]>=35:
-            cache.write('\n')
+        cache.write(
+            "#"
+            + str(i).zfill(2)
+            + " "
+            + sqrtools.sklname[current_player.nameskill[i][0]]
+        )
+        if current_player.nameskill[i][0] >= 35:
+            cache.write("\n")
         else:
-            r=current_player.namebase[i*4+64:i*4+68]
-            cache.write(': '+' '.join(str(j).zfill(2) for j in r)+" -> "+str(current_player.nameskill[i][1]).zfill(2)+' / ')
-            r=sorted(r)
-            if i<14:
-                if doubleflag==i:
-                    cache.write(str((r[1]-10)*2 if r[1]>10 else 0).zfill(2)+"\n    ↑末尾主动\n")
+            r = current_player.namebase[i * 4 + 64 : i * 4 + 68]
+            cache.write(
+                ": "
+                + " ".join(str(j).zfill(2) for j in r)
+                + " -> "
+                + str(current_player.nameskill[i][1]).zfill(2)
+                + " / "
+            )
+            r = sorted(r)
+            if i < 14:
+                if doubleflag == i:
+                    cache.write(
+                        str((r[1] - 10) * 2 if r[1] > 10 else 0).zfill(2)
+                        + "\n    ↑末尾主动\n"
+                    )
                 else:
-                    cache.write(str(r[1]-10 if r[1]>10 else 0).zfill(2)+'\n')
+                    cache.write(str(r[1] - 10 if r[1] > 10 else 0).zfill(2) + "\n")
             else:
-                if current_player.nameskill[i][1]>0:
-                    if doubleflag==i:
-                        cache.write(str((r[1]-10)*2 if r[1]>10 else 0).zfill(2)+"\n    ↑末尾主动\n")
+                if current_player.nameskill[i][1] > 0:
+                    if doubleflag == i:
+                        cache.write(
+                            str((r[1] - 10) * 2 if r[1] > 10 else 0).zfill(2)
+                            + "\n    ↑末尾主动\n"
+                        )
                     else:
-                        a=r[1]-10+min([r[1]-10]+current_player.namebase[32+i*2:34+i*2])
-                        b=r[0]-10+min(r[0]-10,max(current_player.namebase[32+i*2:34+i*2]))
-                        cache.write(str(a if a>b else b).zfill(2)+"\n    ↑末尾座位加成: "+' '.join(str(j).zfill(2) for j in current_player.namebase[32+i*2:34+i*2])+'\n')
+                        a = (
+                            r[1]
+                            - 10
+                            + min(
+                                [r[1] - 10]
+                                + current_player.namebase[32 + i * 2 : 34 + i * 2]
+                            )
+                        )
+                        b = (
+                            r[0]
+                            - 10
+                            + min(
+                                r[0] - 10,
+                                max(current_player.namebase[32 + i * 2 : 34 + i * 2]),
+                            )
+                        )
+                        cache.write(
+                            str(a if a > b else b).zfill(2)
+                            + "\n    ↑末尾座位加成: "
+                            + " ".join(
+                                str(j).zfill(2)
+                                for j in current_player.namebase[
+                                    32 + i * 2 : 34 + i * 2
+                                ]
+                            )
+                            + "\n"
+                        )
                 else:
-                    cache.write(str(r[1]-10 if r[1]>10 else 0).zfill(2)+'\n')
-    cache.write('\n')
-    reply = msg.reply_with(f"{cache.getvalue()}版本: {_version_} (sqrtools {sqrtools.SQRTOOLS_VERSION})")
+                    cache.write(str(r[1] - 10 if r[1] > 10 else 0).zfill(2) + "\n")
+    cache.write("\n")
+    reply = msg.reply_with(
+        f"{cache.getvalue()}版本: {_version_} (sqrtools {sqrtools.SQRTOOLS_VERSION})"
+    )
     client.send_message(reply)
+
 
 def run_namerena(input_text: str, fight_mode: bool = False) -> tuple[str, float]:
     """运行namerena"""
@@ -344,7 +380,11 @@ def score_all(msg: ReciveMessage, client) -> None:
         return
     names = content.split("\n")
     results = []
-    client.send_message(msg.reply_with(f"开始计算, 预计一个至少需要11s的时间, 大约需要 {len(names) * 11}s"))
+    client.send_message(
+        msg.reply_with(
+            f"开始计算, 预计一个至少需要11s的时间, 大约需要 {len(names) * 11}s"
+        )
+    )
     start_time = time.time()
     runs = [
         "!test!\n\n{test}",
