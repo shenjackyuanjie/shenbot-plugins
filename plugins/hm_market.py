@@ -48,8 +48,8 @@ def reqeust_info(name: str) -> dict | None:
 def format_data(data: dict) -> str:
     cache = io.StringIO()
     cache.write(f"名称: {data['info']['name']}[{data['metric']['version']}] 类型: {data["info"]["kind_name"]}-{data['info']['kind_type_name']}\n")
-    cache.write(f"下载量: {data['metric']['download_count']} 评分: {data['metric']['hot_score']}({data['metric']['rate_num']})")
-    cache.write(f"目标sdk: {data['metric']['target_sdk']} 最小sdk: {data['metric']['minsdk']} 应用版本代码: {data['metric']['version_code']}")
+    cache.write(f"下载量: {data['metric']['download_count']} 评分: {data['metric']['hot_score']}({data['metric']['rate_num']})\n")
+    cache.write(f"目标sdk: {data['metric']['target_sdk']} 最小sdk: {data['metric']['minsdk']} 应用版本代码: {data['metric']['version_code']}\n")
     release_date = datetime.datetime.fromtimestamp(data['metric']['release_date'] / 1000.0)
     cache.write(f"更新日期: {release_date.strftime('%Y-%m-%d %H:%M:%S')}")
     return cache.getvalue()
