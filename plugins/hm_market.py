@@ -46,9 +46,9 @@ def reqeust_info(name: str) -> dict | None:
 def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
     if msg.content.startswith(MARKET_PREFIX):
         pkg_end = msg.content.find("&", len(MARKET_PREFIX))
-        pkg_name = msg.content[len(MARKET_PREFIX)-1]
-        print(f"获取到新的链接: {msg.content[len(MARKET_PREFIX)-1:]}")
-        reply = msg.reply_with(f"获取到新的链接: {msg.content[len(MARKET_PREFIX)-1:]}")
+        pkg_name = msg.content[len(MARKET_PREFIX):pkg_end]
+        print(f"获取到新的链接: {pkg_name}")
+        reply = msg.reply_with(f"获取到新的链接: {pkg_name}")
         client.send_message(reply)
         ...
 
