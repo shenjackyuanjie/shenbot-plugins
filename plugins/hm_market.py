@@ -11,12 +11,12 @@ import requests
 if TYPE_CHECKING:
     from ica_typing import IcaNewMessage, IcaClient
 
-_version_ = "0.2.0"
+_version_ = "0.1.0"
 
 API_URL: str
 
 cfg = ConfigStorage(
-    api_url = "http://192.168.3.46:5110"
+    api_url = "localhost:3000"
 )
 
 
@@ -29,6 +29,30 @@ PLUGIN_MANIFEST = PluginManifest(
     config={"main": cfg}
 )
 
+MARKET_PREFIX = "https://appgallery.huawei.com/app/detail?id="
+
+def reqeust_info(name: str) -> dict | None:
+    try:
+        data = requests.get(f"{API_URL}/{name}")
+        json_data = data.json()
+        if "error" in json_data:
+            return None
+        return json_data
+    except requests.RequestException as e:
+        print(f"yeeeee {e}")
+        return None
+
+# https://appgallery.huawei.com/app/detail?id=com.bzl.bosszhipin&channelId=SHARE&source=appshare
+# -> com.bzl.bosszshipin
+
+def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
+    if msg.content.startswith(MARKET_PREFIX):
+        pkg_end = msg.content.find("&", len(MARKET_PREFIX))
+        pkg_name = msg.content[len(MARKET_PREFIX)-1]
+        print(f"获取到新的链接: {msg.content[len(MARKET_PREFIX)-1:]}")
+        reply = msg.reply_with(f"获取到新的链接: {msg.content[len(MARKET_PREFIX)-1:]}")
+        client.send_message(reply)
+        ...
 
 def on_load():
     global API_URL
