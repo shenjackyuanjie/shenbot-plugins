@@ -49,7 +49,7 @@ def format_data(data: dict) -> str:
     cache = io.StringIO()
     cache.write(f"名称: {data['info']['name']}[{data['metric']['version']}] 类型: {data["info"]["kind_name"]}-{data['info']['kind_type_name']}\n")
     cache.write(f"下载量: {data['metric']['download_count']} 评分: {data['metric']['info_score']}({data['metric']['info_rate_count']}) 显示评分: {data['metric']['page_average_rating']}")
-    cache.write(f"({data['metric']['page_star_1_rating_count']},{data['metric']['page_star_2_rating_count']}{data['metric']['page_star_3_rating_count']}")
+    cache.write(f"({data['metric']['page_star_1_rating_count']},{data['metric']['page_star_2_rating_count']},{data['metric']['page_star_3_rating_count']},")
     cache.write(f"{data['metric']['page_star_4_rating_count']},{data['metric']['page_star_5_rating_count']}={data['metric']['page_total_star_rating_count']})\n")
     cache.write(f"目标sdk: {data['metric']['target_sdk']} 最小sdk: {data['metric']['minsdk']} 应用版本代码: {data['metric']['version_code']}\n")
     release_date = datetime.datetime.fromtimestamp(data['metric']['release_date'] / 1000.0)
