@@ -65,18 +65,26 @@ def format_data(data: dict) -> str:
     cache.write(f"应用更新日期: {release_date.strftime('%Y-%m-%d %H:%M:%S')}")
     return cache.getvalue()
 
+def query_pkg(msg: IcaNewMessage, client: IcaClient, pkg_name: str) -> None:
+    data = reqeust_info(pkg_name)
+    if data is not None:
+        reply = msg.reply_with(format_data(data))
+        client.send_message(reply)
+    else:
+        reply = msg.reply_with(f"获取到新的包名: {pkg_name}, 但是数据是空的")
+        client.send_message(reply)
+
 def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
     if msg.content.startswith(MARKET_PREFIX):
         pkg_end = msg.content.find("&", len(MARKET_PREFIX))
         pkg_name = msg.content[len(MARKET_PREFIX):pkg_end]
         print(f"获取到新的链接: {pkg_name}")
-        data = reqeust_info(pkg_name)
-        if data is not None:
-            reply = msg.reply_with(format_data(data))
-        else:
-            reply = msg.reply_with(f"获取到新的包名: {pkg_name}, 但是数据是空的")
-        client.send_message(reply)
-        ...
+        query_pkg(msg, client, pkg_name)
+    if msg.content.startswith("/hm market"):
+        pkg_end = msg.content.find(" ", len("/hm market"))
+        pkg_name = msg.content[len("/hm market"):pkg_end]
+        print(f"获取到新的链接: {pkg_name}")
+        query_pkg(msg, client, pkg_name)
 
 def on_load():
     global API_URL
