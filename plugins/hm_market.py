@@ -52,14 +52,14 @@ def format_data(data: dict) -> str:
     else:
         cache.write(f"数据与上次相同 包名: {data['info']['pkg_name']}\n")
     cache.write(f"名称: {data['info']['name']}[{data['metric']['version']}] 类型: {data["info"]["kind_name"]}-{data['info']['kind_type_name']}\n")
-    cache.write(f"下载量: {data['metric']['download_count']} 评分: {data['metric']['info_score']}({data['metric']['info_rate_count']})")
+    cache.write(f"下载量: {data['metric']['download_count']} 评分: {data['metric']['info_score']}({data['metric']['info_rate_count']}) ")
     if 'rating' in data and data['rating'] is not None:
         rate = data['rating']
-        cache.write(f" 显示评分: {data['rating']['average_rating']}[{rate['total_star_rating_count']}]")
+        cache.write(f"显示评分: {data['rating']['average_rating']}[{rate['total_star_rating_count']}]")
         cache.write(f"({rate['star_1_rating_count']},{rate['star_2_rating_count']},{rate['star_3_rating_count']},")
         cache.write(f"{rate['star_4_rating_count']},{rate['star_5_rating_count']})\n")
     else:
-        cache.write("无评分数据\n")
+        cache.write("无评分卡片数据\n")
     cache.write(f"目标sdk: {data['metric']['target_sdk']} 最小sdk: {data['metric']['minsdk']} 应用版本代码: {data['metric']['version_code']}\n")
     release_date = datetime.datetime.fromtimestamp(data['metric']['release_date'] / 1000.0)
     cache.write(f"应用更新日期: {release_date.strftime('%Y-%m-%d %H:%M:%S')}")
