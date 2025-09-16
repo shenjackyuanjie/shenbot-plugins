@@ -59,7 +59,7 @@ def format_data(data: dict) -> str:
         cache.write(f"({rate['star_1_rating_count']},{rate['star_2_rating_count']},{rate['star_3_rating_count']},")
         cache.write(f"{rate['star_4_rating_count']},{rate['star_5_rating_count']})\n")
     else:
-        cache.write("无评分数据")
+        cache.write("无评分数据\n")
     cache.write(f"目标sdk: {data['metric']['target_sdk']} 最小sdk: {data['metric']['minsdk']} 应用版本代码: {data['metric']['version_code']}\n")
     release_date = datetime.datetime.fromtimestamp(data['metric']['release_date'] / 1000.0)
     cache.write(f"应用更新日期: {release_date.strftime('%Y-%m-%d %H:%M:%S')}")
