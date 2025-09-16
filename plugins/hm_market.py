@@ -53,7 +53,7 @@ def format_data(data: dict) -> str:
     cache.write(f"{data['metric']['page_star_4_rating_count']},{data['metric']['page_star_5_rating_count']}={data['metric']['page_total_star_rating_count']})\n")
     cache.write(f"目标sdk: {data['metric']['target_sdk']} 最小sdk: {data['metric']['minsdk']} 应用版本代码: {data['metric']['version_code']}\n")
     release_date = datetime.datetime.fromtimestamp(data['metric']['release_date'] / 1000.0)
-    cache.write(f"更新日期: {release_date.strftime('%Y-%m-%d %H:%M:%S')}")
+    cache.write(f"应用更新日期: {release_date.strftime('%Y-%m-%d %H:%M:%S')}")
     return cache.getvalue()
 
 def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
@@ -63,7 +63,10 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
         print(f"获取到新的链接: {pkg_name}")
         data = reqeust_info(pkg_name)
         if data is not None:
-            reply = msg.reply_with(f"获取到新的包名: {pkg_name}\n信息: {format_data(data)}")
+            if data['is_new']:
+                reply = msg.reply_with(f"获取到新的包名: {pkg_name}\n信息: {format_data(data)}")
+            else:
+                reply = msg.reply_with(f"包名: {pkg_name} 已存在\n信息: {format_data(data)}")
         else:
             reply = msg.reply_with(f"获取到新的包名: {pkg_name}, 但是数据是空的")
         client.send_message(reply)
