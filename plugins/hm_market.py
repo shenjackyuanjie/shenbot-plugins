@@ -81,8 +81,7 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
         print(f"获取到新的链接: {pkg_name}")
         query_pkg(msg, client, pkg_name)
     if msg.content.startswith("/hm "):
-        pkg_end = msg.content.find(" ", len("/hm "))
-        pkg_name = msg.content[len("/hm "):pkg_end]
+        pkg_name = msg.content[len("/hm "):]
         print(f"获取到新的链接: {pkg_name}")
         query_pkg(msg, client, pkg_name)
 
