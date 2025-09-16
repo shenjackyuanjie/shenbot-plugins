@@ -55,9 +55,9 @@ def format_data(data: dict) -> str:
     cache.write(f"下载量: {data['metric']['download_count']} 评分: {data['metric']['info_score']}({data['metric']['info_rate_count']})")
     if 'rating' in data and data['rating'] is not None:
         rate = data['rating']
-        cache.write(f" 显示评分: {data['rating']['average_rating']}")
+        cache.write(f" 显示评分: {data['rating']['average_rating']}[{rate['total_star_rating_count']}]")
         cache.write(f"({rate['star_1_rating_count']},{rate['star_2_rating_count']},{rate['star_3_rating_count']},")
-        cache.write(f"{rate['star_4_rating_count']},{rate['star_5_rating_count']}={rate['total_star_rating_count']})\n")
+        cache.write(f"{rate['star_4_rating_count']},{rate['star_5_rating_count']})\n")
     else:
         cache.write("无评分数据")
     cache.write(f"目标sdk: {data['metric']['target_sdk']} 最小sdk: {data['metric']['minsdk']} 应用版本代码: {data['metric']['version_code']}\n")
