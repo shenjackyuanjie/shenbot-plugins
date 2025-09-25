@@ -34,7 +34,7 @@ MARKET_PREFIX = "https://appgallery.huawei.com/app/detail?id="
 def reqeust_info(name: str, method: str) -> dict | None:
     try:
         data = requests.get(f"{API_URL}/{method}/{name}")
-        json_data = data.json()
+        json_data: dict = data.json()
         if "error" in json_data:
             return None
         return json_data
@@ -83,12 +83,12 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
         pkg_name = msg.content[len(MARKET_PREFIX):pkg_end]
         print(f"获取到新的链接: {pkg_name}")
         query_pkg(msg, client, pkg_name, "pkg_name")
-    elif msg.content.startswith("/hm pkg"):
-        pkg_name = msg.content[len("/hm pkg"):]
+    elif msg.content.startswith("/hm pkg "):
+        pkg_name = msg.content[len("/hm pkg "):]
         print(f"获取到新的链接: {pkg_name}")
         query_pkg(msg, client, pkg_name, "pkg_name")
-    elif msg.content.startswith("/hm app id"):
-        pkg_name = msg.content[len("/hm app id"):]
+    elif msg.content.startswith("/hm app id "):
+        pkg_name = msg.content[len("/hm app id "):]
         print(f"获取到新的链接: {pkg_name}")
         query_pkg(msg, client, pkg_name, "app_id")
     elif msg.content.startswith("/hm"):
