@@ -54,12 +54,18 @@ def reqeust_info(name: str, method: str) -> dict | None:
 def format_data(data: dict) -> str:
     cache = io.StringIO()
     data = data['data']
-    if data['is_new'][0]:
-        cache.write("更新应用基础信息 ")
-    if data['is_new'][1]:
-        _ = cache.write("更新应用评分信息 ")
-    if not data['is_new'][0] and not data['is_new'][1]:
-        _ = cache.write("应用信息无更新 ")
+    if data['new_app']:
+        _ = cache.write("新app!\n")
+    else:
+        if data['new_info']:
+            _ = cache.write("更新应用信息 ")
+        if data['new_metric']:
+            _ = cache.write("更新下载量之类的 ")
+        if data['new_rating']:
+            _ = cache.write("更新评分信息 ")
+        if not data['new_info'] and not data['new_metric'] and not data['new_rating']:
+            _ = cache.write("应用信息无更新")
+        _ = cache.write("\n")
     _ = cache.write(f"包名: {data['info']['pkg_name']}\n")
     _ = cache.write(f"名称: {data['info']['name']}[{data['metric']['version']}] 类型: {data["info"]["kind_name"]}-{data['info']['kind_type_name']}\n")
     _ = cache.write(f"下载量: {data['metric']['download_count']} 评分: {data['metric']['info_score']}({data['metric']['info_rate_count']}) ")
