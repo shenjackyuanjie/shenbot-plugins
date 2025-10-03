@@ -84,7 +84,12 @@ def format_data(data: dict) -> str:
 def query_pkg(msg: IcaNewMessage, client: IcaClient, pkg_name: str, method: str) -> None:
     data = reqeust_info(pkg_name, method)
     if data is not None:
-        reply = msg.reply_with(format_data(data))
+        try:
+            reply = msg.reply_with(format_data(data))
+        except Exception as e:
+            reply = msg.reply_with(f"格式化数据时发生错误: {e}")
+            print(f"raw data: {data}")
+        _ = client.send_message(reply)
     else:
         reply = msg.reply_with(f"获取到新的包名: {pkg_name}, 但是数据是空的")
     _ = client.send_message(reply)
