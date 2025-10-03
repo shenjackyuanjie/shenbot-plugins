@@ -55,7 +55,7 @@ def format_data(data: dict) -> str:
     cache = io.StringIO()
     if not data['success']:
         del cache
-        return f"报错了 {data['data']['error']}"
+        return f"报错了 {data['data']['error']['error']}"
     data = data['data']
     if data['new_app']:
         _ = cache.write("新app!\n")
