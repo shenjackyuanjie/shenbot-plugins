@@ -53,6 +53,9 @@ def reqeust_info(name: str, method: str) -> dict | None:
 
 def format_data(data: dict) -> str:
     cache = io.StringIO()
+    if not data['success']:
+        del cache
+        return f"报错了 {data['data']['error']}"
     data = data['data']
     if data['new_app']:
         _ = cache.write("新app!\n")
@@ -89,7 +92,6 @@ def query_pkg(msg: IcaNewMessage, client: IcaClient, pkg_name: str, method: str)
         except Exception as e:
             reply = msg.reply_with(f"格式化数据时发生错误: {e}")
             print(f"raw data: {data}")
-        _ = client.send_message(reply)
     else:
         reply = msg.reply_with(f"获取到新的包名: {pkg_name}, 但是数据是空的")
     _ = client.send_message(reply)
