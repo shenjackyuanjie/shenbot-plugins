@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import re
 import datetime
 
 from typing import TYPE_CHECKING
@@ -36,6 +37,30 @@ HELP_MSG = """用法:
 或者直接发送应用市场链接"""
 
 MARKET_PREFIX = "https://appgallery.huawei.com/app/detail?id="
+
+def parse_link_to_package_name(link: str) -> str:
+    """
+    从给定的链接中提取包名。
+
+    Args:
+        link: 包含包名的链接字符串。
+
+    Returns:
+        提取到的包名字符串。如果未找到，则返回空字符串。
+    """
+    if not link:
+        return ""
+
+    # 正则表达式 (?:<=id=)[\w\.]+
+    # (?<=id=) 是一个后行断言，它会查找 "id="，但不会把它包含在匹配结果中。
+    # [\w\.]+ 匹配一个或多个字母、数字、下划线或点。
+    regex = r"(?<=id=)[a-zA-Z0-9_\.]+"  # 更精确的匹配 [\w\.] 等同于 [a-zA-Z0-9_\.]
+    match = re.search(regex, link)
+
+    if match:
+        return match.group(0)  # group(0) 返回整个匹配的字符串
+    else:
+        return ""
 
 def reqeust_info(name: str, method: str) -> dict | None:
     try:
@@ -129,8 +154,7 @@ def query_info(msg: IcaNewMessage, client: IcaClient) -> None:
 
 def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
     if msg.content.startswith(MARKET_PREFIX):
-        pkg_end = msg.content.find("&", len(MARKET_PREFIX))
-        pkg_name = msg.content[len(MARKET_PREFIX):pkg_end]
+        pkg_name = parse_link_to_package_name(msg.content)
         print(f"获取到新的链接: {pkg_name}")
         query_pkg(msg, client, pkg_name, "pkg_name")
     elif msg.content.startswith("/hm pkg "):
