@@ -139,7 +139,7 @@ def query_info(msg: IcaNewMessage, client: IcaClient) -> None:
         star_data = star_data['data']
         cache = io.StringIO()
         _ = cache.write("鸿蒙next应用市场数据:\n")
-        _ = cache.write(f"爬取应用/元服务:{market_data['app_count']['total']}, 应用: {market_data['app_count']['total']} 元服务: {market_data['app_count']['atomic_services']}\n")
+        _ = cache.write(f"爬取应用/元服务:{market_data['app_count']['total']}, 应用: {market_data['app_count']['apps']} 元服务: {market_data['app_count']['atomic_services']}\n")
         _ = cache.write(f"已知开发者数量: {market_data['developer_count']}\n")
         _ = cache.write("应用评分计数:\n")
         _ = cache.write(f"0-1分: {star_data['star_1']}|")
