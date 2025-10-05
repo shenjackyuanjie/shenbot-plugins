@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import re
 import datetime
+import traceback
 
 from typing import TYPE_CHECKING
 from shenbot_api import PluginManifest, ConfigStorage
@@ -136,6 +137,18 @@ def format_data(data: dict) -> str:
     _ = cache.write(f"应用更新日期: {release_date.strftime('%Y-%m-%d %H:%M:%S')}")
     return cache.getvalue()
 
+def query_substance(msg: IcaNewMessage, client: IcaClient, substance_id: str) -> None:
+    data = request_substance(substance_id)
+    if data is not None:
+        try:
+            reply = msg.reply_with(format_substance(data))
+        except Exception as e:
+            reply = msg.reply_with(f"格式化数据时发生错误: {e}")
+            traceback.print_exc()
+    else:
+        reply = msg.reply_with(f"获取到新的专题ID: {substance_id}, 但是数据是空的")
+    _ = client.send_message(reply)
+
 def query_pkg(msg: IcaNewMessage, client: IcaClient, pkg_name: str, method: str) -> None:
     data = reqeust_info(pkg_name, method)
     if data is not None:
@@ -187,16 +200,7 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
     elif msg.content.startswith(SUBSTANCE_PREFIX):
         substance_id = get_id_from_link(msg.content)
         print(f"获取到新的专题链接: {substance_id}")
-        data = request_substance(substance_id)
-        if data is not None:
-            try:
-                reply = msg.reply_with(format_substance(data))
-            except Exception as e:
-                reply = msg.reply_with(f"格式化数据时发生错误: {e}")
-                print(f"raw data: {data}")
-        else:
-            reply = msg.reply_with(f"获取到新的物质ID: {substance_id}, 但是数据是空的")
-        _ = client.send_message(reply)
+        query_substance(msg, client, substance_id)
     elif msg.content.startswith("/hm pkg "):
         pkg_name = msg.content[len("/hm pkg "):]
         print(f"获取到新的链接: {pkg_name}")
