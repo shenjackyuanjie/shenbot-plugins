@@ -102,7 +102,7 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
                 if sender in admins:
                     rm_msg = msg.reply_msg_id
                     success = client.delete_msg_raw(msg.room_id, rm_msg)  # noqa
-                    print(f"删除消息 {rm_msg} 结果: {success}")
+                    print(f"删除消息 {rm_msg}-{msg.room_id} 结果: {success}")
                     if not success:
                         reply = msg.reply_with("删除失败")
                         _ = client.send_message(reply)
