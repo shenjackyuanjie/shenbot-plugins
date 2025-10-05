@@ -37,8 +37,15 @@ HELP_MSG = """用法:
 或者直接发送应用市场链接"""
 
 MARKET_PREFIX = "https://appgallery.huawei.com/app/detail?id="
+SUBSTANCE_PREFIX = "https://appgallery.huawei.com/substance/detail?id="
 
-def parse_link_to_package_name(link: str) -> str:
+# https://appgallery.huawei.com/app/detail?id=com.bzl.bosszhipin&channelId=SHARE&source=appshare
+# -> com.bzl.bosszshipin
+# https://appgallery.huawei.com/substance/detail?id=8ef9cb813bf94143b549f5865f12acee&v=1460400000&source=substanceshare
+# -> 8ef9cb813bf94143b549f5865f12acee
+
+
+def get_id_from_link(link: str) -> str:
     """
     从给定的链接中提取包名。
 
@@ -66,15 +73,38 @@ def reqeust_info(name: str, method: str) -> dict | None:
     try:
         data = requests.get(f"{API_URL}/api/apps/{method}/{name}")
         json_data = data.json()
-        if "error" in json_data:
+        if not json_data['success']:
             return None
         return json_data
     except requests.RequestException as e:
         print(f"yeeeee {e}")
         return None
 
-# https://appgallery.huawei.com/app/detail?id=com.bzl.bosszhipin&channelId=SHARE&source=appshare
-# -> com.bzl.bosszshipin
+def request_substance(substance_id: str) -> dict | None:
+    try:
+        data = requests.get(f"{API_URL}/api/submit_substance/{substance_id}")
+        json_data = data.json()
+        if not json_data['success']:
+            return None
+        return json_data
+    except requests.RequestException as e:
+        print(f"yeeeee {e}")
+        return None
+
+def format_substance(data: dict) -> str:
+    cache = io.StringIO()
+    if not data['success']:
+        del cache
+        return f"报错了 {data['data']['error']}"
+    data = data['data']
+    full_len = data['total']
+    _ = cache.write(f"获取到专题: 共{full_len}个应用\n")
+
+    for idx, app_data in enumerate(data):
+        current_fmt = format_data(app_data)
+        _ = cache.write(f"应用 {idx+1}/{full_len}:\n{current_fmt}\n")
+
+    return cache.getvalue()
 
 def format_data(data: dict) -> str:
     cache = io.StringIO()
@@ -154,9 +184,22 @@ def query_info(msg: IcaNewMessage, client: IcaClient) -> None:
 
 def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
     if msg.content.startswith(MARKET_PREFIX):
-        pkg_name = parse_link_to_package_name(msg.content)
+        pkg_name = get_id_from_link(msg.content)
         print(f"获取到新的链接: {pkg_name}")
         query_pkg(msg, client, pkg_name, "pkg_name")
+    elif msg.content.startswith(SUBSTANCE_PREFIX):
+        substance_id = get_id_from_link(msg.content)
+        print(f"获取到新的专题链接: {substance_id}")
+        data = request_substance(substance_id)
+        if data is not None:
+            try:
+                reply = msg.reply_with(format_substance(data))
+            except Exception as e:
+                reply = msg.reply_with(f"格式化数据时发生错误: {e}")
+                print(f"raw data: {data}")
+        else:
+            reply = msg.reply_with(f"获取到新的物质ID: {substance_id}, 但是数据是空的")
+        _ = client.send_message(reply)
     elif msg.content.startswith("/hm pkg "):
         pkg_name = msg.content[len("/hm pkg "):]
         print(f"获取到新的链接: {pkg_name}")
