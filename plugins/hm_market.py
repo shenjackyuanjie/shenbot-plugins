@@ -82,7 +82,7 @@ def reqeust_info(name: str, method: str) -> dict | None:
 
 def request_substance(substance_id: str) -> dict | None:
     try:
-        data = requests.get(f"{API_URL}/api/submit_substance/{substance_id}")
+        data = requests.post(f"{API_URL}/api/submit_substance/{substance_id}")
         json_data = data.json()
         if not json_data['success']:
             return None
