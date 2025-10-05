@@ -93,9 +93,6 @@ def request_substance(substance_id: str) -> dict | None:
 
 def format_substance(data: dict) -> str:
     cache = io.StringIO()
-    if not data['success']:
-        del cache
-        return f"报错了 {data['data']['error']}"
     full_len = data['total']
     data = data['data']
     _ = cache.write(f"获取到专题: 共{full_len}个应用\n")
