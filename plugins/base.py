@@ -33,27 +33,27 @@ PLUGIN_MANIFEST = PluginManifest(
 def local_env_info() -> str:
     cache = io.StringIO()
     # 参考 DR 的 (crash report)
-    cache.write(f"系统: {platform.platform()}\n")
+    _ = cache.write(f"系统: {platform.platform()}\n")
     # 处理器
     try:
-        cache.write(
+        _ = cache.write(
             "|".join([f"{x}%" for x in psutil.cpu_percent(interval=1, percpu=True)])
         )
-        cache.write("\n")
+        _ = cache.write("\n")
     except OSError:
-        cache.write("CPU: 未知\n")
+        _ = cache.write("CPU: 未知\n")
     # Python 版本信息
-    cache.write(
+    _ = cache.write(
         f"{platform.python_implementation()}: {platform.python_version()}-{platform.python_branch()}({platform.python_compiler()})\n"
     )
     # 内存信息
     try:
         memory = psutil.virtual_memory()
-        cache.write(
+        _ = cache.write(
             f"内存: {memory.free / 1024 / 1024 / 1024:.3f}GB/{memory.total / 1024 / 1024 / 1024:.3f}GB\n"
         )
     except OSError:
-        cache.write("内存: 未知\n")
+        _ = cache.write("内存: 未知\n")
     return cache.getvalue()
 
 
@@ -72,26 +72,44 @@ def local_env_info() -> str:
 
 
 def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
-    if not (msg.is_from_self or msg.is_reply):
-        if msg.content == "/bot-py":
-            reply = msg.reply_with(
-                f"ica-async-rs({client.version})-sync-py {client.ica_version}"
-            )
-            client.send_message(reply)
-        elif msg.content == "/bot-sys":
-            datas = local_env_info()
-            reply = msg.reply_with(datas)
-            # reply.set_img(local_env_image(), "image/png", False)
-            client.send_message(reply)
-        elif msg.content == "/bot-uptime":
-            uptime = client.startup_time
-            up_delta = datetime.now(timezone.utc) - uptime
-            reply = msg.reply_with(f"Bot 运行时间: {up_delta}")
-            client.send_message(reply)
-        elif msg.content == "/bot-poke":
-            client.send_poke(msg.room_id, msg.sender_id)
-        elif msg.content == "/bot-签到":
-            client.send_room_sign_in(msg.room_id)
+    if not msg.is_from_self:
+        if not msg.is_reply:
+            if msg.content == "/bot-py":
+                reply = msg.reply_with(
+                    f"ica-async-rs({client.version})-sync-py {client.ica_version}"
+                )
+                _ = client.send_message(reply)
+            elif msg.content == "/bot-sys":
+                datas = local_env_info()
+                reply = msg.reply_with(datas)
+                # reply.set_img(local_env_image(), "image/png", False)
+                _ = client.send_message(reply)
+            elif msg.content == "/bot-uptime":
+                uptime = client.startup_time
+                up_delta = datetime.now(timezone.utc) - uptime
+                reply = msg.reply_with(f"Bot 运行时间: {up_delta}")
+                _ = client.send_message(reply)
+            elif msg.content == "/bot-poke":
+                _ = client.send_poke(msg.room_id, msg.sender_id)
+            # elif msg.content == "/bot-签到":
+            #     client.send_room_sign_in(msg.room_id)
+        else:
+            if msg.content == "/bot-rm":
+                # 对着某条消息发出 rm 指令(确信)
+                # admin only
+                sender = msg.sender_id
+                admins = client.status.admins
+                if sender in admins:
+                    rm_msg = msg.reply_msg_id
+                    success = client.delete_message(rm_msg)  # noqa
+                    if not success:
+                        reply = msg.reply_with("删除失败")
+                        _ = client.send_message(reply)
+                else:
+                    # reply = msg.reply_with("你不是管理员")
+                    # client.send_message(reply)
+                    # 静默忽略
+                    ...
 
 
 def on_tailchat_message(msg: TailchatReciveMessage, client: TailchatClient) -> None:

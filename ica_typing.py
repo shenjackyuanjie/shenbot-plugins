@@ -2,7 +2,7 @@ from __future__ import annotations
 
 # Python 兼容版本 3.8+
 
-from typing import Callable, Optional
+from typing import Callable
 from datetime import datetime
 
 """
@@ -231,6 +231,24 @@ class IcaNewMessage:
         """
         ...
 
+    @property
+    def reply_msg_id(self) -> IcaType.MessageId | None:
+        """如果是回复消息, 返回被回复的消息id
+        于 2.0.2 添加"""
+        ...
+
+    @property
+    def reply_msg_content(self) -> str | None:
+        """如果是回复消息, 返回被回复的消息内容
+        于 2.0.2 添加"""
+        ...
+
+    @property
+    def reply_msg_sender_name(self) -> str | None:
+        """如果是回复消息, 返回被回复的消息发送者名称
+        于 2.0.2 添加"""
+        ...
+
 
 class IcaClient:
     """
@@ -275,7 +293,9 @@ class IcaClient:
         self.warn(message.content)
         return self.send_message(message)
 
-    def delete_message(self, message: IcaDeleteMessage) -> bool: ...
+    def delete_message(self, message: IcaDeleteMessage) -> bool:
+        """向某条消息发送阿瓦隆指令(确信)"""
+        ...
 
     @property
     def status(self) -> IcaStatus: ...
@@ -356,7 +376,7 @@ class TailchatReciveMessage:
     @property
     def is_reply(self) -> bool: ...
     @property
-    def group_id(self) -> Optional[TailchatType.GroupId]:
+    def group_id(self) -> TailchatType.GroupId | None:
         """服务器 Id"""
         ...
 
@@ -387,11 +407,17 @@ class TailchatSendingMessage:
     @content.setter
     def content(self, value: str) -> None: ...
     @property
-    def group_id(self) -> Optional[TailchatType.GroupId]: ...
+    def group_id(self) -> TailchatType.GroupId | None:
+        """服务器 Id"""
+        ...
+
     @group_id.setter
-    def group_id(self, value: Optional[TailchatType.GroupId]) -> None: ...
+    def group_id(self, value: TailchatType.GroupId | None) -> None: ...
     @property
-    def converse_id(self) -> TailchatType.ConverseId: ...
+    def converse_id(self) -> TailchatType.ConverseId:
+        """会话 Id"""
+        ...
+
     @converse_id.setter
     def converse_id(self, value: TailchatType.ConverseId) -> None: ...
     def clear_meta(self) -> "TailchatSendingMessage":
@@ -431,7 +457,7 @@ class TailchatClient:
         self,
         content: str,
         converse_id: TailchatType.ConverseId,
-        group_id: Optional[TailchatType.GroupId] = None,
+        group_id: TailchatType.GroupId | None = None,
     ) -> "TailchatSendingMessage":
         """创建一条新消息, 可用于发送"""
         ...
