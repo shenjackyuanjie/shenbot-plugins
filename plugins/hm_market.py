@@ -99,7 +99,7 @@ def format_substance(data: dict) -> str:
     _ = cache.write(f"获取到专题: 共{full_len}个应用\n")
 
     for idx, app_data in enumerate(data):
-        current_fmt = format_data(app_data)
+        current_fmt = format_data({"success": True, "data": app_data})
         _ = cache.write(f"应用 {idx+1}/{full_len}:\n{current_fmt}\n")
 
     return cache.getvalue()
