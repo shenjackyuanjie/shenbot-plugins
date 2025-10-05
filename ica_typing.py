@@ -297,6 +297,13 @@ class IcaClient:
         """向某条消息发送阿瓦隆指令(确信)"""
         ...
 
+    def delete_msg_raw(self, room_id: IcaType.RoomId, message_id: IcaType.MessageId) -> bool:
+        """向某条消息发送阿瓦隆指令(确信)
+        现在以原始参数形式提供(捂脸)
+        原来的几乎没法用, 私密马赛
+        于 2.0.2 添加"""
+        ...
+
     @property
     def status(self) -> IcaStatus: ...
     @property
