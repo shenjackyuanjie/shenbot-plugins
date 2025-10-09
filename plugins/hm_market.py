@@ -218,6 +218,10 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
         pkg_name = msg.content[len("/hm app id "):]
         print(f"获取到新的链接: {pkg_name}")
         query_pkg(msg, client, pkg_name, "app_id")
+    elif msg.content.startswith("/hm substance "):
+        substance_id = msg.content[len("/hm substance "):]
+        print(f"获取到新的专题链接: {substance_id}")
+        query_substance(msg, client, substance_id)
     elif msg.content.startswith("/hm info"):
         query_info(msg, client)
     elif msg.content.startswith("/hm"):
