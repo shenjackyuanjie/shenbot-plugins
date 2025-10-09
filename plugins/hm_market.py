@@ -199,9 +199,13 @@ def query_info(msg: IcaNewMessage, client: IcaClient) -> None:
 
 def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
     if msg.content.startswith(MARKET_PREFIX):
-        pkg_name = get_id_from_link(msg.content)
-        print(f"获取到新的链接: {pkg_name}")
-        query_pkg(msg, client, pkg_name, "pkg_name")
+        # 支持多行
+        lines = msg.content.splitlines()
+        for line in lines:
+            if line.startswith(MARKET_PREFIX):
+                pkg_name = get_id_from_link(line)
+                print(f"获取到新的链接: {pkg_name}")
+                query_pkg(msg, client, pkg_name, "pkg_name")
     elif msg.content.startswith(SUBSTANCE_PREFIX):
         substance_id = get_id_from_link(msg.content)
         print(f"获取到新的专题链接: {substance_id}")
