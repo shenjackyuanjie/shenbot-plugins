@@ -13,7 +13,7 @@ import requests
 if TYPE_CHECKING:
     from ica_typing import IcaNewMessage, IcaClient
 
-_version_ = "0.6.0"
+_version_ = "0.7.0"
 
 API_URL: str
 
@@ -75,7 +75,7 @@ def reqeust_info(name: str, method: str, sender_name: str) -> dict | None:
         # data = requests.get(f"{API_URL}/api/apps/{method}/{name}")
         send_data = {
             method: name,
-            "comment": {"user": sender_name}
+            "comment": {"user": sender_name, "platform": f"shenbot-{_version_}"}
         }
         data = requests.post(f"{API_URL}/api/submit", json=send_data)
         json_data = data.json()
