@@ -70,9 +70,14 @@ def get_id_from_link(link: str) -> str:
     else:
         return ""
 
-def reqeust_info(name: str, method: str) -> dict | None:
+def reqeust_info(name: str, method: str, sender_name: str) -> dict | None:
     try:
-        data = requests.get(f"{API_URL}/api/apps/{method}/{name}")
+        # data = requests.get(f"{API_URL}/api/apps/{method}/{name}")
+        send_data = {
+            method: name,
+            "comment": {"user": sender_name}
+        }
+        data = requests.post(f"{API_URL}/api/submit", json=send_data)
         json_data = data.json()
         if not json_data['success']:
             return None
@@ -150,7 +155,7 @@ def query_substance(msg: IcaNewMessage, client: IcaClient, substance_id: str) ->
     _ = client.send_message(reply)
 
 def query_pkg(msg: IcaNewMessage, client: IcaClient, pkg_name: str, method: str) -> None:
-    data = reqeust_info(pkg_name, method)
+    data = reqeust_info(pkg_name, method, msg.sender_name)
     if data is not None:
         try:
             reply = msg.reply_with(format_data(data))
