@@ -127,7 +127,7 @@ def format_data(data: dict) -> str:
         if not data['new_info'] and not data['new_metric'] and not data['new_rating']:
             _ = cache.write("应用信息无更新")
         _ = cache.write("\n")
-    _ = cache.write(f"包名: {data['info']['pkg_name']}\n")
+    _ = cache.write(f"包名: {data['info']['pkg_name']} app_id: {data['info']['app_id']}\n")
     _ = cache.write(f"名称: {data['info']['name']}[{data['metric']['version']}] 类型: {data["info"]["kind_name"]}-{data['info']['kind_type_name']}\n")
     _ = cache.write(f"下载量: {data['metric']['download_count']} 评分: {data['metric']['info_score']}({data['metric']['info_rate_count']}) ")
     if 'rating' in data and data['rating'] is not None:
