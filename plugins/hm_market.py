@@ -187,7 +187,7 @@ def query_info(msg: IcaNewMessage, client: IcaClient) -> None:
         _ = cache.write(f"爬取应用/元服务:{market_data['app_count']['total']}, 应用: {market_data['app_count']['apps']} 元服务: {market_data['app_count']['atomic_services']}\n")
         _ = cache.write(f"已知开发者数量: {market_data['developer_count']}\n")
         _ = cache.write("应用评分计数:\n")
-        _ = cache.write(f"0-1分: {star_data['star_1']}|")
+        _ = cache.write(f"无评分: {star_data['star_1']}|")
         _ = cache.write(f"1-2分: {star_data['star_2']}|")
         _ = cache.write(f"2-3分: {star_data['star_3']}|")
         _ = cache.write(f"3-4分: {star_data['star_4']}|")
