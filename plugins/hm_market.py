@@ -232,7 +232,7 @@ def query_rank(msg: IcaNewMessage, client: IcaClient) -> None:
     cache = io.StringIO()
     _ = cache.write(fmt_info())
     _ = cache.write("\n")
-    _ = cache.write("所有应用的下载量排行\n")
+    _ = cache.write("===所有应用的下载量排行===\n")
     top_down_info = api_helper("rankings/top-downloads?limit=5")
     if top_down_info is not None:
         top_down_data = top_down_info['data']
@@ -246,7 +246,6 @@ def query_rank(msg: IcaNewMessage, client: IcaClient) -> None:
             _ = cache.write(f"应用更新日期: {release_date.strftime('%Y-%m-%d %H:%M:%S')}\n")
     else:
         _ = cache.write("获取应用市场数据, 但是数据是空的")
-    _ = cache.write("\n")
     _ = cache.write("===不包含华为内置应用的下载量排行===\n")
     top_down_info = api_helper("rankings/top-downloads?limit=5&exclude_pattern=huawei")
     if top_down_info is not None:
