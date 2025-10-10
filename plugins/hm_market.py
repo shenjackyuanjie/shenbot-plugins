@@ -241,7 +241,6 @@ def query_rank(msg: IcaNewMessage, client: IcaClient) -> None:
             app_metric = app[1]
             release_date = datetime.datetime.fromtimestamp(app_metric['release_date'] / 1000.0)
             _ = cache.write(f"[{idx + 1}] {app_info['name']} {app_info['kind_name']}-{app_info['kind_type_name']}\n")
-            _ = cache.write(f"({app_info['pkg_name']}) ")
             _ = cache.write(f"下载量: {format_number(app_metric['download_count'])}\n")
             _ = cache.write(f"应用更新日期: {release_date.strftime('%Y-%m-%d %H:%M:%S')}\n")
     else:
@@ -255,7 +254,6 @@ def query_rank(msg: IcaNewMessage, client: IcaClient) -> None:
             app_metric = app[1]
             release_date = datetime.datetime.fromtimestamp(app_metric['release_date'] / 1000.0)
             _ = cache.write(f"[{idx + 1}] {app_info['name']} {app_info['kind_name']}-{app_info['kind_type_name']}\n")
-            _ = cache.write(f"({app_info['pkg_name']}) ")
             _ = cache.write(f"下载量: {format_number(app_metric['download_count'])}\n")
             _ = cache.write(f"应用更新日期: {release_date.strftime('%Y-%m-%d %H:%M:%S')}\n")
     else:
