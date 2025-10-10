@@ -47,6 +47,27 @@ SUBSTANCE_PREFIX = "https://appgallery.huawei.com/substance/detail?id="
 # -> 8ef9cb813bf94143b549f5865f12acee
 
 
+def format_number(number: int | str) -> str:
+    """
+    将数字四位一分割格式化
+
+    Args:
+        number: 要格式化的数字，可以是整数或字符串
+
+    Returns:
+        四位一分割后的字符串
+    """
+    num_str = str(number)
+    result = []
+
+    # 从右往左每4位分割一次
+    for i in range(len(num_str), 0, -4):
+        start = max(0, i - 4)
+        result.append(num_str[start:i])
+
+    # 反转结果并用逗号连接
+    return ','.join(reversed(result))
+
 def get_id_from_link(link: str) -> str:
     """
     从给定的链接中提取包名。
@@ -136,7 +157,7 @@ def format_data(data: dict) -> str:
         _ = cache.write("\n")
     _ = cache.write(f"包名: {data['info']['pkg_name']} app_id: {data['info']['app_id']}\n")
     _ = cache.write(f"名称: {data['info']['name']}[{data['metric']['version']}] 类型: {data["info"]["kind_name"]}-{data['info']['kind_type_name']}\n")
-    _ = cache.write(f"下载量: {data['metric']['download_count']} 评分: {data['metric']['info_score']}({data['metric']['info_rate_count']}) ")
+    _ = cache.write(f"下载量: {format_number(data['metric']['download_count'])} 评分: {data['metric']['info_score']}({data['metric']['info_rate_count']}) ")
     if 'rating' in data and data['rating'] is not None:
         rate = data['rating']
         _ = cache.write(f"显示评分: {data['rating']['average_rating']}[{rate['total_star_rating_count']}]")
@@ -218,9 +239,9 @@ def query_rank(msg: IcaNewMessage, client: IcaClient) -> None:
         for idx, app in enumerate(top_down_data):
             app_info = app[0]
             app_metric = app[1]
-            _ = cache.write(f"[{idx + 1}] {app_info['name']} {app_info['kind_name']}-{app_info['kind_type_name']}\n")
+            _ = cache.write(f"[{idx + 1}] {app_info['name']} {app_info['kind_name']}-{app_info['kind_type_name']}")
+            _ = cache.write(f"下载量: {format_number(app_metric['download_count'])}\n")
             _ = cache.write(f"({app_info['pkg_name']}-{app_info['app_id']})\n")
-            _ = cache.write(f"下载量: {app_metric['download_count']}\n")
         _ = cache.write("")
     else:
         _ = cache.write("获取应用市场数据, 但是数据是空的")
@@ -234,7 +255,7 @@ def query_rank(msg: IcaNewMessage, client: IcaClient) -> None:
             app_metric = app[1]
             _ = cache.write(f"[{idx + 1}] {app_info['name']} {app_info['kind_name']}-{app_info['kind_type_name']}\n")
             _ = cache.write(f"({app_info['pkg_name']}-{app_info['app_id']})\n")
-            _ = cache.write(f"下载量: {app_metric['download_count']}\n")
+            _ = cache.write(f"下载量: {format_number(app_metric['download_count'])}\n")
         _ = cache.write("")
     else:
         _ = cache.write("获取应用市场数据, 但是数据是空的")
