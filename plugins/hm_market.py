@@ -13,7 +13,7 @@ import requests
 if TYPE_CHECKING:
     from ica_typing import IcaNewMessage, IcaClient
 
-_version_ = "0.7.0"
+_version_ = "0.7.1"
 
 API_URL: str
 
@@ -35,6 +35,7 @@ HELP_MSG = """用法:
 /hm pkg 包名
 /hm app id 应用ID
 /hm info 获取应用市场当前数据
+/hm rank 获取应用市场下载量排名
 或者直接发送应用市场链接"""
 
 MARKET_PREFIX = "https://appgallery.huawei.com/app/detail?id="
@@ -172,19 +173,20 @@ def query_pkg(msg: IcaNewMessage, client: IcaClient, pkg_name: str, method: str)
         reply = msg.reply_with(f"获取到新的包名: {pkg_name}, 但是数据是空的")
     _ = client.send_message(reply)
 
-def query_info(msg: IcaNewMessage, client: IcaClient) -> None:
-    def helper(method: str):
-        try:
-            data = requests.get(f"{API_URL}/api/{method}")
-            json_data = data.json()
-            if "error" in json_data:
-                return None
-            return json_data
-        except requests.RequestException as e:
-            print(f"yeeeee {e}")
+def api_helper(method: str):
+    try:
+        data = requests.get(f"{API_URL}/api/{method}")
+        json_data = data.json()
+        if "error" in json_data or not json_data['success']:
             return None
-    market_data = helper("market_info")
-    star_data = helper("charts/star-distribution")
+        return json_data
+    except requests.RequestException as e:
+        print(f"yeeeee {e}")
+        return None
+
+def fmt_info() -> str:
+    market_data = api_helper("market_info")
+    star_data = api_helper("charts/star-distribution")
     if market_data is not None and star_data is not None:
         market_data = market_data['data']
         star_data = star_data['data']
@@ -197,10 +199,46 @@ def query_info(msg: IcaNewMessage, client: IcaClient) -> None:
         _ = cache.write(f"1-2分: {star_data['star_2']}|")
         _ = cache.write(f"2-3分: {star_data['star_3']}|")
         _ = cache.write(f"3-4分: {star_data['star_4']}|")
-        _ = cache.write(f"4-5分: {star_data['star_5']}\n")
-        reply = msg.reply_with(cache.getvalue())
+        _ = cache.write(f"4-5分: {star_data['star_5']}")
+        return cache.getvalue()
     else:
-        reply = msg.reply_with("获取应用市场数据, 但是数据是空的")
+        return "获取应用市场数据, 但是数据是空的"
+
+def query_info(msg: IcaNewMessage, client: IcaClient) -> None:
+    _ = client.send_message(msg.reply_with(fmt_info()))
+
+def query_rank(msg: IcaNewMessage, client: IcaClient) -> None:
+    cache = io.StringIO()
+    _ = cache.write(fmt_info())
+    _ = cache.write("\n")
+    _ = cache.write("所有应用的下载量排行\n")
+    top_down_info = api_helper("rankings/top-downloads?limit=10")
+    if top_down_info is not None:
+        top_down_data = top_down_info['data']
+        for idx, app in enumerate(top_down_data):
+            app_info = app[0]
+            app_metric = app[1]
+            _ = cache.write(f"[{idx + 1}] {app_info['name']} {app_info['kind_name']}-{app_info['kind_type_name']}\n")
+            _ = cache.write(f"({app_info['pkg_name']}-{app_info['app_id']})\n")
+            _ = cache.write(f"下载量: {app_metric['download_count']}\n")
+        _ = cache.write("")
+    else:
+        _ = cache.write("获取应用市场数据, 但是数据是空的")
+    _ = cache.write("\n")
+    _ = cache.write("不包含华为内置应用的下载量排行\n")
+    top_down_info = api_helper("rankings/top-downloads?limit=10&exclude_pattern=huawei")
+    if top_down_info is not None:
+        top_down_data = top_down_info['data']
+        for idx, app in enumerate(top_down_data):
+            app_info = app[0]
+            app_metric = app[1]
+            _ = cache.write(f"[{idx + 1}] {app_info['name']} {app_info['kind_name']}-{app_info['kind_type_name']}\n")
+            _ = cache.write(f"({app_info['pkg_name']}-{app_info['app_id']})\n")
+            _ = cache.write(f"下载量: {app_metric['download_count']}\n")
+        _ = cache.write("")
+    else:
+        _ = cache.write("获取应用市场数据, 但是数据是空的")
+    reply = msg.reply_with(cache.getvalue())
     _ = client.send_message(reply)
 
 def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
@@ -228,8 +266,10 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
         substance_id = msg.content[len("/hm substance "):]
         print(f"获取到新的专题链接: {substance_id}")
         query_substance(msg, client, substance_id)
-    elif msg.content.startswith("/hm info"):
+    elif msg.content == "/hm info":
         query_info(msg, client)
+    elif msg.content == "/hm rank":
+        query_rank(msg, client)
     elif msg.content.startswith("/hm"):
         # help msg
         reply = msg.reply_with(HELP_MSG)

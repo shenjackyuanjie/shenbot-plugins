@@ -180,17 +180,17 @@ def convert_base(msg: ReciveMessage, client) -> None:
             doubleflag = i
             break
     for i in range(16):
-        cache.write(
+        _ = cache.write(
             "#"
             + str(i).zfill(2)
             + " "
             + sqrtools.sklname[current_player.nameskill[i][0]]
         )
         if current_player.nameskill[i][0] >= 35:
-            cache.write("\n")
+            _ = cache.write("\n")
         else:
             r = current_player.namebase[i * 4 + 64 : i * 4 + 68]
-            cache.write(
+            _ = cache.write(
                 ": "
                 + " ".join(str(j).zfill(2) for j in r)
                 + " -> "
