@@ -103,7 +103,10 @@ def request_substance(substance_id: str, sender_name: str) -> dict | None:
 def format_substance(data: dict) -> str:
     cache = io.StringIO()
     full_len = data['total']
-    data = data['data']
+    is_new = data['data']['is_new']
+    data = data['data']['data']
+    if is_new:
+        _ = cache.write("新专题!\n")
     _ = cache.write(f"获取到专题: 共{full_len}个应用\n")
 
     # for idx, app_data in enumerate(data):
