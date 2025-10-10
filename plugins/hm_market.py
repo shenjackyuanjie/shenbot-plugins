@@ -86,9 +86,12 @@ def reqeust_info(name: str, method: str, sender_name: str) -> dict | None:
         print(f"yeeeee {e}")
         return None
 
-def request_substance(substance_id: str) -> dict | None:
+def request_substance(substance_id: str, sender_name: str) -> dict | None:
     try:
-        data = requests.post(f"{API_URL}/api/submit_substance/{substance_id}")
+        send_data = {
+            "comment": {"user": sender_name, "platform": f"shenbot-{_version_}"}
+        }
+        data = requests.post(f"{API_URL}/api/submit_substance/{substance_id}", json=send_data)
         json_data = data.json()
         if not json_data['success']:
             return None
@@ -143,7 +146,7 @@ def format_data(data: dict) -> str:
     return cache.getvalue()
 
 def query_substance(msg: IcaNewMessage, client: IcaClient, substance_id: str) -> None:
-    data = request_substance(substance_id)
+    data = request_substance(substance_id, msg.sender_name)
     if data is not None:
         try:
             reply = msg.reply_with(format_substance(data))
