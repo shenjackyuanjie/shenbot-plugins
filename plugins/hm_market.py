@@ -170,8 +170,13 @@ def format_data(data: dict) -> str:
     _ = cache.write(f"应用更新日期: {release_date.strftime('%Y-%m-%d %H:%M:%S')}")
     return cache.getvalue()
 
+def map_sender(name: str) -> str:
+    if name == "You":
+        return "shenjack"
+    return name
+
 def query_substance(msg: IcaNewMessage, client: IcaClient, substance_id: str) -> None:
-    data = request_substance(substance_id, msg.sender_name)
+    data = request_substance(substance_id, map_sender(msg.sender_name))
     if data is not None:
         try:
             reply = msg.reply_with(format_substance(data))
@@ -183,7 +188,7 @@ def query_substance(msg: IcaNewMessage, client: IcaClient, substance_id: str) ->
     _ = client.send_message(reply)
 
 def query_pkg(msg: IcaNewMessage, client: IcaClient, pkg_name: str, method: str) -> None:
-    data = reqeust_info(pkg_name, method, msg.sender_name)
+    data = reqeust_info(pkg_name, method, map_sender(msg.sender_name))
     if data is not None:
         try:
             reply = msg.reply_with(format_data(data))
