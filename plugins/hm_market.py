@@ -243,9 +243,10 @@ def query_rank(msg: IcaNewMessage, client: IcaClient) -> None:
             _ = cache.write(f"[{idx + 1}] {app_info['name']} {app_info['kind_name']}-{app_info['kind_type_name']}\n")
             _ = cache.write(f"({app_info['pkg_name']}) ")
             _ = cache.write(f"下载量: {format_number(app_metric['download_count'])}\n")
-            _ = cache.write(f"应用更新日期: {release_date.strftime('%Y-%m-%d %H:%M:%S')}'n")
+            _ = cache.write(f"应用更新日期: {release_date.strftime('%Y-%m-%d %H:%M:%S')}\n")
     else:
         _ = cache.write("获取应用市场数据, 但是数据是空的")
+    _ = cache.write("\n")
     _ = cache.write("===不包含华为内置应用的下载量排行===\n")
     top_down_info = api_helper("rankings/top-downloads?limit=5&exclude_pattern=huawei")
     if top_down_info is not None:
