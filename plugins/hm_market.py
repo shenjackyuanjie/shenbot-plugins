@@ -13,7 +13,7 @@ import requests
 if TYPE_CHECKING:
     from ica_typing import IcaNewMessage, IcaClient
 
-_version_ = "0.7.1"
+_version_ = "0.7.2"
 
 API_URL: str
 
@@ -263,7 +263,7 @@ def query_rank(msg: IcaNewMessage, client: IcaClient) -> None:
             _ = cache.write(f"应用更新日期: {release_date.strftime('%Y-%m-%d %H:%M:%S')}\n")
     else:
         _ = cache.write("获取应用市场数据, 但是数据是空的")
-    reply = msg.reply_with(cache.getvalue())
+    reply = msg.reply_with(cache.getvalue()).remove_reply()
     _ = client.send_message(reply)
 
 def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
