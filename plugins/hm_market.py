@@ -13,7 +13,7 @@ import requests
 if TYPE_CHECKING:
     from ica_typing import IcaNewMessage, IcaClient
 
-_version_ = "0.7.2"
+_version_ = "0.7.3"
 
 API_URL: str
 
@@ -212,7 +212,7 @@ def api_helper(method: str):
 
 def fmt_info() -> str:
     market_data = api_helper("market_info")
-    star_data = api_helper("charts/star-distribution")
+    star_data = api_helper("charts/rating")
     if market_data is not None and star_data is not None:
         market_data = market_data['data']
         star_data = star_data['data']
