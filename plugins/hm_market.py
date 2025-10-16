@@ -136,10 +136,7 @@ def format_substance(data: dict) -> str:
     if 'name' in data:
         _ = cache.write(f"\n{data['name']}")
     _ = cache.write("\n")
-    _ = cache.write(f"专题ID: {data['substance_id']}")
-    # for idx, app_data in enumerate(data):
-        # current_fmt = format_data({"success": True, "data": app_data})
-        # _ = cache.write(f"应用 {idx+1}/{full_len}:\n")
+    _ = cache.write(f"专题ID: {data['id']}")
 
     return cache.getvalue()
 
