@@ -13,7 +13,7 @@ import requests
 if TYPE_CHECKING:
     from ica_typing import IcaNewMessage, IcaClient
 
-_version_ = "0.7.3"
+_version_ = "0.7.4"
 
 API_URL: str
 
@@ -131,9 +131,9 @@ def format_substance(data: dict) -> str:
         _ = cache.write("新专题!\n")
     _ = cache.write(f"获取到专题: 共{full_len}个应用\n")
     _ = cache.write(f"{data['title']}")
-    if data['subtitle'] is not None:
+    if 'subtitle' in data:
         _ = cache.write(f" - {data['subtitle']}")
-    if data['name'] is not None:
+    if 'name' in data:
         _ = cache.write(f"\n{data['name']}")
     _ = cache.write("\n")
     _ = cache.write(f"专题ID: {data['substance_id']}")
