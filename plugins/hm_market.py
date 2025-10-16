@@ -130,7 +130,13 @@ def format_substance(data: dict) -> str:
     if is_new:
         _ = cache.write("新专题!\n")
     _ = cache.write(f"获取到专题: 共{full_len}个应用\n")
-
+    _ = cache.write(f"{data['title']}")
+    if data['subtitle'] is not None:
+        _ = cache.write(f" - {data['subtitle']}")
+    if data['name'] is not None:
+        _ = cache.write(f"\n{data['name']}")
+    _ = cache.write("\n")
+    _ = cache.write(f"专题ID: {data['substance_id']}")
     # for idx, app_data in enumerate(data):
         # current_fmt = format_data({"success": True, "data": app_data})
         # _ = cache.write(f"应用 {idx+1}/{full_len}:\n")
