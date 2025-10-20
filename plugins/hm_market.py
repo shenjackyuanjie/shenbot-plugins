@@ -273,8 +273,8 @@ def query_rank(msg: IcaNewMessage, client: IcaClient) -> None:
 
 def query_down_rank(msg: IcaNewMessage, client: IcaClient) -> None:
     data = api_helper("rankings/download_increase?limit=10")
+    cache = io.StringIO()
     if data is not None:
-        cache = io.StringIO()
         _ = cache.write("===近一天下载量增量排行前十===\n")
         _ = cache.write("昨天 + 增量 = 今天\n")
         data = data['data']
@@ -285,7 +285,6 @@ def query_down_rank(msg: IcaNewMessage, client: IcaClient) -> None:
             _ = cache.write(f" = {format_number(app['current_download_count'])}\n")
     data = api_helper("rankings/download_increase?limit=10&days=7")
     if data is not None:
-        cache = io.StringIO()
         _ = cache.write("===近一周下载量增量排行前十===\n")
         _ = cache.write("上周 + 增量 = 今天\n")
         data = data['data']
