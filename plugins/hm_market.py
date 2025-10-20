@@ -278,7 +278,7 @@ def query_down_rank(msg: IcaNewMessage, client: IcaClient) -> None:
         _ = cache.write("===近一天下载量增量排行前十===\n")
         data = data['data']
         for idx, app in enumerate(data):
-            _ = cache.write(f"({idx + 1}) {app['info']['name']}\n")
+            _ = cache.write(f"({idx + 1}) {app['name']}\n")
             _ = cache.write(f"当前下载量: {format_number(app['current_download_count'])} +")
             _ = cache.write(format_number(app['download_increment']))
             _ = cache.write("\n")
