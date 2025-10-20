@@ -280,9 +280,9 @@ def query_down_rank(msg: IcaNewMessage, client: IcaClient) -> None:
         data = data['data']
         for idx, app in enumerate(data):
             _ = cache.write(f"({idx + 1}) {app['name']}\n")
-            _ = cache.write(f"下载量: {format_number(app['prior_download_count'])} +")
+            _ = cache.write(f" {format_number(app['prior_download_count'])}+")
             _ = cache.write(format_number(app['download_increment']))
-            _ = cache.write(f" = {format_number(app['current_download_count'])}\n")
+            _ = cache.write(f"={format_number(app['current_download_count'])}\n")
     data = api_helper("rankings/download_increase?limit=10&days=7")
     if data is not None:
         _ = cache.write("===近一周下载量增量排行前十===\n")
@@ -290,9 +290,9 @@ def query_down_rank(msg: IcaNewMessage, client: IcaClient) -> None:
         data = data['data']
         for idx, app in enumerate(data):
             _ = cache.write(f"({idx + 1}) {app['name']}\n")
-            _ = cache.write(f"下载量: {format_number(app['prior_download_count'])} +")
+            _ = cache.write(f"{format_number(app['prior_download_count'])}+")
             _ = cache.write(format_number(app['download_increment']))
-            _ = cache.write(f" = {format_number(app['current_download_count'])}\n")
+            _ = cache.write(f"={format_number(app['current_download_count'])}\n")
         reply = msg.reply_with(cache.getvalue()).remove_reply()
         _ = client.send_message(reply)
 
