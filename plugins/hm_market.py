@@ -13,7 +13,7 @@ import requests
 if TYPE_CHECKING:
     from ica_typing import IcaNewMessage, IcaClient
 
-_version_ = "0.8.0"
+_version_ = "0.8.1"
 
 API_URL: str
 
@@ -276,11 +276,13 @@ def query_down_rank(msg: IcaNewMessage, client: IcaClient) -> None:
     if data is not None:
         cache = io.StringIO()
         _ = cache.write("===近一天下载量增量排行前十===\n")
+        _ = cache.write("昨天 + 增量 = 今天\n")
         data = data['data']
         for idx, app in enumerate(data):
             _ = cache.write(f"({idx + 1}) {app['name']}\n")
-            _ = cache.write(f"当前下载量: {format_number(app['current_download_count'])} +")
+            _ = cache.write(f"下载量: {format_number(app['prior_download_count'])} +")
             _ = cache.write(format_number(app['download_increment']))
+            _ = cache.write(f" = {format_number(app['current_download_count'])}\n")
             _ = cache.write("\n")
         reply = msg.reply_with(cache.getvalue()).remove_reply()
         _ = client.send_message(reply)
