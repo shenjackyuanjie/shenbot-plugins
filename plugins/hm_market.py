@@ -252,7 +252,7 @@ def fmt_info(show_sync: bool = False) -> str:
         return "获取应用市场数据, 但是数据是空的"
 
 def query_info(msg: IcaNewMessage, client: IcaClient) -> None:
-    _ = client.send_message(msg.reply_with(fmt_info(False)))
+    _ = client.send_message(msg.reply_with(fmt_info(True)))
 
 def query_rank(msg: IcaNewMessage, client: IcaClient) -> None:
     cache = io.StringIO()
