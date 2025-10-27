@@ -226,18 +226,19 @@ def fmt_info(show_sync: bool = False) -> str:
         _ = cache.write(f"爬取应用/元服务:{market_data['app_count']['total']}, 应用: {market_data['app_count']['apps']} 元服务: {market_data['app_count']['atomic_services']}\n")
         _ = cache.write(f"已知开发者数量: {market_data['developer_count']}\n")
         if show_sync:
-            _ = cache.write("同步状态: ")
+            _ = cache.write("同步状态\n")
             sync_statue = market_data['sync_status']
-            cost_time = datetime.timedelta(seconds=sync_statue['elapsed_time']['secs'], microseconds=sync_statue['elapsed_time']['nanos'] * 1000)
+            cost_time = datetime.timedelta(seconds=sync_statue['elapsed_time']['secs'])
             if sync_statue['is_syncing_all']:
                 _ = cache.write(f"同步中 {sync_statue['progress'][0]}/{sync_statue['progress'][1]}({sync_statue['progress'][0] / sync_statue['progress'][1] * 100}%)\n")
                 # 把可能 > 60 的秒数格式化成正常的时间
                 _ = cache.write(f"已经用时: {cost_time} ")
-                estimated_total_time = datetime.timedelta(seconds=sync_statue['estimated_total_time']['secs'], microseconds=sync_statue['estimated_total_time']['nanos'] * 1000)
+                estimated_total_time = datetime.timedelta(seconds=sync_statue['estimated_total_time']['secs'])
                 _ = cache.write(f"预计总时间: {estimated_total_time}\n")
             else:
-                next_sync = datetime.timedelta(seconds=sync_statue['next_sync_countdown']['secs'], microseconds=sync_statue['next_sync_countdown']['nanos'] * 1000)
-                _ = cache.write(f"上次同步用时: {cost_time}")
+                next_sync = datetime.timedelta(seconds=sync_statue['next_sync_countdown']['secs'])
+                _ = cache.write(f"上次同步用时: {cost_time}\n")
+                _ = cache.write(f"下次同步倒计时: {next_sync}\n")
             _ = cache.write("总 处理/插入/失败/跳过\n")
             _ = cache.write(f"{sync_statue['total_processed']}|{sync_statue['total_inserted']}|{sync_statue['total_failed']}|{sync_statue['total_skipped']}\n")
 
