@@ -13,7 +13,7 @@ import requests
 if TYPE_CHECKING:
     from ica_typing import IcaNewMessage, IcaClient
 
-_version_ = "0.7.4"
+_version_ = "0.7.5"
 
 API_URL: str
 
@@ -213,16 +213,32 @@ def api_helper(method: str):
         print(f"yeeeee {e}")
         return None
 
-def fmt_info() -> str:
+def fmt_info(show_sync: bool = False) -> str:
     market_data = api_helper("market_info")
     star_data = api_helper("charts/rating")
     if market_data is not None and star_data is not None:
         market_data = market_data['data']
         star_data = star_data['data']
         cache = io.StringIO()
-        _ = cache.write("鸿蒙next应用市场数据:\n")
+        _ = cache.write(f"鸿蒙next应用市场数据-{market_data['crate_version']}\n")
         _ = cache.write(f"爬取应用/元服务:{market_data['app_count']['total']}, 应用: {market_data['app_count']['apps']} 元服务: {market_data['app_count']['atomic_services']}\n")
         _ = cache.write(f"已知开发者数量: {market_data['developer_count']}\n")
+        if show_sync:
+            _ = cache.write("同步状态: ")
+            sync_statue = market_data['sync_status']
+            cost_time = datetime.timedelta(seconds=sync_statue['elapsed_time']['secs'], microseconds=sync_statue['elapsed_time']['nanos'] * 1000)
+            if sync_statue['is_syncing_all']:
+                _ = cache.write(f"同步中 {sync_statue['progress'][0]}/{sync_statue['progress'][1]}({sync_statue['progress'][0] / sync_statue['progress'][1] * 100}%)\n")
+                # 把可能 > 60 的秒数格式化成正常的时间
+                _ = cache.write(f"已经用时: {cost_time} ")
+                estimated_total_time = datetime.timedelta(seconds=sync_statue['estimated_total_time']['secs'], microseconds=sync_statue['estimated_total_time']['nanos'] * 1000)
+                _ = cache.write(f"预计总时间: {estimated_total_time}\n")
+            else:
+                next_sync = datetime.timedelta(seconds=sync_statue['next_sync_countdown']['secs'], microseconds=sync_statue['next_sync_countdown']['nanos'] * 1000)
+                _ = cache.write(f"上次同步用时: {cost_time}")
+            _ = cache.write("总 处理/插入/失败/跳过\n")
+            _ = cache.write(f"{sync_statue['total_processed']}|{sync_statue['total_inserted']}|{sync_statue['total_failed']}|{sync_statue['total_skipped']}\n")
+
         _ = cache.write("应用评分计数:\n")
         _ = cache.write(f"无评分: {star_data['star_1']}|")
         _ = cache.write(f"1-2分: {star_data['star_2']}|")
@@ -234,7 +250,7 @@ def fmt_info() -> str:
         return "获取应用市场数据, 但是数据是空的"
 
 def query_info(msg: IcaNewMessage, client: IcaClient) -> None:
-    _ = client.send_message(msg.reply_with(fmt_info()))
+    _ = client.send_message(msg.reply_with(fmt_info(False)))
 
 def query_rank(msg: IcaNewMessage, client: IcaClient) -> None:
     cache = io.StringIO()
