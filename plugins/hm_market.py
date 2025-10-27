@@ -13,7 +13,7 @@ import requests
 if TYPE_CHECKING:
     from ica_typing import IcaNewMessage, IcaClient
 
-_version_ = "0.7.5"
+_version_ = "0.8.3"
 
 API_URL: str
 
@@ -26,17 +26,19 @@ PLUGIN_MANIFEST = PluginManifest(
     plugin_id="hm_market",
     name="鸿蒙应用信息查询",
     version=_version_,
-    description="查询 鸿蒙 NEXT 某个应用的下载量",
+    description="查询 鸿蒙 NEXT 某个应用的下载量 和一些其他查询",
     authors=["shenjack"],
     config={"main": cfg}
 )
 
-HELP_MSG = """用法:
-/hm pkg 包名
-/hm app id 应用ID
+HELP_MSG = f"""鸿蒙应用市场信息查询-v{_version_}:
+/hm pkg <包名>
+/hm id <应用ID>
 /hm info 获取应用市场当前数据
 /hm rank 获取应用市场下载量排名
-或者直接发送应用市场链接"""
+/hm down rank 获取近一天的下载量增量排行
+/hm substance <专题ID>
+或者直接发送应用市场链接/应用市场专题链接"""
 
 MARKET_PREFIX = "https://appgallery.huawei.com/app/detail?id="
 SUBSTANCE_PREFIX = "https://appgallery.huawei.com/substance/detail?id="
@@ -285,6 +287,31 @@ def query_rank(msg: IcaNewMessage, client: IcaClient) -> None:
     reply = msg.reply_with(cache.getvalue()).remove_reply()
     _ = client.send_message(reply)
 
+def query_down_rank(msg: IcaNewMessage, client: IcaClient) -> None:
+    data = api_helper("rankings/download_increase?limit=10")
+    cache = io.StringIO()
+    if data is not None:
+        _ = cache.write("===近一天下载量增量排行前十===\n")
+        _ = cache.write("昨天 + 增量 = 今天\n")
+        data = data['data']
+        for idx, app in enumerate(data):
+            _ = cache.write(f"({idx + 1}) {app['name']}\n")
+            _ = cache.write(f" {format_number(app['prior_download_count'])}+")
+            _ = cache.write(format_number(app['download_increment']))
+            _ = cache.write(f"={format_number(app['current_download_count'])}\n")
+    data = api_helper("rankings/download_increase?limit=10&days=7")
+    if data is not None:
+        _ = cache.write("===近一周下载量增量排行前十===\n")
+        _ = cache.write("上周 + 增量 = 今天\n")
+        data = data['data']
+        for idx, app in enumerate(data):
+            _ = cache.write(f"({idx + 1}) {app['name']}\n")
+            _ = cache.write(f"{format_number(app['prior_download_count'])}+")
+            _ = cache.write(format_number(app['download_increment']))
+            _ = cache.write(f"={format_number(app['current_download_count'])}\n")
+        reply = msg.reply_with(cache.getvalue()).remove_reply()
+        _ = client.send_message(reply)
+
 def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
     if msg.content.startswith(MARKET_PREFIX):
         # 支持多行
@@ -298,22 +325,27 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
         substance_id = get_id_from_link(msg.content)
         print(f"获取到新的专题链接: {substance_id}")
         query_substance(msg, client, substance_id)
+
     elif msg.content.startswith("/hm pkg "):
         pkg_name = msg.content[len("/hm pkg "):]
         print(f"获取到新的链接: {pkg_name}")
         query_pkg(msg, client, pkg_name, "pkg_name")
-    elif msg.content.startswith("/hm app id "):
-        pkg_name = msg.content[len("/hm app id "):]
+    elif msg.content.startswith("/hm id "):
+        pkg_name = msg.content[len("/hm id "):]
         print(f"获取到新的链接: {pkg_name}")
         query_pkg(msg, client, pkg_name, "app_id")
     elif msg.content.startswith("/hm substance "):
         substance_id = msg.content[len("/hm substance "):]
         print(f"获取到新的专题链接: {substance_id}")
         query_substance(msg, client, substance_id)
+
     elif msg.content == "/hm info":
         query_info(msg, client)
     elif msg.content == "/hm rank":
         query_rank(msg, client)
+    elif msg.content == "/hm down rank":
+        query_down_rank(msg, client)
+
     elif msg.content.startswith("/hm"):
         # help msg
         reply = msg.reply_with(HELP_MSG)
