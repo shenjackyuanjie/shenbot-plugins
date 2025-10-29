@@ -96,12 +96,12 @@ def get_id_from_link(link: str) -> str:
 
 def reqeust_info(name: str, method: str, sender_name: str) -> dict | None:
     try:
-        # data = requests.get(f"{API_URL}/api/apps/{method}/{name}")
+        # data = requests.get(f"{API_URL}/v0/apps/{method}/{name}")
         send_data = {
             method: name,
             "comment": {"user": sender_name, "platform": f"shenbot-{_version_}"}
         }
-        data = requests.post(f"{API_URL}/api/submit", json=send_data)
+        data = requests.post(f"{API_URL}/v0/submit", json=send_data)
         json_data = data.json()
         if not json_data['success']:
             return None
@@ -115,7 +115,7 @@ def request_substance(substance_id: str, sender_name: str) -> dict | None:
         send_data = {
             "comment": {"user": sender_name, "platform": f"shenbot-{_version_}"}
         }
-        data = requests.post(f"{API_URL}/api/submit_substance/{substance_id}", json=send_data)
+        data = requests.post(f"{API_URL}/v0/submit_substance/{substance_id}", json=send_data)
         json_data = data.json()
         if not json_data['success']:
             return None
@@ -206,7 +206,7 @@ def query_pkg(msg: IcaNewMessage, client: IcaClient, pkg_name: str, method: str)
 
 def api_helper(method: str):
     try:
-        data = requests.get(f"{API_URL}/api/{method}")
+        data = requests.get(f"{API_URL}/v0/{method}")
         json_data = data.json()
         if "error" in json_data or not json_data['success']:
             return None
@@ -354,4 +354,4 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
 
 def on_load():
     global API_URL
-    API_URL = str(PLUGIN_MANIFEST.config_unchecked("main").get_value("api_url")) or ""
+    API_URL = str(PLUGIN_MANIFEST.config_unchecked("main").get_value("v0_url")) or ""
