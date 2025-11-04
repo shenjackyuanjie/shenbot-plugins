@@ -38,7 +38,7 @@ HELP_MSG = f"""鸿蒙应用市场信息查询-v{_version_}:
 /hm rank 获取应用市场下载量排名
 /hm down rank 获取近一天的下载量增量排行
 /hm substance <专题ID>
-或者直接发送应用市场链接/应用市场专题链接"""
+或者直接发送应用市场链接/应用市场专题/游戏中心链接"""
 
 MARKET_PREFIX = "https://appgallery.huawei.com/app/detail?id="
 SUBSTANCE_PREFIX = "https://appgallery.huawei.com/substance/detail?id="
