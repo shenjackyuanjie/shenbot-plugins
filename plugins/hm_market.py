@@ -160,20 +160,20 @@ def format_data(data: dict) -> str:
         if not data['new_info'] and not data['new_metric'] and not data['new_rating']:
             _ = cache.write("应用信息无更新")
             _ = cache.write("\n")
-        app = data['full_info']
-        _ = cache.write(f"包名: {app['pkg_name']} app_id: {app['app_id']}\n")
-        _ = cache.write(f"名称: {app['name']}[{app['version']}] 类型: {app["kind_name"]}-{app['kind_type_name']}\n")
-        _ = cache.write(f"下载量: {format_number(app['download_count'])} 评分: {app['info_score']}({app['info_rate_count']}) ")
-        if 'average_rating' in app and app['average_rating'] is not None:
-            _ = cache.write(f"显示评分: {app['average_rating']}[{app['total_star_rating_count']}]")
-            _ = cache.write(f"({app['star_1_rating_count']},{app['star_2_rating_count']},{app['star_3_rating_count']},")
-            _ = cache.write(f"{app['star_4_rating_count']},{app['star_5_rating_count']})\n")
-        else:
-            _ = cache.write("无评分卡片数据\n")
-        _ = cache.write(f"目标sdk: {app['target_sdk']} 最小sdk: {app['minsdk']} 应用版本代码: {app['version_code']}\n")
-        release_date = datetime.datetime.fromtimestamp(app['release_date'] / 1000.0)
-        _ = cache.write(f"应用更新日期: {release_date.strftime('%Y-%m-%d %H:%M:%S')}")
-        return cache.getvalue()
+    app = data['full_info']
+    _ = cache.write(f"包名: {app['pkg_name']} app_id: {app['app_id']}\n")
+    _ = cache.write(f"名称: {app['name']}[{app['version']}] 类型: {app["kind_name"]}-{app['kind_type_name']}\n")
+    _ = cache.write(f"下载量: {format_number(app['download_count'])} 评分: {app['info_score']}({app['info_rate_count']}) ")
+    if 'average_rating' in app and app['average_rating'] is not None:
+        _ = cache.write(f"显示评分: {app['average_rating']}[{app['total_star_rating_count']}]")
+        _ = cache.write(f"({app['star_1_rating_count']},{app['star_2_rating_count']},{app['star_3_rating_count']},")
+        _ = cache.write(f"{app['star_4_rating_count']},{app['star_5_rating_count']})\n")
+    else:
+        _ = cache.write("无评分卡片数据\n")
+    _ = cache.write(f"目标sdk: {app['target_sdk']} 最小sdk: {app['minsdk']} 应用版本代码: {app['version_code']}\n")
+    release_date = datetime.datetime.fromtimestamp(app['release_date'] / 1000.0)
+    _ = cache.write(f"应用更新日期: {release_date.strftime('%Y-%m-%d %H:%M:%S')}")
+    return cache.getvalue()
 
 def map_sender(name: str) -> str:
     if name == "You":
