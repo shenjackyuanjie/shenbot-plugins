@@ -13,7 +13,7 @@ import requests
 if TYPE_CHECKING:
     from ica_typing import IcaNewMessage, IcaClient
 
-_version_ = "0.8.3"
+_version_ = "0.8.4"
 
 API_URL: str
 
@@ -159,21 +159,21 @@ def format_data(data: dict) -> str:
             _ = cache.write("更新评分信息 ")
         if not data['new_info'] and not data['new_metric'] and not data['new_rating']:
             _ = cache.write("应用信息无更新")
-        _ = cache.write("\n")
-    _ = cache.write(f"包名: {data['info']['pkg_name']} app_id: {data['info']['app_id']}\n")
-    _ = cache.write(f"名称: {data['info']['name']}[{data['metric']['version']}] 类型: {data["info"]["kind_name"]}-{data['info']['kind_type_name']}\n")
-    _ = cache.write(f"下载量: {format_number(data['metric']['download_count'])} 评分: {data['metric']['info_score']}({data['metric']['info_rate_count']}) ")
-    if 'rating' in data and data['rating'] is not None:
-        rate = data['rating']
-        _ = cache.write(f"显示评分: {data['rating']['average_rating']}[{rate['total_star_rating_count']}]")
-        _ = cache.write(f"({rate['star_1_rating_count']},{rate['star_2_rating_count']},{rate['star_3_rating_count']},")
-        _ = cache.write(f"{rate['star_4_rating_count']},{rate['star_5_rating_count']})\n")
-    else:
-        _ = cache.write("无评分卡片数据\n")
-    _ = cache.write(f"目标sdk: {data['metric']['target_sdk']} 最小sdk: {data['metric']['minsdk']} 应用版本代码: {data['metric']['version_code']}\n")
-    release_date = datetime.datetime.fromtimestamp(data['metric']['release_date'] / 1000.0)
-    _ = cache.write(f"应用更新日期: {release_date.strftime('%Y-%m-%d %H:%M:%S')}")
-    return cache.getvalue()
+            _ = cache.write("\n")
+        app = data['full_info']
+        _ = cache.write(f"包名: {app['pkg_name']} app_id: {app['app_id']}\n")
+        _ = cache.write(f"名称: {app['name']}[{app['version']}] 类型: {app["kind_name"]}-{app['kind_type_name']}\n")
+        _ = cache.write(f"下载量: {format_number(app['download_count'])} 评分: {app['info_score']}({app['info_rate_count']}) ")
+        if 'average_rating' in app and app['average_rating'] is not None:
+            _ = cache.write(f"显示评分: {app['average_rating']}[{app['total_star_rating_count']}]")
+            _ = cache.write(f"({app['star_1_rating_count']},{app['star_2_rating_count']},{app['star_3_rating_count']},")
+            _ = cache.write(f"{app['star_4_rating_count']},{app['star_5_rating_count']})\n")
+        else:
+            _ = cache.write("无评分卡片数据\n")
+        _ = cache.write(f"目标sdk: {app['target_sdk']} 最小sdk: {app['minsdk']} 应用版本代码: {app['version_code']}\n")
+        release_date = datetime.datetime.fromtimestamp(app['release_date'] / 1000.0)
+        _ = cache.write(f"应用更新日期: {release_date.strftime('%Y-%m-%d %H:%M:%S')}")
+        return cache.getvalue()
 
 def map_sender(name: str) -> str:
     if name == "You":
@@ -264,11 +264,9 @@ def query_rank(msg: IcaNewMessage, client: IcaClient) -> None:
     if top_down_info is not None:
         top_down_data = top_down_info['data']
         for idx, app in enumerate(top_down_data):
-            app_info = app[0]
-            app_metric = app[1]
-            release_date = datetime.datetime.fromtimestamp(app_metric['release_date'] / 1000.0)
-            _ = cache.write(f"({idx + 1}) {app_info['name']} {app_info['kind_name']}-{app_info['kind_type_name']}\n")
-            _ = cache.write(f"下载量: {format_number(app_metric['download_count'])}\n")
+            release_date = datetime.datetime.fromtimestamp(app['release_date'] / 1000.0)
+            _ = cache.write(f"({idx + 1}) {app['name']} {app['kind_name']}-{app['kind_type_name']}\n")
+            _ = cache.write(f"下载量: {format_number(app['download_count'])}\n")
             _ = cache.write(f"应用更新日期: {release_date.strftime('%Y-%m-%d %H:%M:%S')}\n")
     else:
         _ = cache.write("获取应用市场数据, 但是数据是空的")
@@ -277,11 +275,9 @@ def query_rank(msg: IcaNewMessage, client: IcaClient) -> None:
     if top_down_info is not None:
         top_down_data = top_down_info['data']
         for idx, app in enumerate(top_down_data):
-            app_info = app[0]
-            app_metric = app[1]
-            release_date = datetime.datetime.fromtimestamp(app_metric['release_date'] / 1000.0)
-            _ = cache.write(f"({idx + 1}) {app_info['name']} {app_info['kind_name']}-{app_info['kind_type_name']}\n")
-            _ = cache.write(f"下载量: {format_number(app_metric['download_count'])}\n")
+            release_date = datetime.datetime.fromtimestamp(app['release_date'] / 1000.0)
+            _ = cache.write(f"({idx + 1}) {app['name']} {app['kind_name']}-{app['kind_type_name']}\n")
+            _ = cache.write(f"下载量: {format_number(app['download_count'])}\n")
             _ = cache.write(f"应用更新日期: {release_date.strftime('%Y-%m-%d %H:%M:%S')}\n")
     else:
         _ = cache.write("获取应用市场数据, 但是数据是空的")
