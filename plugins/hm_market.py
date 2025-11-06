@@ -225,7 +225,7 @@ def fmt_info(show_sync: bool = False) -> str:
         cache = io.StringIO()
         _ = cache.write(f"鸿蒙next应用市场数据-{market_data['crate_version']}\n")
         _ = cache.write(f"爬取应用/元服务:{market_data['app_count']['total']}, 应用: {market_data['app_count']['apps']} 元服务: {market_data['app_count']['atomic_services']}\n")
-        _ = cache.write(f"已知开发者数量: {market_data['developer_count']}\n")
+        _ = cache.write(f"已知专题数量 {market_data['substance_count']} 已知开发者数量: {market_data['developer_count']}\n")
         if show_sync:
             _ = cache.write("同步状态\n")
             sync_statue = market_data['sync_status']
