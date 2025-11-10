@@ -261,9 +261,9 @@ def query_rank(msg: IcaNewMessage, client: IcaClient) -> None:
     _ = cache.write(fmt_info())
     _ = cache.write("\n")
     _ = cache.write("===所有应用的下载量排行===\n")
-    top_down_info = api_helper("apps/list/1?limit=5sort=download_count")
+    top_down_info = api_helper("apps/list/1?page_size=5sort=download_count")
     if top_down_info is not None:
-        top_down_data = top_down_info['data']
+        top_down_data = top_down_info['data']['data']
         for idx, app in enumerate(top_down_data):
             release_date = datetime.datetime.fromtimestamp(app['release_date'] / 1000.0)
             _ = cache.write(f"({idx + 1}) {app['name']} {app['kind_name']}-{app['kind_type_name']}-{app['tag_name']}\n")
@@ -272,9 +272,9 @@ def query_rank(msg: IcaNewMessage, client: IcaClient) -> None:
     else:
         _ = cache.write("获取应用市场数据, 但是数据是空的")
     _ = cache.write("===不包含华为内置应用的下载量排行===\n")
-    top_down_info = api_helper("apps/list/1?limit=5sort=download_count&exclude_huawei=true")
+    top_down_info = api_helper("apps/list/1?page_size=5sort=download_count&exclude_huawei=true")
     if top_down_info is not None:
-        top_down_data = top_down_info['data']
+        top_down_data = top_down_info['data']['data']
         for idx, app in enumerate(top_down_data):
             release_date = datetime.datetime.fromtimestamp(app['release_date'] / 1000.0)
             _ = cache.write(f"({idx + 1}) {app['name']} {app['kind_name']}-{app['kind_type_name']}-{app['tag_name']}\n")
