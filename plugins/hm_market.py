@@ -13,7 +13,7 @@ import requests
 if TYPE_CHECKING:
     from ica_typing import IcaNewMessage, IcaClient
 
-_version_ = "0.8.4"
+_version_ = "0.8.5"
 
 API_URL: str
 
@@ -163,7 +163,7 @@ def format_data(data: dict) -> str:
             _ = cache.write("\n")
     app = data['full_info']
     _ = cache.write(f"包名: {app['pkg_name']} app_id: {app['app_id']}\n")
-    _ = cache.write(f"名称: {app['name']}[{app['version']}] 类型: {app["kind_name"]}-{app['kind_type_name']}\n")
+    _ = cache.write(f"名称: {app['name']}[{app['version']}] 类型: {app["kind_name"]}-{app['kind_type_name']}-{app['tag_name']}\n")
     _ = cache.write(f"下载量: {format_number(app['download_count'])} 评分: {app['info_score']}({app['info_rate_count']}) ")
     if 'average_rating' in app and app['average_rating'] is not None:
         _ = cache.write(f"显示评分: {app['average_rating']}[{app['total_star_rating_count']}]")
@@ -266,7 +266,7 @@ def query_rank(msg: IcaNewMessage, client: IcaClient) -> None:
         top_down_data = top_down_info['data']
         for idx, app in enumerate(top_down_data):
             release_date = datetime.datetime.fromtimestamp(app['release_date'] / 1000.0)
-            _ = cache.write(f"({idx + 1}) {app['name']} {app['kind_name']}-{app['kind_type_name']}\n")
+            _ = cache.write(f"({idx + 1}) {app['name']} {app['kind_name']}-{app['kind_type_name']}-{app['tag_name']}\n")
             _ = cache.write(f"下载量: {format_number(app['download_count'])}\n")
             _ = cache.write(f"应用更新日期: {release_date.strftime('%Y-%m-%d %H:%M:%S')}\n")
     else:
@@ -277,7 +277,7 @@ def query_rank(msg: IcaNewMessage, client: IcaClient) -> None:
         top_down_data = top_down_info['data']
         for idx, app in enumerate(top_down_data):
             release_date = datetime.datetime.fromtimestamp(app['release_date'] / 1000.0)
-            _ = cache.write(f"({idx + 1}) {app['name']} {app['kind_name']}-{app['kind_type_name']}\n")
+            _ = cache.write(f"({idx + 1}) {app['name']} {app['kind_name']}-{app['kind_type_name']}-{app['tag_name']}\n")
             _ = cache.write(f"下载量: {format_number(app['download_count'])}\n")
             _ = cache.write(f"应用更新日期: {release_date.strftime('%Y-%m-%d %H:%M:%S')}\n")
     else:
@@ -297,10 +297,10 @@ def query_down_rank(msg: IcaNewMessage, client: IcaClient) -> None:
             _ = cache.write(f" {format_number(app['prior_download_count'])}+")
             _ = cache.write(format_number(app['download_increment']))
             _ = cache.write(f"={format_number(app['current_download_count'])}\n")
-    data = api_helper("rankings/download_increase?limit=10&days=7")
+    data = api_helper("rankings/download_increase?limit=10&days=1&exclude_huawei=true&listed_days=30")
     if data is not None:
-        _ = cache.write("===近一周下载量增量排行前十===\n")
-        _ = cache.write("上周 + 增量 = 今天\n")
+        _ = cache.write("===本月上架app下载量增量排行前十===\n")
+        _ = cache.write("昨天 + 增量 = 今天\n")
         data = data['data']
         for idx, app in enumerate(data):
             _ = cache.write(f"({idx + 1}) {app['name']}\n")
