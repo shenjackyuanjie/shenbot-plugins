@@ -261,7 +261,7 @@ def query_rank(msg: IcaNewMessage, client: IcaClient) -> None:
     _ = cache.write(fmt_info())
     _ = cache.write("\n")
     _ = cache.write("===所有应用的下载量排行===\n")
-    top_down_info = api_helper("apps/list/1?page_size=5sort=download_count")
+    top_down_info = api_helper("apps/list/1?page_size=5&sort=download_count")
     if top_down_info is not None:
         top_down_data = top_down_info['data']['data']
         for idx, app in enumerate(top_down_data):
@@ -272,7 +272,7 @@ def query_rank(msg: IcaNewMessage, client: IcaClient) -> None:
     else:
         _ = cache.write("获取应用市场数据, 但是数据是空的")
     _ = cache.write("===不包含华为内置应用的下载量排行===\n")
-    top_down_info = api_helper("apps/list/1?page_size=5sort=download_count&exclude_huawei=true")
+    top_down_info = api_helper("apps/list/1?page_size=5&sort=download_count&exclude_huawei=true")
     if top_down_info is not None:
         top_down_data = top_down_info['data']['data']
         for idx, app in enumerate(top_down_data):
