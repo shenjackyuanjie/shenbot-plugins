@@ -42,8 +42,7 @@ HELP_MSG = f"""鸿蒙应用市场信息查询-v{_version_}:
 
 MARKET_PREFIX = "https://appgallery.huawei.com/app/detail?id="
 SUBSTANCE_PREFIX = "https://appgallery.huawei.com/substance/detail?id="
-GAME_PREFIX = "https://game.cloud.huawei.com/gc/link/detail?id="
-GAME_PREFIX2 = "https://game.cloud.huawei.com/gc/link/orderDetail?appId="
+GAME_PREFIX = "https://game.cloud.huawei.com/gc/link/"
 
 # https://game.cloud.huawei.com/gc/link/orderDetail?appId=C6917562501903029895&shareFrom=button
 
@@ -320,7 +319,7 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
         substance_id = get_id_from_link(msg.content)
         print(f"获取到新的专题链接: {substance_id}")
         query_substance(msg, client, substance_id)
-    elif msg.content.startswith(GAME_PREFIX) or msg.content.startswith(GAME_PREFIX2):
+    elif msg.content.startswith(GAME_PREFIX):
         game_id = get_id_from_link(msg.content)
         print(f"获取到新的游戏链接: {game_id}")
         query_pkg(msg, client, game_id, "app_id")
