@@ -13,7 +13,7 @@ import requests
 if TYPE_CHECKING:
     from ica_typing import IcaNewMessage, IcaClient
 
-_version_ = "0.8.5"
+_version_ = "0.8.6"
 
 API_URL: str
 
@@ -43,6 +43,9 @@ HELP_MSG = f"""鸿蒙应用市场信息查询-v{_version_}:
 MARKET_PREFIX = "https://appgallery.huawei.com/app/detail?id="
 SUBSTANCE_PREFIX = "https://appgallery.huawei.com/substance/detail?id="
 GAME_PREFIX = "https://game.cloud.huawei.com/gc/link/detail?id="
+GAME_PREFIX2 = "https://game.cloud.huawei.com/gc/link/orderDetail?appId="
+
+# https://game.cloud.huawei.com/gc/link/orderDetail?appId=C6917562501903029895&shareFrom=button
 
 # https://appgallery.huawei.com/app/detail?id=com.bzl.bosszhipin&channelId=SHARE&source=appshare
 # -> com.bzl.bosszshipin
@@ -74,24 +77,18 @@ def format_number(number: int | str) -> str:
 def get_id_from_link(link: str) -> str:
     """
     从给定的链接中提取包名。
-
-    Args:
-        link: 包含包名的链接字符串。
-
     Returns:
         提取到的包名字符串。如果未找到，则返回空字符串。
     """
     if not link:
         return ""
-
-    # 正则表达式 (?:<=id=)[\w\.]+
-    # (?<=id=) 是一个后行断言，它会查找 "id="，但不会把它包含在匹配结果中。
-    # [\w\.]+ 匹配一个或多个字母、数字、下划线或点。
-    regex = r"(?<=id=)[a-zA-Z0-9_\.]+"  # 更精确的匹配 [\w\.] 等同于 [a-zA-Z0-9_\.]
+    # 正则表达式支持匹配 id= 或 appId= 后面的包名/应用ID
+    # 匹配模式: id=xxxx 或 appId=xxxx，其中xxxx由字母、数字、下划线或点组成
+    regex = r"(?:id=|appId=)([a-zA-Z0-9_\.]+)"
     match = re.search(regex, link)
 
     if match:
-        return match.group(0)  # group(0) 返回整个匹配的字符串
+        return match.group(1)  # group(1) 返回第一个捕获组的内容
     else:
         return ""
 
@@ -323,7 +320,7 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
         substance_id = get_id_from_link(msg.content)
         print(f"获取到新的专题链接: {substance_id}")
         query_substance(msg, client, substance_id)
-    elif msg.content.startswith(GAME_PREFIX):
+    elif msg.content.startswith(GAME_PREFIX) or msg.content.startswith(GAME_PREFIX2):
         game_id = get_id_from_link(msg.content)
         print(f"获取到新的游戏链接: {game_id}")
         query_pkg(msg, client, game_id, "app_id")
