@@ -13,7 +13,7 @@ import requests
 if TYPE_CHECKING:
     from ica_typing import IcaNewMessage, IcaClient
 
-_version_ = "0.8.6"
+_version_ = "0.8.7"
 
 API_URL: str
 
@@ -201,9 +201,12 @@ def query_pkg(msg: IcaNewMessage, client: IcaClient, pkg_name: str, method: str)
         reply = msg.reply_with(f"获取到新的包名: {pkg_name}, 但是数据是空的")
     _ = client.send_message(reply)
 
-def api_helper(method: str):
+def api_helper(method: str, post: bool = False):
     try:
-        data = requests.get(f"{API_URL}/api/v0/{method}")
+        if post:
+            data = requests.post(f"{API_URL}/api/v0/{method}")
+        else:
+            data = requests.get(f"{API_URL}/api/v0/{method}")
         json_data = data.json()
         if "error" in json_data or not json_data['success']:
             return None
@@ -214,7 +217,7 @@ def api_helper(method: str):
 
 def fmt_info(show_sync: bool = False) -> str:
     market_data = api_helper("market_info")
-    star_data = api_helper("charts/rating")
+    star_data = api_helper("charts/rating", post=True)
     if market_data is not None and star_data is not None:
         market_data = market_data['data']
         star_data = star_data['data']
