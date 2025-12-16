@@ -204,7 +204,7 @@ def query_pkg(msg: IcaNewMessage, client: IcaClient, pkg_name: str, method: str)
 def api_helper(method: str, post: bool = False):
     try:
         if post:
-            data = requests.post(f"{API_URL}/api/v0/{method}", json = {})
+            data = requests.post(f"{API_URL}/api/v0/{method}")
         else:
             data = requests.get(f"{API_URL}/api/v0/{method}")
         json_data = data.json()
