@@ -5,3 +5,5 @@ config/*
 *__pycache__*
 *.pyc
 .lh
+plugins/name_utils/tswn-cli
+plugins/name_utils/tswn-cli.exe

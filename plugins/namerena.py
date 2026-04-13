@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import io
+import re
+import shutil
 import sys
 import time
 import traceback
@@ -38,7 +40,7 @@ else:
     ReciveMessage = TypeVar("ReciveMessage")
     TailchatReciveMessage = TypeVar("TailchatReciveMessage")
 
-_version_ = "0.10.1"
+_version_ = "0.10.2"
 
 CMD_PREFIX = "/namer"
 
@@ -84,6 +86,10 @@ cfg = ConfigStorage(
     use_bun=False,
     # 是否启用遥测
     telemetry=True,
+    # 是否启用 tswn-cli 对比
+    use_tswn_compare=True,
+    # tswn-cli 路径, 支持直接填 exe / 仓库根目录 / crates/tswn_core
+    tswn_cli_path="",
 )
 
 PLUGIN_MANIFEST = PluginManifest(
@@ -96,13 +102,305 @@ PLUGIN_MANIFEST = PluginManifest(
 )
 
 USE_BUN = False
+USE_TSWN_COMPARE = True
+TSWN_CLI_PATH = ""
+TSWN_RUNNER: tuple[list[str], str | None] | None = None
+TSWN_RUNNER_FAILED = False
+TSWN_COMPARE_ROUNDS = 10000
+VERSION_CACHE: dict[tuple[str, ...], str | None] = {}
 
 
 def out_msg(cost_time: float) -> str:
     use_bun = USE_BUN
-    return (
-        f"耗时: {cost_time:.3f}s\n版本: {_version_}-{bun_hint if use_bun else 'node'}"
-    )
+    runtime = "bun" if use_bun else "node"
+    lines = [f"耗时: {cost_time:.3f}s", f"版本: {_version_}-{runtime}"]
+
+    runtime_version = get_runtime_version()
+    if runtime_version:
+        lines.append(f"{runtime}: {runtime_version}")
+
+    tswn_version = get_tswn_version()
+    if tswn_version:
+        lines.append(f"tswn: {tswn_version}")
+
+    if use_bun:
+        lines.append("powered by https://bun.sh")
+
+    return "\n".join(lines)
+
+
+def join_non_empty(*parts: str) -> str:
+    return "\n".join(part for part in parts if part)
+
+
+def _resolve_tswn_runner_candidate(
+    raw_path: str,
+) -> tuple[list[str], str | None] | None:
+    candidate = Path(raw_path)
+    if candidate.exists():
+        if candidate.is_file():
+            return [str(candidate)], None
+
+        crate_dir = candidate
+        if not (crate_dir / "Cargo.toml").exists():
+            nested_crate = candidate / "crates" / "tswn_core"
+            if (nested_crate / "Cargo.toml").exists():
+                crate_dir = nested_crate
+
+        workspace_dir = crate_dir
+        if crate_dir.name == "tswn_core" and crate_dir.parent.name == "crates":
+            workspace_dir = crate_dir.parent.parent
+
+        exe_name = "tswn-cli.exe" if sys.platform.startswith("win") else "tswn-cli"
+        for exe_path in (
+            workspace_dir / "target" / "debug" / exe_name,
+            workspace_dir / "target" / "release" / exe_name,
+        ):
+            if exe_path.exists():
+                return [str(exe_path)], None
+
+        if (crate_dir / "Cargo.toml").exists():
+            return ["cargo", "run", "--bin", "tswn-cli", "--"], str(crate_dir)
+
+    resolved = shutil.which(raw_path)
+    if resolved is not None:
+        return [resolved], None
+
+    return None
+
+
+def resolve_tswn_runner() -> tuple[list[str], str | None] | None:
+    global TSWN_RUNNER, TSWN_RUNNER_FAILED
+
+    if TSWN_RUNNER is not None:
+        return TSWN_RUNNER
+    if TSWN_RUNNER_FAILED:
+        return None
+
+    if TSWN_CLI_PATH.strip():
+        resolved = _resolve_tswn_runner_candidate(TSWN_CLI_PATH.strip())
+        if resolved is not None:
+            TSWN_RUNNER = resolved
+            return resolved
+
+    plugin_root = Path(__file__).resolve().parent
+    exe_name = "tswn-cli.exe" if sys.platform.startswith("win") else "tswn-cli"
+    for candidate in (
+        plugin_root / "name_utils" / exe_name,
+        plugin_root / "name_utils" / "tswn-cli",
+    ):
+        resolved = _resolve_tswn_runner_candidate(str(candidate))
+        if resolved is not None:
+            TSWN_RUNNER = resolved
+            return resolved
+
+    path_runner = _resolve_tswn_runner_candidate("tswn-cli")
+    if path_runner is not None:
+        TSWN_RUNNER = path_runner
+        return path_runner
+
+    workspace_root = Path(__file__).resolve().parent.parent
+    tswn_repo = workspace_root.parent.parent / "namer" / "tswn-core"
+    for candidate in (
+        tswn_repo / "target" / "debug" / exe_name,
+        tswn_repo / "target" / "release" / exe_name,
+        tswn_repo / "crates" / "tswn_core",
+        tswn_repo,
+    ):
+        resolved = _resolve_tswn_runner_candidate(str(candidate))
+        if resolved is not None:
+            TSWN_RUNNER = resolved
+            return resolved
+
+    TSWN_RUNNER_FAILED = True
+    return None
+
+
+def run_tswn_cli(input_text: str, *args: str) -> tuple[str, float] | None:
+    global TSWN_RUNNER_FAILED
+
+    if not USE_TSWN_COMPARE:
+        return None
+
+    runner = resolve_tswn_runner()
+    if runner is None:
+        return None
+
+    command, cwd = runner
+    start_time = time.time()
+    try:
+        result = subprocess.run(
+            [*command, *args],
+            input=input_text,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            text=True,
+            encoding="utf-8",
+            cwd=cwd,
+        )
+        output = (
+            result.stdout
+            if result.returncode == 0
+            else (result.stderr or result.stdout)
+        )
+    except FileNotFoundError:
+        TSWN_RUNNER_FAILED = True
+        return None
+    except Exception as e:
+        output = f"发生错误: {e}\n{traceback.format_exc()}"
+    return output.strip(), time.time() - start_time
+
+
+def last_non_empty_line(output: str) -> str:
+    for line in reversed(output.splitlines()):
+        if line.strip():
+            return line.strip()
+    return ""
+
+
+def resolve_command_version(command: list[str], cwd: str | None = None) -> str | None:
+    cache_key = tuple([*command, f"cwd={cwd or ''}"])
+    if cache_key in VERSION_CACHE:
+        return VERSION_CACHE[cache_key]
+
+    try:
+        result = subprocess.run(
+            [*command, "--version"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            text=True,
+            encoding="utf-8",
+            cwd=cwd,
+        )
+    except Exception:
+        VERSION_CACHE[cache_key] = None
+        return None
+
+    output = result.stdout or result.stderr
+    version = last_non_empty_line(output)
+    VERSION_CACHE[cache_key] = version or None
+    return VERSION_CACHE[cache_key]
+
+
+def get_runtime_version() -> str | None:
+    return resolve_command_version(["bun" if USE_BUN else "node"])
+
+
+def get_tswn_version() -> str | None:
+    if not USE_TSWN_COMPARE:
+        return None
+
+    runner = resolve_tswn_runner()
+    if runner is None:
+        return None
+
+    command, cwd = runner
+    version = resolve_command_version(command, cwd)
+    if version is None:
+        return None
+    if version.startswith("tswn-cli "):
+        return version[len("tswn-cli ") :]
+    return version
+
+
+def is_bench_input(input_text: str) -> bool:
+    raw = input_text.lstrip("\ufeff").lstrip()
+    return raw.startswith("!test!")
+
+
+def parse_tswn_winner_names(output: str) -> list[str]:
+    winners = []
+    in_winner_block = False
+    for raw_line in output.splitlines():
+        line = raw_line.strip()
+        if line == "赢家:":
+            in_winner_block = True
+            continue
+        if not in_winner_block:
+            continue
+        if line.startswith("总战斗分:") or line.startswith("win_idx="):
+            break
+        if line.startswith("- "):
+            winners.append(line[2:].split(" (", 1)[0])
+    return winners
+
+
+def summarize_tswn_fight(output: str) -> str:
+    winners = parse_tswn_winner_names(output)
+    win_idx = ""
+    unresolved = ""
+    for raw_line in output.splitlines():
+        line = raw_line.strip()
+        if line.startswith("win_idx="):
+            win_idx = line
+        elif "未分出胜负" in line:
+            unresolved = line
+
+    parts = []
+    if winners:
+        parts.append(f"赢家={'|'.join(winners)}")
+    elif unresolved:
+        parts.append(unresolved)
+    if win_idx:
+        parts.append(win_idx)
+    if parts:
+        return ", ".join(parts)
+    return last_non_empty_line(output) or "无结果"
+
+
+def summarize_tswn_fight_for_names(output: str, names: list[str]) -> str:
+    winners = parse_tswn_winner_names(output)
+    if len(winners) == 1 and winners[0] in names:
+        return str(names.index(winners[0]))
+    if winners:
+        return "|".join(winners)
+    return summarize_tswn_fight(output)
+
+
+def summarize_tswn_bench(output: str) -> str:
+    normal_score = ""
+    bang_score = ""
+    win_rate = ""
+    for raw_line in output.splitlines():
+        line = raw_line.strip()
+        normal_match = re.search(r"普通评分:\s*[^\r\n(]+", line)
+        bang_match = re.search(r"!评分:\s*[^\r\n(]+", line)
+        win_rate_match = re.search(r"胜率:\s*[^\r\n(]+", line)
+
+        if normal_match is not None:
+            normal_score = normal_match.group(0).strip()
+        if bang_match is not None:
+            bang_score = bang_match.group(0).strip()
+        if win_rate_match is not None:
+            win_rate = win_rate_match.group(0).strip()
+
+    if normal_score or bang_score:
+        return " / ".join(part for part in (normal_score, bang_score) if part)
+    if win_rate:
+        return win_rate
+    return last_non_empty_line(output) or "无结果"
+
+
+def run_tswn_fight_compare(input_text: str) -> tuple[str, float] | None:
+    result = run_tswn_cli(input_text, "fight")
+    if result is None:
+        return None
+    return summarize_tswn_fight(result[0]), result[1]
+
+
+def run_tswn_bench_compare(input_text: str) -> tuple[str, float] | None:
+    result = run_tswn_cli(input_text, "raw", "-n", str(TSWN_COMPARE_ROUNDS))
+    if result is None:
+        return None
+    return summarize_tswn_bench(result[0]), result[1]
+
+
+def run_tswn_compare(input_text: str) -> tuple[str, float] | None:
+    if is_bench_input(input_text):
+        return run_tswn_bench_compare(input_text)
+    return run_tswn_fight_compare(input_text)
 
 
 def convert_name(msg: ReciveMessage, client) -> None:
@@ -306,7 +604,15 @@ def eval_fight(msg: ReciveMessage, client) -> None:
         return
 
     result = run_namerena(names)
-    client.send_message(msg.reply_with(f"{result[0]}\n{out_msg(result[1])}"))
+    tswn_result = run_tswn_compare(names)
+    compare_line = (
+        f"tswn: {tswn_result[0]}-{tswn_result[1]:.2f}s"
+        if tswn_result is not None
+        else ""
+    )
+    client.send_message(
+        msg.reply_with(join_non_empty(result[0], compare_line, out_msg(result[1])))
+    )
 
 
 def run_fights(msg: ReciveMessage, client) -> None:
@@ -324,21 +630,40 @@ def run_fights(msg: ReciveMessage, client) -> None:
     # 以换行分割
     fights = content.split("\n")
     results = []
+    tswn_results = []
+    tswn_total_time = 0.0
+    has_tswn_compare = USE_TSWN_COMPARE and resolve_tswn_runner() is not None
     start_time = time.time()
     for fight in fights:
         # 以 + 分割
         names = fight.split("+")
         if len(names) < 2:
             results.append(f"输入错误, 只有{len(names)} 个部分")
+            if has_tswn_compare:
+                tswn_results.append(f"输入错误, 只有{len(names)} 个部分")
             continue
         result = run_namerena("\n".join(names), fight_mode=True)[0]
         if result in names:
             results.append(f"{names.index(result)}")
         else:
             results.append(result)
+        tswn_result = (
+            run_tswn_cli("\n".join(names), "fight") if has_tswn_compare else None
+        )
+        if tswn_result is not None:
+            tswn_results.append(summarize_tswn_fight_for_names(tswn_result[0], names))
+            tswn_total_time += tswn_result[1]
     # 输出
     end_time = time.time()
-    reply = msg.reply_with(f"{'|'.join(results)}\n{out_msg(end_time - start_time)}")
+    reply = msg.reply_with(
+        join_non_empty(
+            "|".join(results),
+            f"tswn: {'|'.join(tswn_results)}-{tswn_total_time:.2f}s"
+            if tswn_results
+            else "",
+            out_msg(end_time - start_time),
+        )
+    )
     client.send_message(reply)
 
 
@@ -360,12 +685,26 @@ def eval_score(msg: ReciveMessage, client, template: str) -> None:
         name = "\n".join(name)
         runs = template.format(test=name)
         result = run_namerena(runs)
+        tswn_result = run_tswn_bench_compare(runs)
         # 只取最后一行括号之前的内容
         last_line = result[0].split("\n")[-1]
         last_line = last_line.split("(")[0]
-        results.append([last_line, result[1]])
+        results.append(
+            [
+                last_line,
+                result[1],
+                tswn_result[0] if tswn_result is not None else "",
+                tswn_result[1] if tswn_result is not None else 0.0,
+            ]
+        )
     end_time = time.time()
-    content = "\n".join((f"{score}-{cost_time:.2f}s" for (score, cost_time) in results))
+    content = "\n".join(
+        (
+            f"{score}-{cost_time:.2f}s"
+            + (f" | tswn: {tswn_score}-{tswn_cost:.2f}s" if tswn_score else "")
+        )
+        for (score, cost_time, tswn_score, tswn_cost) in results
+    )
     reply = msg.reply_with(f"{content}\n{out_msg(end_time - start_time)}")
     client.send_message(reply)
 
@@ -380,9 +719,11 @@ def score_all(msg: ReciveMessage, client) -> None:
         return
     names = content.split("\n")
     results = []
+    has_tswn_compare = USE_TSWN_COMPARE and resolve_tswn_runner() is not None
     client.send_message(
         msg.reply_with(
             f"开始计算, 预计一个至少需要11s的时间, 大约需要 {len(names) * 11}s"
+            + ("\n已启用 tswn 对比, 总耗时会更久" if has_tswn_compare else "")
         )
     )
     start_time = time.time()
@@ -395,6 +736,8 @@ def score_all(msg: ReciveMessage, client) -> None:
     for name in names:
         scores = []
         all_time = 0
+        tswn_scores = []
+        tswn_all_time = 0.0
         for run in runs:
             if name.strip() == "":
                 continue
@@ -402,6 +745,7 @@ def score_all(msg: ReciveMessage, client) -> None:
             name = "\n".join(name)
             bench = run.format(test=name)
             result = run_namerena(bench)
+            tswn_result = run_tswn_bench_compare(bench)
             cost_time = result[1]
             all_time += cost_time
             # 只取最后一行括号之前的内容
@@ -410,11 +754,20 @@ def score_all(msg: ReciveMessage, client) -> None:
             if last_line.endswith(".00"):
                 last_line = last_line[:-3]
             scores.append(last_line)
+            if tswn_result is not None:
+                tswn_scores.append(tswn_result[0])
+                tswn_all_time += tswn_result[1]
         if all(x.isdigit() for x in scores):
             scores.append(str(sum(map(int, scores))))
-        results.append(["|".join(scores), all_time])
+        results.append(["|".join(scores), all_time, tswn_scores, tswn_all_time])
     end_time = time.time()
-    content = "\n".join((f"{score}-{cost_time:.2f}s" for (score, cost_time) in results))
+    content = "\n".join(
+        join_non_empty(
+            f"{score}-{cost_time:.2f}s",
+            f"tswn: {' | '.join(tswn_scores)}-{tswn_cost:.2f}s" if tswn_scores else "",
+        )
+        for (score, cost_time, tswn_scores, tswn_cost) in results
+    )
     reply = msg.reply_with(f"pp|pd|qp|qd\n{content}\n{out_msg(end_time - start_time)}")
     client.send_message(reply)
 
@@ -459,7 +812,21 @@ def on_tailchat_message(msg: TailchatReciveMessage, client) -> None:
 
 
 def on_load() -> None:
-    global USE_BUN
-    USE_BUN = PLUGIN_MANIFEST.config_unchecked("main").get_value("use_bun") or False
+    global \
+        USE_BUN, \
+        USE_TSWN_COMPARE, \
+        TSWN_CLI_PATH, \
+        TSWN_RUNNER, \
+        TSWN_RUNNER_FAILED, \
+        VERSION_CACHE
+
+    main_cfg = PLUGIN_MANIFEST.config_unchecked("main")
+    USE_BUN = main_cfg.get_value("use_bun") or False
+    use_tswn_compare = main_cfg.get_value("use_tswn_compare")
+    USE_TSWN_COMPARE = True if use_tswn_compare is None else bool(use_tswn_compare)
+    TSWN_CLI_PATH = str(main_cfg.get_value("tswn_cli_path") or "")
+    TSWN_RUNNER = None
+    TSWN_RUNNER_FAILED = False
+    VERSION_CACHE = {}
     # conn = get_db_connection()
     # conn.close()
