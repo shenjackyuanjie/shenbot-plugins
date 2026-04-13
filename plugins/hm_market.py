@@ -18,7 +18,7 @@ _version_ = "0.8.7"
 API_URL: str
 
 cfg = ConfigStorage(
-    api_url = "localhost:3000"
+    api_url = "localhost:10003"
 )
 
 
