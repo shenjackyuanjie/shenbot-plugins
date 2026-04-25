@@ -1,170 +1,114 @@
 """
 noticer.py - 本地 Webhook 提醒服务插件
-========================================
 
-启动一个本地 HTTP 服务器，接收外部 HTTP 请求并通过机器人客户端发送消息到指定的 QQ 群聊。
-适合在 CI/CD 流水线、定时任务、监控告警等场景中发送通知消息。
+启动本地 HTTP 服务，接收外部请求并通过 bot 发送消息到指定 QQ 群。
+适用于 CI/CD、定时任务、监控告警等场景。
 
-═══════════════════════════════════════════════════════════
-  🔧 配置说明 (noticer.toml)
-═══════════════════════════════════════════════════════════
-
-配置文件位于插件配置目录下的 `noticer.toml`，结构如下：
+# 配置 (noticer.toml)
 
 ```toml
 [main]
-host = "127.0.0.1"       # HTTP 监听地址，默认 127.0.0.1
-port = 10020             # HTTP 监听端口，默认 10020
+host = "127.0.0.1"   # 监听地址，默认 127.0.0.1
+port = 10020         # 监听端口，默认 10020
 
 [rooms]
 notice  = { id = -111111111, desc = "项目提醒群" }
 warning = { id = -222222222 }
-
-[rooms.bot]
-desc = "bot 群, 基本随便发"
-id = -12345
+# 可自由添加更多房间，desc 不填则自动生成 "{name} room"
 ```
 
-参数说明:
+# API
 
-  [main]
-    host   — 监听地址，建议保持 127.0.0.1 仅本地访问；如需公网访问请自行加反代/防火墙
-    port   — 监听端口，确保不与其它服务冲突
+💡 平台注意事项：
+  • **PowerShell**：`curl` 是 `Invoke-WebRequest` 的别名，参数不兼容。请用 `curl.exe`。
+  • **Git Bash / msys2**：`curl.exe` 可用，但终端输出编码是 GBK，含中文/Emoji 时会乱码。
+  • **Windows Terminal + PowerShell 7**：`curl.exe` 可直接写中文/Emoji，无编码问题。
+  • **Python**（任何平台）：完全无编码问题，推荐优先使用（见下方 POST /send 示例）。
 
-  [rooms]
-    每个房间使用内联表格式:
-      - `notice = { id = -111111111, desc = "项目提醒群" }`
-      - `warning = { id = -222222222 }`
-        (不指定 desc 时自动生成 "{name} room")
-
-═══════════════════════════════════════════════════════════
-  📡 API 端点
-═══════════════════════════════════════════════════════════
-
-─────────────────────────────────
-  GET  /
-─────────────────────────────────
-
-返回本 README 文档（即当前显示的内容），方便 curl 快速查阅使用说明。
-
+## GET / — 返回本文档
   curl http://127.0.0.1:10020/
 
-─────────────────────────────────
-  GET  /status
-─────────────────────────────────
-
-返回服务器状态 JSON，包含所有已配置的房间列表及信息。
-
+## GET /status — 服务状态（含房间列表）
   curl http://127.0.0.1:10020/status
+  → {"server":"noticer/0.3.0","status":"running","client_ready":true,"rooms":{...}}
 
-响应示例:
-  {
-    "server": "noticer/0.3.0",
-    "status": "running",
-    "client_ready": true,
-    "rooms": {
-      "notice": {
-        "room_id": -111111111,
-        "description": "项目提醒群",
-        "configured": true
-      },
-      "warning": {
-        "room_id": -222222222,
-        "description": "warning room",
-        "configured": true
-      }
-    }
-  }
-
-─────────────────────────────────
-  GET  /health
-─────────────────────────────────
-
-简单健康检查，返回服务是否运行以及客户端是否就绪。
-
+## GET /health — 健康检查
   curl http://127.0.0.1:10020/health
+  → {"status":"running","client_ready":true}
 
-响应示例:
-  {"status": "running", "client_ready": true}
+## POST /send — 发送消息
 
-─────────────────────────────────
-  POST /send
-─────────────────────────────────
+  # 方式 A：写文件 + curl（跨平台，推荐）
+  python -c "open('payload.json','w',encoding='utf-8').write('{\"room\":\"notice\",\"message\":\"🤖 任务完成！\\\\n耗时: 12.3s\"}')"
+  curl -X POST http://127.0.0.1:10020/send -H "Content-Type: application/json" -d @payload.json
 
-发送消息到指定房间。请求体为 JSON 格式。
+  # 方式 B：纯 Python（最可靠，一行搞定）
+  python -c "import urllib.request,json; d=json.dumps({'room':'notice','message':'🤖 任务完成！\\n耗时: 12.3s'}).encode(); r=urllib.request.Request('http://127.0.0.1:10020/send',data=d,headers={'Content-Type':'application/json'},method='POST'); print(urllib.request.urlopen(r).read().decode())"
 
-  curl -X POST http://127.0.0.1:10020/send \\
-    -H "Content-Type: application/json" \\
-    -d '{"room": "notice", "message": "🤖 任务已完成！\\n耗时: 12.3s"}'
+  参数:
+    room    - 房间名（必填，见 [rooms] 配置）
+    message - 消息内容（必填，支持 \\n 换行）
 
-请求体参数:
-  room    (string, 必填) — 房间名称，可选值取决于配置文件 [rooms] 中定义的房间
-  message (string, 必填) — 消息内容，支持 \\n 换行
+  成功: {"status":"ok","room":"notice"}
+  失败: {"error":"描述信息"}
 
-成功响应:
-  {"status": "ok", "room": "notice"}
+  错误码:
+    400 - room 缺失/未知/message 为空/房间未配置
+    404 - bot 未加入该群
+    503 - 客户端未就绪（需先向 bot 发条消息初始化）
+    500 - 发送失败
 
-错误响应:
-  {"error": "错误描述信息"}
+# 使用示例
 
-可能出现的错误:
-  - 400: room 参数缺失 / 未知 room / message 为空 / 房间未配置
-  - 404: 目标群不在机器人当前会话中（机器人可能未加入该群）
-  - 503: 机器人客户端尚未就绪（未收到任何消息）
-  - 500: 发送失败（内部错误）
-
-═══════════════════════════════════════════════════════════
-  💡 使用场景示例
-═══════════════════════════════════════════════════════════
-
-  # 查看服务状态
+  # 查看状态
   curl http://127.0.0.1:10020/status
 
-  # 发送提醒消息（如：构建成功）
-  curl -X POST http://127.0.0.1:10020/send \\
-    -H "Content-Type: application/json" \\
-    -d '{"room": "notice", "message": "✅ 前端构建成功\\n分支: main\\n提交: a1b2c3d"}'
+  # 构建成功通知（Linux/macOS/WSL，终端为 UTF-8，可直接 inline）
+  curl -X POST http://127.0.0.1:10020/send -H "Content-Type: application/json" \
+    -d '{"room":"notice","message":"✅ 构建成功\\n分支: main\\n提交: a1b2c3d"}'
 
-  # 发送警告消息（如：服务器负载过高）
-  curl -X POST http://127.0.0.1:10020/send \\
-    -H "Content-Type: application/json" \\
-    -d '{"room": "warning", "message": "⚠️ 服务器告警\\nCPU: 95%\\n内存: 87%\\n请及时处理！"}'
+  # 构建成功通知（纯 Python，任何平台都行）
+  python -c "import urllib.request,json; d=json.dumps({'room':'notice','message':'✅ 构建成功！\\n耗时: 12.3s'}).encode(); r=urllib.request.Request('http://127.0.0.1:10020/send',data=d,headers={'Content-Type':'application/json'}); print(urllib.request.urlopen(r).read().decode())"
 
-  # CI 流水线中使用 (GitHub Actions / GitLab CI)
-  curl -X POST http://127.0.0.1:10020/send \\
-    -H "Content-Type: application/json" \\
-    -d "{\\"room\\": \\"notice\\", \\"message\\": \\"🔨 CI 构建完成\\n项目: $CI_PROJECT_NAME\\n状态: $CI_JOB_STATUS\\"}"
+  # 服务器告警（用 Python 写文件，绕过所有编码问题）
+  python -c "open('payload.json','w',encoding='utf-8').write('{\"room\":\"warning\",\"message\":\"⚠️ 服务器告警\\\\nCPU: 95%\\\\n内存: 87%\"}')"
+  curl -X POST http://127.0.0.1:10020/send -H "Content-Type: application/json" -d @payload.json
 
-═══════════════════════════════════════════════════════════
-  🚀 拓展指南：添加自定义房间
-═══════════════════════════════════════════════════════════
+# ⚠️ Windows / GBK 编码注意事项
 
-插件会自动发现配置文件中 [rooms] 区定义的所有房间，无需修改代码即可使用。
+Windows 的 cmd/PowerShell 默认编码为 GBK，直接在 curl -d 参数中写中文/Emoji
+会导致服务端 UTF-8 JSON 解析失败：
+  invalid json: 'utf-8' codec can't decode byte ...
 
-示例 — 添加一个调试房间:
+解决办法：
 
-  1. 在 noticer.toml 的 [rooms] 区添加:
-       debug = { id = -333333333, desc = "调试群" }
+  1) 纯 Python 发送（推荐，各平台通用，无编码问题）
+       python -c "import urllib.request,json; d=json.dumps({'room':'notice','message':'你好 ✅'}).encode(); r=urllib.request.Request('http://127.0.0.1:10020/send',data=d,headers={'Content-Type':'application/json'}); print(urllib.request.urlopen(r).read().decode())"
 
-  2. 重载插件，即可使用 room="debug" 发送消息。
+  2) 用 Python 写 UTF-8 文件 + curl 发送（需要 curl 的场景）
+       Windows 的 echo 输出的是 GBK 而非 UTF-8，不要用 echo 写 JSON 文件。
+       用 Python 确保文件编码正确：
 
-desc 可选，不指定时自动生成为 "debug room"。
+       python -c "open('payload.json','w',encoding='utf-8').write('{\"room\":\"notice\",\"message\":\"你好 ✅\"}')"
+       curl -X POST http://127.0.0.1:10020/send -H "Content-Type: application/json" -d @payload.json
 
-═══════════════════════════════════════════════════════════
-  ❓ 常见问题
-═══════════════════════════════════════════════════════════
+  3) 用 PowerShell Invoke-RestMethod（仅限 PowerShell）
+       $body = @{ room="notice"; message="你好 ✅" } | ConvertTo-Json
+       Invoke-RestMethod -Uri http://127.0.0.1:10020/send -Method Post -Body $body -ContentType "application/json"
 
-  Q: 返回 404 "room not found in current session"?
-  A: 请确保机器人已经加入了目标 QQ 群，且群号与配置文件中的一致。
+# FAQ
 
-  Q: 返回 503 "bot client not ready yet"?
-  A: 插件启动后需要收到第一条消息才能捕获客户端实例。向机器人发送任意消息
-     （或在群里 @机器人 发消息）即可初始化。
+  Q: 404 "room not found in current session"?
+  A: 确保 bot 已加入目标群，且群号与配置一致。
+
+  Q: 503 "bot client not ready yet"?
+  A: 向 bot 发任意消息（或群里 @bot）即可初始化客户端。
 
   Q: 如何新增自定义房间?
-  A: 在配置文件的 [rooms] 下增加新的键值对即可，插件会自动发现。
-     可使用内联表格式自定义 desc，不写则自动生成 "{name} room"。
+  A: 在 noticer.toml 的 [rooms] 下添加键值对即可，插件自动发现。
 
+  Q: curl 报 utf-8 decode 错误?
+  A: Windows 终端编码问题。见上方「⚠️ Windows / GBK 编码注意事项」章节。
 """
 
 from __future__ import annotations
@@ -207,7 +151,7 @@ DEFAULT_PORT = 10020
 PLUGIN_MANIFEST = PluginManifest(
     plugin_id="noticer",
     name="Noticer 本地提醒服务",
-    version="0.3.0",
+    version="0.3.1",
     description="启动本地 HTTP 服务，接收外部请求并通过 bot 发送提醒/警告消息到指定群聊",
     authors=["your_name"],
     config={
