@@ -40,7 +40,7 @@ else:
     ReciveMessage = TypeVar("ReciveMessage")
     TailchatReciveMessage = TypeVar("TailchatReciveMessage")
 
-_version_ = "0.10.2"
+_version_ = "0.10.3"
 
 CMD_PREFIX = "/namer"
 
@@ -383,6 +383,45 @@ def summarize_tswn_bench(output: str) -> str:
     return last_non_empty_line(output) or "无结果"
 
 
+def _parse_win_rate_pct(text: str) -> float | None:
+    """从文本中提取胜率百分比数值, 如 '45.63%' -> 45.63"""
+    # 匹配 namerena 输出: 45.63%(10000) 或 最终胜率:|45.6300%|(10000轮)
+    m = re.search(r"(\d+\.?\d*)%", text)
+    if m is None:
+        return None
+    try:
+        return float(m.group(1))
+    except ValueError:
+        return None
+
+
+def _compute_bench_diff(
+    namerena_output: str, tswn_summary: str
+) -> str | None:
+    """计算 namerena 与 tswn 在胜率模式下的差值, 返回 'diff! = 2' 或 None"""
+    # 从 namerena 输出提取胜率: 优先取 最终胜率 行, 否则取最后一行
+    namerena_rate: float | None = None
+    for raw_line in namerena_output.splitlines():
+        line = raw_line.strip()
+        if line.startswith("最终胜率:"):
+            namerena_rate = _parse_win_rate_pct(line)
+            break
+    if namerena_rate is None:
+        # 取最后非空行
+        last = last_non_empty_line(namerena_output)
+        if last:
+            namerena_rate = _parse_win_rate_pct(last)
+
+    # 从 tswn 汇总提取胜率
+    tswn_rate = _parse_win_rate_pct(tswn_summary)
+
+    if namerena_rate is None or tswn_rate is None:
+        return None
+
+    diff = round(abs(namerena_rate - tswn_rate) * 100)
+    return f"diff! = {diff}"
+
+
 def run_tswn_fight_compare(input_text: str) -> tuple[str, float] | None:
     result = run_tswn_cli(input_text, "fight")
     if result is None:
@@ -610,8 +649,13 @@ def eval_fight(msg: ReciveMessage, client) -> None:
         if tswn_result is not None
         else ""
     )
+    diff_line = (
+        _compute_bench_diff(result[0], tswn_result[0]) or ""
+        if tswn_result is not None
+        else ""
+    )
     client.send_message(
-        msg.reply_with(join_non_empty(result[0], compare_line, out_msg(result[1])))
+        msg.reply_with(join_non_empty(result[0], compare_line, diff_line, out_msg(result[1])))
     )
 
 
@@ -689,21 +733,32 @@ def eval_score(msg: ReciveMessage, client, template: str) -> None:
         # 只取最后一行括号之前的内容
         last_line = result[0].split("\n")[-1]
         last_line = last_line.split("(")[0]
+
+        tswn_score = tswn_result[0] if tswn_result is not None else ""
+        tswn_cost = tswn_result[1] if tswn_result is not None else 0.0
+        diff_line = (
+            _compute_bench_diff(result[0], tswn_score)
+            if tswn_result is not None
+            else ""
+        )
+
         results.append(
             [
                 last_line,
                 result[1],
-                tswn_result[0] if tswn_result is not None else "",
-                tswn_result[1] if tswn_result is not None else 0.0,
+                tswn_score,
+                tswn_cost,
+                diff_line,
             ]
         )
     end_time = time.time()
     content = "\n".join(
-        (
-            f"{score}-{cost_time:.2f}s"
-            + (f" | tswn: {tswn_score}-{tswn_cost:.2f}s" if tswn_score else "")
+        join_non_empty(
+            f"{score}-{cost_time:.2f}s",
+            f"tswn: {tswn_score}-{tswn_cost:.2f}s" if tswn_score else "",
+            diff_line if diff_line else "",
         )
-        for (score, cost_time, tswn_score, tswn_cost) in results
+        for (score, cost_time, tswn_score, tswn_cost, diff_line) in results
     )
     reply = msg.reply_with(f"{content}\n{out_msg(end_time - start_time)}")
     client.send_message(reply)
@@ -738,6 +793,7 @@ def score_all(msg: ReciveMessage, client) -> None:
         all_time = 0
         tswn_scores = []
         tswn_all_time = 0.0
+        diffs = []
         for run in runs:
             if name.strip() == "":
                 continue
@@ -757,16 +813,21 @@ def score_all(msg: ReciveMessage, client) -> None:
             if tswn_result is not None:
                 tswn_scores.append(tswn_result[0])
                 tswn_all_time += tswn_result[1]
+                diff_line = _compute_bench_diff(result[0], tswn_result[0])
+                diffs.append(diff_line if diff_line else "")
+            else:
+                diffs.append("")
         if all(x.isdigit() for x in scores):
             scores.append(str(sum(map(int, scores))))
-        results.append(["|".join(scores), all_time, tswn_scores, tswn_all_time])
+        results.append(["|".join(scores), all_time, tswn_scores, tswn_all_time, diffs])
     end_time = time.time()
     content = "\n".join(
         join_non_empty(
             f"{score}-{cost_time:.2f}s",
             f"tswn: {' | '.join(tswn_scores)}-{tswn_cost:.2f}s" if tswn_scores else "",
+            f"diff: {' | '.join(diffs)}" if any(diffs) else "",
         )
-        for (score, cost_time, tswn_scores, tswn_cost) in results
+        for (score, cost_time, tswn_scores, tswn_cost, diffs) in results
     )
     reply = msg.reply_with(f"pp|pd|qp|qd\n{content}\n{out_msg(end_time - start_time)}")
     client.send_message(reply)
