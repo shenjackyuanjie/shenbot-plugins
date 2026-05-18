@@ -40,7 +40,7 @@ else:
     ReciveMessage = TypeVar("ReciveMessage")
     TailchatReciveMessage = TypeVar("TailchatReciveMessage")
 
-_version_ = "0.10.3"
+_version_ = "0.10.4"
 
 CMD_PREFIX = "/namer"
 
@@ -111,8 +111,8 @@ VERSION_CACHE: dict[tuple[str, ...], str | None] = {}
 
 
 def out_msg(cost_time: float) -> str:
-    use_bun = USE_BUN
-    runtime = "bun" if use_bun else "node"
+    runtime = get_js_runtime()
+    use_bun = runtime == "bun"
     lines = [f"耗时: {cost_time:.3f}s", f"版本: {_version_}-{runtime}"]
 
     runtime_version = get_runtime_version()
@@ -285,7 +285,11 @@ def resolve_command_version(command: list[str], cwd: str | None = None) -> str |
 
 
 def get_runtime_version() -> str | None:
-    return resolve_command_version(["bun" if USE_BUN else "node"])
+    return resolve_command_version([get_js_runtime()])
+
+
+def get_js_runtime() -> str:
+    return "node" if shutil.which("node") is not None else "bun"
 
 
 def get_tswn_version() -> str | None:
@@ -422,6 +426,60 @@ def _compute_bench_diff(
     return f"diff! = {diff}"
 
 
+PF_LABELS = ("pp", "pd", "qp", "qd")
+
+
+def _parse_pf_score_row(text: str) -> list[int] | None:
+    parts = text.strip().split("|")
+    if len(parts) < len(PF_LABELS):
+        return None
+    try:
+        return [int(float(part.strip())) for part in parts[: len(PF_LABELS)]]
+    except ValueError:
+        return None
+
+
+def _parse_tswn_pf_rows(output: str) -> list[list[int]]:
+    rows = []
+    for raw_line in output.splitlines():
+        line = raw_line.strip()
+        if not line or line == "pp|pd|qp|qd":
+            continue
+        row = _parse_pf_score_row(line)
+        if row is not None:
+            rows.append(row)
+    return rows
+
+
+def _compute_pf_diff_lines(
+    md5_score_rows: list[str], tswn_output: str
+) -> list[str]:
+    tswn_rows = _parse_tswn_pf_rows(tswn_output)
+    diff_lines = []
+
+    for idx, md5_score in enumerate(md5_score_rows):
+        md5_row = _parse_pf_score_row(md5_score)
+        tswn_row = tswn_rows[idx] if idx < len(tswn_rows) else None
+        if md5_row is None or tswn_row is None:
+            diff_lines.append(f"diff[{idx + 1}]: 无法解析")
+            continue
+
+        diffs = [
+            (label, abs(md5_value - tswn_value))
+            for label, md5_value, tswn_value in zip(PF_LABELS, md5_row, tswn_row)
+            if md5_value != tswn_value
+        ]
+        if diffs:
+            diff_lines.append(
+                f"diff[{idx + 1}]: "
+                + ", ".join(f"{label}={diff}" for label, diff in diffs)
+            )
+
+    if not diff_lines:
+        return ["diff = 0"]
+    return diff_lines
+
+
 def run_tswn_fight_compare(input_text: str) -> tuple[str, float] | None:
     result = run_tswn_cli(input_text, "fight")
     if result is None:
@@ -434,6 +492,13 @@ def run_tswn_bench_compare(input_text: str) -> tuple[str, float] | None:
     if result is None:
         return None
     return summarize_tswn_bench(result[0]), result[1]
+
+
+def run_tswn_pf_compare(input_text: str) -> tuple[str, float] | None:
+    result = run_tswn_cli(input_text, "namer-pf", "-n", str(TSWN_COMPARE_ROUNDS))
+    if result is None:
+        return None
+    return result[0], result[1]
 
 
 def run_tswn_compare(input_text: str) -> tuple[str, float] | None:
@@ -590,29 +655,29 @@ def convert_base(msg: ReciveMessage, client) -> None:
 def run_namerena(input_text: str, fight_mode: bool = False) -> tuple[str, float]:
     """运行namerena"""
     root_path = Path(__file__).parent
-    use_bun = USE_BUN
-    print(use_bun)
-    runner_path = root_path / "md5" / ("md5-api.ts" if use_bun else "md5-api.js")
+    runner_path = root_path / "md5" / "md5-api.js"
     if not runner_path.exists():
         return "未找到namerena运行文件", 0.0
-    run_cmd = ["bun" if use_bun else "node", runner_path]
+    run_cmd = [get_js_runtime(), str(runner_path), "any", str(TSWN_COMPARE_ROUNDS)]
     if fight_mode:
-        run_cmd += ["fight"]
+        run_cmd[2] = "fight"
 
     start_time = time.time()
     try:
-        with open(root_path / "md5" / "input.txt", "w", encoding="utf-8") as f:
-            f.write(input_text)
         result = subprocess.run(
             run_cmd,
+            input=input_text,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             check=False,
+            text=True,
+            encoding="utf-8",
+            cwd=root_path / "md5",
         )
         if result.returncode == 0:
-            result = result.stdout.decode("utf-8")
+            result = result.stdout
         else:
-            result = result.stderr.decode("utf-8")
+            result = result.stderr
     except Exception as e:
         result = f"发生错误: {e}\n{traceback.format_exc()}"
     end_time = time.time()
@@ -782,6 +847,7 @@ def score_all(msg: ReciveMessage, client) -> None:
         )
     )
     start_time = time.time()
+    tswn_pf_result = run_tswn_pf_compare(content) if has_tswn_compare else None
     runs = [
         "!test!\n\n{test}",
         "!test!\n\n{test}\n{test}",
@@ -801,7 +867,6 @@ def score_all(msg: ReciveMessage, client) -> None:
             name = "\n".join(name)
             bench = run.format(test=name)
             result = run_namerena(bench)
-            tswn_result = run_tswn_bench_compare(bench)
             cost_time = result[1]
             all_time += cost_time
             # 只取最后一行括号之前的内容
@@ -810,13 +875,7 @@ def score_all(msg: ReciveMessage, client) -> None:
             if last_line.endswith(".00"):
                 last_line = last_line[:-3]
             scores.append(last_line)
-            if tswn_result is not None:
-                tswn_scores.append(tswn_result[0])
-                tswn_all_time += tswn_result[1]
-                diff_line = _compute_bench_diff(result[0], tswn_result[0])
-                diffs.append(diff_line if diff_line else "")
-            else:
-                diffs.append("")
+            diffs.append("")
         if all(x.isdigit() for x in scores):
             scores.append(str(sum(map(int, scores))))
         results.append(["|".join(scores), all_time, tswn_scores, tswn_all_time, diffs])
@@ -824,12 +883,34 @@ def score_all(msg: ReciveMessage, client) -> None:
     content = "\n".join(
         join_non_empty(
             f"{score}-{cost_time:.2f}s",
-            f"tswn: {' | '.join(tswn_scores)}-{tswn_cost:.2f}s" if tswn_scores else "",
+            "",
             f"diff: {' | '.join(diffs)}" if any(diffs) else "",
         )
         for (score, cost_time, tswn_scores, tswn_cost, diffs) in results
     )
-    reply = msg.reply_with(f"pp|pd|qp|qd\n{content}\n{out_msg(end_time - start_time)}")
+    tswn_line = (
+        f"tswn:\n{tswn_pf_result[0]}-{tswn_pf_result[1]:.2f}s"
+        if tswn_pf_result is not None
+        else ""
+    )
+    pf_diff_line = (
+        "\n".join(
+            _compute_pf_diff_lines(
+                [score for (score, *_rest) in results],
+                tswn_pf_result[0],
+            )
+        )
+        if tswn_pf_result is not None
+        else ""
+    )
+    reply = msg.reply_with(
+        join_non_empty(
+            f"pp|pd|qp|qd\n{content}",
+            tswn_line,
+            pf_diff_line,
+            out_msg(end_time - start_time),
+        )
+    )
     client.send_message(reply)
 
 
