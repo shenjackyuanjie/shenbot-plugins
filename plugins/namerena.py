@@ -426,17 +426,20 @@ def _compute_bench_diff(
     return f"diff! = {diff}"
 
 
-PF_LABELS = ("pp", "pd", "qp", "qd")
+PF_LABELS = ("pp", "pd", "qp", "qd", "sum")
 
 
 def _parse_pf_score_row(text: str) -> list[int] | None:
     parts = text.strip().split("|")
-    if len(parts) < len(PF_LABELS):
+    if len(parts) < len(PF_LABELS) - 1:
         return None
     try:
-        return [int(float(part.strip())) for part in parts[: len(PF_LABELS)]]
+        values = [int(float(part.strip())) for part in parts[: len(PF_LABELS)]]
     except ValueError:
         return None
+    if len(values) == len(PF_LABELS) - 1:
+        values.append(sum(values))
+    return values
 
 
 def _parse_tswn_pf_rows(output: str) -> list[list[int]]:
@@ -456,12 +459,14 @@ def _compute_pf_diff_lines(
 ) -> list[str]:
     tswn_rows = _parse_tswn_pf_rows(tswn_output)
     diff_lines = []
+    multi_row = len(md5_score_rows) > 1
 
     for idx, md5_score in enumerate(md5_score_rows):
         md5_row = _parse_pf_score_row(md5_score)
         tswn_row = tswn_rows[idx] if idx < len(tswn_rows) else None
         if md5_row is None or tswn_row is None:
-            diff_lines.append(f"diff[{idx + 1}]: 无法解析")
+            prefix = f"diff[{idx + 1}]" if multi_row else "diff"
+            diff_lines.append(f"{prefix}: 无法解析")
             continue
 
         diffs = [
@@ -470,8 +475,9 @@ def _compute_pf_diff_lines(
             if md5_value != tswn_value
         ]
         if diffs:
+            prefix = f"diff[{idx + 1}]" if multi_row else "diff"
             diff_lines.append(
-                f"diff[{idx + 1}]: "
+                f"{prefix}: "
                 + ", ".join(f"{label}={diff}" for label, diff in diffs)
             )
 
@@ -655,7 +661,7 @@ def convert_base(msg: ReciveMessage, client) -> None:
 def run_namerena(input_text: str, fight_mode: bool = False) -> tuple[str, float]:
     """运行namerena"""
     root_path = Path(__file__).parent
-    runner_path = root_path / "md5" / "md5-api.js"
+    runner_path = (root_path / "md5" / "md5-api.js").resolve()
     if not runner_path.exists():
         return "未找到namerena运行文件", 0.0
     run_cmd = [get_js_runtime(), str(runner_path), "any", str(TSWN_COMPARE_ROUNDS)]
