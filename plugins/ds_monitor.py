@@ -66,11 +66,11 @@ _last_analyze_cmd_at: float = 0.0
 COMMAND_COOLDOWN_SECS = 60.0
 
 
-def _ds(msg: str) -> str:
+def ds(msg: str) -> str:
     return f"DS 监测：{msg}"
 
 
-def _log(msg: str) -> None:
+def log(msg: str) -> None:
     if _client is not None:
         try:
             _client.info(f"[ds-monitor] {msg}")
@@ -80,16 +80,17 @@ def _log(msg: str) -> None:
     print(f"[ds-monitor] {msg}")
 
 
-def _notify_error(msg: str, room_id: int | None = None) -> None:
+def notify_error(msg: str, room_id: int | None = None) -> None:
     """通过 QQ 报告错误"""
     try:
         if _client is not None:
-            _client.warn(_ds(msg))
+            _client.warn(ds(msg))
             if room_id is not None:
-                import urllib.request, json as _json
-                body = _json.dumps({
+                import urllib.request
+
+                body = json.dumps({
                     "room_id": room_id,
-                    "message": _ds(msg),
+                    "message": ds(msg),
                 }).encode()
                 req = urllib.request.Request(
                     "http://127.0.0.1:10020/send",
@@ -102,7 +103,7 @@ def _notify_error(msg: str, room_id: int | None = None) -> None:
         pass
 
 
-def _load_config() -> None:
+def load_config() -> None:
     global _binary_path, _config_path, _check_interval
 
     cfg = PLUGIN_MANIFEST.config_unchecked("ds_monitor")
@@ -118,12 +119,12 @@ def _load_config() -> None:
 
     raw_int = cfg.get_value("interval")
     try:
-        _check_interval = int(raw_int) if raw_int else 600
+        _check_interval = int(str(raw_int)) if raw_int else 600
     except (TypeError, ValueError):
         _check_interval = 600
 
 
-def _work_dir() -> str:
+def work_dir() -> str:
     # ds-monitor resolves relative paths in config.toml (output/settings)
     # from its current working directory. Run it from the config directory so
     # "output" and "claude-setting.json" point at web_craw/, not target/release/.
@@ -133,8 +134,8 @@ def _work_dir() -> str:
     return cwd
 
 
-def _output_dir() -> str:
-    base = _work_dir()
+def output_dir() -> str:
+    base = work_dir()
     output = "output"
     if _config_path and os.path.isfile(_config_path):
         try:
@@ -146,31 +147,31 @@ def _output_dir() -> str:
             if raw_output:
                 output = str(raw_output)
         except Exception as e:
-            _log(f"读取 output 配置失败，使用默认 output: {e}")
+            log(f"读取 output 配置失败，使用默认 output: {e}")
 
     if not os.path.isabs(output):
         output = os.path.join(base, output)
     return output
 
 
-def _base_args(command: str) -> list[str]:
+def base_args(command: str) -> list[str]:
     return [_binary_path, "--config", _config_path, command]
 
 
-def _validate_binary(room_id: int | None = None) -> bool:
+def validate_binary(room_id: int | None = None) -> bool:
     if not _binary_path or not os.path.isfile(_binary_path):
         msg = f"❌ ds-monitor 二进制不存在: {_binary_path}"
-        _log(msg)
-        _notify_error(msg, room_id)
+        log(msg)
+        notify_error(msg, room_id)
         return False
     return True
 
 
-def _run_binary(room_id: int | None = None) -> str:
-    if not _validate_binary(room_id):
+def run_binary(room_id: int | None = None) -> str:
+    if not validate_binary(room_id):
         return f"❌ ds-monitor 二进制不存在: {_binary_path}"
 
-    args = _base_args("check")
+    args = base_args("check")
     if room_id is not None:
         args.append(f"--noticer-room-id={room_id}")
         args.append(f"--room=room_{room_id}")
@@ -183,7 +184,7 @@ def _run_binary(room_id: int | None = None) -> str:
             encoding="utf-8",
             errors="replace",
             timeout=300,
-            cwd=_work_dir(),
+            cwd=work_dir(),
         )
         out = result.stdout
         if result.stderr:
@@ -191,21 +192,21 @@ def _run_binary(room_id: int | None = None) -> str:
         return out
     except subprocess.TimeoutExpired:
         msg = "❌ ds-monitor 检查超时 (300s)"
-        _log(msg)
-        _notify_error(msg, room_id)
+        log(msg)
+        notify_error(msg, room_id)
         return msg
     except Exception as e:
         msg = f"❌ ds-monitor 执行失败: {e}"
-        _log(msg)
-        _notify_error(msg, room_id)
+        log(msg)
+        notify_error(msg, room_id)
         return msg
 
 
-def _run_last_analyze(room_id: int | None = None) -> str:
-    if not _validate_binary(room_id):
+def run_last_analyze(room_id: int | None = None) -> str:
+    if not validate_binary(room_id):
         return f"❌ ds-monitor 二进制不存在: {_binary_path}"
 
-    args = _base_args("analyze-last")
+    args = base_args("analyze-last")
     if room_id is not None:
         args.append(f"--noticer-room-id={room_id}")
         args.append(f"--room=room_{room_id}")
@@ -218,7 +219,7 @@ def _run_last_analyze(room_id: int | None = None) -> str:
             encoding="utf-8",
             errors="replace",
             timeout=300,
-            cwd=_work_dir(),
+            cwd=work_dir(),
         )
         out = result.stdout
         if result.stderr:
@@ -226,24 +227,24 @@ def _run_last_analyze(room_id: int | None = None) -> str:
         return out
     except subprocess.TimeoutExpired:
         msg = "❌ ds-monitor 最近变更分析超时 (300s)"
-        _log(msg)
-        _notify_error(msg, room_id)
+        log(msg)
+        notify_error(msg, room_id)
         return msg
     except Exception as e:
         msg = f"❌ ds-monitor 最近变更分析失败: {e}"
-        _log(msg)
-        _notify_error(msg, room_id)
+        log(msg)
+        notify_error(msg, room_id)
         return msg
 
 
-def _handle_output_line(line: str) -> None:
+def handle_output_line(line: str) -> None:
     global _last_check_time, _last_change_time, _last_change_summary, _watch_summary_lines
 
     line = line.rstrip()
     if not line:
         return
 
-    _log(line[:300])
+    log(line[:300])
 
     if "检测到变化" in line:
         now = datetime.now(timezone.utc)
@@ -272,42 +273,42 @@ def _handle_output_line(line: str) -> None:
                 _watch_summary_lines = None
 
 
-def _watch_stdout_loop(proc: subprocess.Popen[str]) -> None:
+def watch_stdout_loop(proc: subprocess.Popen[str]) -> None:
     global _watch_process
 
     try:
         assert proc.stdout is not None
         for line in proc.stdout:
-            _handle_output_line(line)
+            handle_output_line(line)
     except Exception as e:
-        _log(f"watch 输出读取失败: {e}")
+        log(f"watch 输出读取失败: {e}")
     finally:
         code = proc.poll()
         with _watch_lock:
             if _watch_process is proc:
                 _watch_process = None
         if not _watch_stop_requested:
-            _log(f"watch 进程退出，exit={code}")
+            log(f"watch 进程退出，exit={code}")
 
 
-def _start_watch() -> bool:
+def start_watch() -> bool:
     global _watch_process, _watch_thread, _watch_stop_requested
 
     with _watch_lock:
         if _watch_process is not None and _watch_process.poll() is None:
             return True
 
-        if not _validate_binary():
+        if not validate_binary():
             return False
 
-        args = _base_args("watch")
+        args = base_args("watch")
         args.append(f"--interval={_check_interval}")
 
         _watch_stop_requested = False
         try:
             _watch_process = subprocess.Popen(
                 args,
-                cwd=_work_dir(),
+                cwd=work_dir(),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -320,21 +321,21 @@ def _start_watch() -> bool:
             )
         except Exception as e:
             _watch_process = None
-            _log(f"watch 启动失败: {e}")
-            _notify_error(f"❌ ds-monitor watch 启动失败: {e}")
+            log(f"watch 启动失败: {e}")
+            notify_error(f"❌ ds-monitor watch 启动失败: {e}")
             return False
 
         _watch_thread = threading.Thread(
-            target=_watch_stdout_loop,
+            target=watch_stdout_loop,
             args=(_watch_process,),
             daemon=True,
         )
         _watch_thread.start()
-        _log(f"watch 已启动 (pid={_watch_process.pid}, interval={_check_interval}s)")
+        log(f"watch 已启动 (pid={_watch_process.pid}, interval={_check_interval}s)")
         return True
 
 
-def _stop_watch(timeout: float = 10.0) -> None:
+def stop_watch(timeout: float = 10.0) -> None:
     global _watch_process, _watch_stop_requested
 
     with _watch_lock:
@@ -347,12 +348,12 @@ def _stop_watch(timeout: float = 10.0) -> None:
                 _watch_process = None
         return
 
-    _log(f"停止 watch 进程 (pid={proc.pid})")
+    log(f"停止 watch 进程 (pid={proc.pid})")
     proc.terminate()
     try:
         proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
-        _log(f"watch 进程未按时退出，强制结束进程树 (pid={proc.pid})")
+        log(f"watch 进程未按时退出，强制结束进程树 (pid={proc.pid})")
         if os.name == "nt":
             subprocess.run(
                 ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
@@ -364,22 +365,22 @@ def _stop_watch(timeout: float = 10.0) -> None:
         try:
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
-            _log(f"watch 进程 kill 后仍未退出 (pid={proc.pid})")
+            log(f"watch 进程 kill 后仍未退出 (pid={proc.pid})")
 
     with _watch_lock:
         if _watch_process is proc:
             _watch_process = None
 
 
-def _cooling_down(last_at: float) -> bool:
+def cooling_down(last_at: float) -> bool:
     return time.monotonic() - last_at < COMMAND_COOLDOWN_SECS
 
 
-def _is_admin(msg: "IcaNewMessage", client: "IcaClient") -> bool:
+def is_admin(msg: "IcaNewMessage", client: "IcaClient") -> bool:
     return msg.sender_id in client.status.admins
 
 
-def _count_diff_lines(diff: str) -> tuple[int, int]:
+def count_diff_lines(diff: str) -> tuple[int, int]:
     add = 0
     delete = 0
     for line in diff.splitlines():
@@ -390,7 +391,7 @@ def _count_diff_lines(diff: str) -> tuple[int, int]:
     return add, delete
 
 
-def _changed_files_from_diff(diff: str) -> list[str]:
+def changed_files_from_diff(diff: str) -> list[str]:
     files: list[str] = []
     for line in diff.splitlines():
         if line == "=== HTML UNIFIED DIFF ===":
@@ -401,18 +402,18 @@ def _changed_files_from_diff(diff: str) -> list[str]:
     return files[:8]
 
 
-def _latest_change_report() -> str:
-    output_dir = _output_dir()
-    if not os.path.isdir(output_dir):
-        return _ds(f"还没有历史输出目录: {output_dir}")
+def latest_change_report() -> str:
+    latest_output_dir = output_dir()
+    if not os.path.isdir(latest_output_dir):
+        return ds(f"还没有历史输出目录: {latest_output_dir}")
 
     try:
-        names = sorted(os.listdir(output_dir), reverse=True)
+        names = sorted(os.listdir(latest_output_dir), reverse=True)
     except OSError as e:
-        return _ds(f"读取历史输出目录失败: {e}")
+        return ds(f"读取历史输出目录失败: {e}")
 
     for name in names:
-        path = os.path.join(output_dir, name)
+        path = os.path.join(latest_output_dir, name)
         if not os.path.isdir(path):
             continue
 
@@ -427,16 +428,16 @@ def _latest_change_report() -> str:
                 with open(metadata_path, "r", encoding="utf-8") as f:
                     metadata = json.load(f)
             except Exception as e:
-                _log(f"读取最近变更 metadata 失败: {e}")
+                log(f"读取最近变更 metadata 失败: {e}")
 
         try:
             with open(diff_path, "r", encoding="utf-8", errors="replace") as f:
                 diff = f.read()
         except OSError as e:
-            return _ds(f"读取最近变更 diff 失败: {e}")
+            return ds(f"读取最近变更 diff 失败: {e}")
 
-        add, delete = _count_diff_lines(diff)
-        changed_files = _changed_files_from_diff(diff)
+        add, delete = count_diff_lines(diff)
+        changed_files = changed_files_from_diff(diff)
         lines = [
             "DS 监测：最近一次网页修改",
             f"时间: {metadata.get('timestamp', name)}",
@@ -452,17 +453,17 @@ def _latest_change_report() -> str:
         lines.append(f"目录: {name}")
         return "\n".join(lines)
 
-    return _ds("还没有记录到带 diff 的历史网页修改")
+    return ds("还没有记录到带 diff 的历史网页修改")
 
 
-def _do_check(room_id: int | None = None) -> None:
+def do_check(room_id: int | None = None) -> None:
     global _last_check_time, _last_change_time, _last_change_summary
 
     if not _enabled and room_id is None:
         return
 
-    _log("开始检查...")
-    output = _run_binary(room_id)
+    log("开始检查...")
+    output = run_binary(room_id)
     _last_check_time = datetime.now(timezone.utc)
 
     if "检测到变化" in output:
@@ -480,23 +481,23 @@ def _do_check(room_id: int | None = None) -> None:
                 if stripped:
                     summary_lines.append(stripped)
         _last_change_summary = "\n".join(summary_lines) if summary_lines else "检测到页面变更"
-        _log(f"检测到变化！{_last_change_summary[:100]}")
+        log(f"检测到变化！{_last_change_summary[:100]}")
     elif "无变化" in output:
-        _log("无变化")
+        log("无变化")
     else:
-        _log(f"检查结果: {output[:120]}")
+        log(f"检查结果: {output[:120]}")
 
 
 def on_load() -> None:
-    _load_config()
-    _log(f"加载完成 (binary={_binary_path}, interval={_check_interval}s)")
+    load_config()
+    log(f"加载完成 (binary={_binary_path}, interval={_check_interval}s)")
     if _enabled:
-        _start_watch()
+        start_watch()
 
 
 def on_unload() -> None:
-    _stop_watch()
-    _log("卸载")
+    stop_watch()
+    log("卸载")
 
 
 def on_ica_message(msg: "IcaNewMessage", client: "IcaClient") -> None:
@@ -513,22 +514,22 @@ def on_ica_message(msg: "IcaNewMessage", client: "IcaClient") -> None:
         return
 
     if content == "/monitor":
-        _cmd_status(msg, client)
+        cmd_status(msg, client)
     elif content == "/monitor check":
-        _cmd_check(msg, client)
+        cmd_check(msg, client)
     elif content == "/monitor last analyze":
-        _cmd_last_analyze(msg, client)
+        cmd_last_analyze(msg, client)
     elif content == "/monitor last":
-        _cmd_last(msg, client)
+        cmd_last(msg, client)
     elif content == "/monitor on":
-        _cmd_enable(msg, client, True)
+        cmd_enable(msg, client, True)
     elif content == "/monitor off":
-        _cmd_enable(msg, client, False)
+        cmd_enable(msg, client, False)
     elif content == "/monitor help":
-        _cmd_help(msg, client)
+        cmd_help(msg, client)
 
 
-def _cmd_status(msg: "IcaNewMessage", client: "IcaClient") -> None:
+def cmd_status(msg: "IcaNewMessage", client: "IcaClient") -> None:
     lines = [
         "🔍 DS 监测：DeepSeek 网页监测",
         f"状态: {'✅ 运行中' if _enabled and _watch_process is not None and _watch_process.poll() is None else '⏸ 已暂停'}",
@@ -550,41 +551,41 @@ def _cmd_status(msg: "IcaNewMessage", client: "IcaClient") -> None:
     client.send_message(msg.reply_with("\n".join(lines)))
 
 
-def _cmd_check(msg: "IcaNewMessage", client: "IcaClient") -> None:
+def cmd_check(msg: "IcaNewMessage", client: "IcaClient") -> None:
     global _enabled, _last_restart_cmd_at
 
-    if _cooling_down(_last_restart_cmd_at):
+    if cooling_down(_last_restart_cmd_at):
         return
 
     _last_restart_cmd_at = time.monotonic()
     _enabled = True
-    client.send_message(msg.reply_with(_ds("正在重启 watch，启动后会立即检查")))
+    client.send_message(msg.reply_with(ds("正在重启 watch，启动后会立即检查")))
 
-    def _restart() -> None:
-        _stop_watch()
-        ok = _start_watch()
+    def restart() -> None:
+        stop_watch()
+        ok = start_watch()
         client.send_message(
-            msg.reply_with(_ds("watch 已重启") if ok else _ds("watch 重启失败"))
+            msg.reply_with(ds("watch 已重启") if ok else ds("watch 重启失败"))
         )
 
-    threading.Thread(target=_restart, daemon=True).start()
+    threading.Thread(target=restart, daemon=True).start()
 
 
-def _cmd_last(msg: "IcaNewMessage", client: "IcaClient") -> None:
+def cmd_last(msg: "IcaNewMessage", client: "IcaClient") -> None:
     global _last_recent_cmd_at
 
-    if _cooling_down(_last_recent_cmd_at):
+    if cooling_down(_last_recent_cmd_at):
         return
 
     _last_recent_cmd_at = time.monotonic()
-    client.send_message(msg.reply_with(_latest_change_report()))
+    client.send_message(msg.reply_with(latest_change_report()))
 
 
-def _cmd_last_analyze(msg: "IcaNewMessage", client: "IcaClient") -> None:
+def cmd_last_analyze(msg: "IcaNewMessage", client: "IcaClient") -> None:
     global _last_analyze_cmd_at
 
-    report = _latest_change_report()
-    if not _is_admin(msg, client):
+    report = latest_change_report()
+    if not is_admin(msg, client):
         client.send_message(
             msg.reply_with(
                 report + "\n\n只有管理员才能触发 Claude code分析"
@@ -592,44 +593,44 @@ def _cmd_last_analyze(msg: "IcaNewMessage", client: "IcaClient") -> None:
         )
         return
 
-    if _cooling_down(_last_analyze_cmd_at):
+    if cooling_down(_last_analyze_cmd_at):
         return
 
     _last_analyze_cmd_at = time.monotonic()
     room_id = int(msg.room_id)
-    client.send_message(msg.reply_with(_ds("正在触发最近一次变更的 Claude Code 分析")))
+    client.send_message(msg.reply_with(ds("正在触发最近一次变更的 Claude Code 分析")))
 
-    def _analyze() -> None:
-        output = _run_last_analyze(room_id)
-        _log(f"最近变更分析结果: {output[:500]}")
+    def analyze() -> None:
+        output = run_last_analyze(room_id)
+        log(f"最近变更分析结果: {output[:500]}")
         if "没有找到带 diff 的历史变更" in output:
-            client.send_message(msg.reply_with(_ds("没有找到带 diff 的历史变更")))
+            client.send_message(msg.reply_with(ds("没有找到带 diff 的历史变更")))
         elif "分析失败" in output or "❌" in output:
-            client.send_message(msg.reply_with(_ds(f"最近变更分析失败:\n{output[:800]}")))
+            client.send_message(msg.reply_with(ds(f"最近变更分析失败:\n{output[:800]}")))
         elif "已发送最近一次变更分析" in output:
             client.send_message(
                 msg.reply_with(
-                    _latest_change_report()
+                    latest_change_report()
                     + "\n\n"
-                    + _ds("最近一次变更的 Claude Code 分析已发送")
+                    + ds("最近一次变更的 Claude Code 分析已发送")
                 )
             )
 
-    threading.Thread(target=_analyze, daemon=True).start()
+    threading.Thread(target=analyze, daemon=True).start()
 
 
-def _cmd_enable(msg: "IcaNewMessage", client: "IcaClient", on: bool) -> None:
+def cmd_enable(msg: "IcaNewMessage", client: "IcaClient", on: bool) -> None:
     global _enabled
     _enabled = on
     if on:
-        ok = _start_watch()
-        client.send_message(msg.reply_with(_ds("监测已开启") if ok else _ds("监测启动失败")))
+        ok = start_watch()
+        client.send_message(msg.reply_with(ds("监测已开启") if ok else ds("监测启动失败")))
     else:
-        _stop_watch()
-        client.send_message(msg.reply_with(_ds("监测已暂停")))
+        stop_watch()
+        client.send_message(msg.reply_with(ds("监测已暂停")))
 
 
-def _cmd_help(msg: "IcaNewMessage", client: "IcaClient") -> None:
+def cmd_help(msg: "IcaNewMessage", client: "IcaClient") -> None:
     client.send_message(
         msg.reply_with(
             "🔍 DS 监测：DeepSeek 网页监测\n"
