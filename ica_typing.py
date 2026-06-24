@@ -367,6 +367,67 @@ class IcaClient:
         ...
 
 
+class IcaJoinRequest:
+    """
+    Icalingua 接收到入群请求
+    """
+
+    @property
+    def comment(self) -> str:
+        """入群请求的附言"""
+        ...
+
+    @property
+    def group_id(self) -> IcaType.RoomId:
+        """群号"""
+        ...
+
+    @property
+    def group_name(self) -> str:
+        """群名称"""
+        ...
+
+    @property
+    def user_id(self) -> IcaType.UserId:
+        """请求者 QQ"""
+        ...
+
+    @property
+    def nickname(self) -> str:
+        """请求者昵称"""
+        ...
+
+    @property
+    def request_type(self) -> str:
+        """请求类型"""
+        ...
+
+    @property
+    def post_type(self) -> str:
+        """事件类型"""
+        ...
+
+    @property
+    def sub_type(self) -> str:
+        """子类型 (add/invite)"""
+        ...
+
+    @property
+    def time(self) -> int:
+        """请求时间 (时间戳)"""
+        ...
+
+    @property
+    def tips(self) -> str:
+        """提示信息"""
+        ...
+
+    @property
+    def flag(self) -> str:
+        """用于处理请求的 flag"""
+        ...
+
+
 class TailchatReciveMessage:
     """
     Tailchat 接收到的新消息
