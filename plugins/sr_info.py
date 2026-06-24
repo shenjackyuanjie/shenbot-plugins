@@ -11,7 +11,7 @@ import requests
 if TYPE_CHECKING:
     from ica_typing import IcaNewMessage, IcaClient
 
-_version_ = "0.2.0"
+VERSION = "0.2.1"
 
 CMD_PREFIX = "/sr"
 HELP_CMD = f"{CMD_PREFIX} help"
@@ -20,7 +20,7 @@ LAST_SHIP_CMD = f"{CMD_PREFIX} last ship"
 LAST_SAVE_CMD = f"{CMD_PREFIX} last save"
 INFO_CMD = f"{CMD_PREFIX} info"  # info xxxxx(int)
 
-HELP_MSG = f"""sr info-{_version_}
+HELP_MSG = f"""sr info-{VERSION}
 在 QQ 群内获取 SimpleRockets (1) 的存档/飞船信息
 
 命令列表：
@@ -41,16 +41,16 @@ SHIP_URL_PREFIX = "http://jundroo.com/ViewShip.html?id="
 API_URL: str
 
 cfg = ConfigStorage(
-    api_url = "http://192.168.3.46:5110"
+    api_url="http://192.168.3.46:5110",
 )
 
 PLUGIN_MANIFEST = PluginManifest(
     plugin_id="sr_info",
     name="sr数据库信息",
-    version=_version_,
+    version=VERSION,
     description="查询 sr 云存档的数据库信息",
     authors=["shenjack"],
-    config={"main": cfg}
+    config={"main": cfg},
 )
 
 
@@ -181,7 +181,7 @@ def handle_url(msg: IcaNewMessage, client: IcaClient) -> None:
 
 
 def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
-    if msg.is_from_self or not msg.is_room_msg:
+    if msg.is_from_self or msg.is_reply or not msg.is_room_msg:
         return
 
     if msg.content.startswith(CMD_PREFIX):
@@ -191,6 +191,6 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
         handle_url(msg, client)
 
 
-def on_load():
+def on_load() -> None:
     global API_URL
     API_URL = str(PLUGIN_MANIFEST.config_unchecked("main").get_value("api_url")) or ""

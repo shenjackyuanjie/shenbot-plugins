@@ -3,18 +3,19 @@ from __future__ import annotations
 import io
 import random
 
-from typing import TYPE_CHECKING
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import requests
 
 from pydantic import BaseModel, Field
 from PIL import Image, ImageDraw, ImageFont
+from shenbot_api import PluginManifest
 
 if TYPE_CHECKING:
     from ica_typing import IcaNewMessage, IcaClient
 
-_version_ = "0.1.0"
+VERSION = "0.1.1"
 
 CMD_PREFIX = "/piaofang"
 HELP_CMD = f"{CMD_PREFIX} help"
@@ -25,8 +26,17 @@ FONT_PATH = "NotoSansMonoCJKsc-VF.ttf"
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36 Edg/136.0.0.0"
 HISTORY_API = "https://piaofang.maoyan.com/i/api/rank/globalBox/historyRankList"
 REAL_TIME_API = "https://piaofang.maoyan.com/dashboard-ajax/movie"
+REQUEST_TIMEOUT = 10
 
-HELP_MSG = f"""piaofang-{_version_}: 获取电影票房信息
+PLUGIN_MANIFEST = PluginManifest(
+    plugin_id="piaofang",
+    name="票房查询",
+    version=VERSION,
+    description="查询电影票房历史和实时数据",
+    authors=["shenjack"],
+)
+
+HELP_MSG = f"""piaofang-{VERSION}: 获取电影票房信息
 
 {HELP_CMD}: 获取帮助信息
 {HISTORY_CMD}: 获取电影票房历史数据
@@ -147,7 +157,7 @@ class HistoryItem(BaseModel):
 
 
 def request_history() -> list[HistoryItem] | None:
-    response = requests.get(HISTORY_API, headers={"User-Agent": UA})
+    response = requests.get(HISTORY_API, headers={"User-Agent": UA}, timeout=REQUEST_TIMEOUT)
     raw_data = response.json()
     if "success" in raw_data:
         if not raw_data["success"]:
@@ -157,7 +167,7 @@ def request_history() -> list[HistoryItem] | None:
 
 
 def request_real_time() -> list[RealTimeItem] | None:
-    response = requests.get(REAL_TIME_API, headers={"User-Agent": UA})
+    response = requests.get(REAL_TIME_API, headers={"User-Agent": UA}, timeout=REQUEST_TIMEOUT)
     raw_data = response.json()
     if "movieList" in raw_data:
         data: list[dict] = raw_data["movieList"]["list"]
@@ -284,7 +294,7 @@ def handle_real_time(msg: IcaNewMessage, client: IcaClient) -> None:
 
 
 def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
-    if msg.is_from_self or not msg.is_room_msg:
+    if msg.is_from_self or msg.is_reply or not msg.is_room_msg:
         return
 
     if not msg.content.startswith(CMD_PREFIX):

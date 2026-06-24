@@ -13,31 +13,39 @@ import requests
 if TYPE_CHECKING:
     from ica_typing import IcaNewMessage, IcaClient
 
-_version_ = "0.8.8"
+VERSION = "0.8.9"
+CMD_PREFIX = "/hm"
+PKG_CMD = f"{CMD_PREFIX} pkg "
+ID_CMD = f"{CMD_PREFIX} id "
+INFO_CMD = f"{CMD_PREFIX} info"
+RANK_CMD = f"{CMD_PREFIX} rank"
+DOWN_RANK_CMD = f"{CMD_PREFIX} down rank"
+SUBSTANCE_CMD = f"{CMD_PREFIX} substance "
+REQUEST_TIMEOUT = 10
 
 API_URL: str
 
 cfg = ConfigStorage(
-    api_url = "https://ddns.shenjack.top:10003"
+    api_url="https://ddns.shenjack.top:10003",
 )
 
 
 PLUGIN_MANIFEST = PluginManifest(
     plugin_id="hm_market",
     name="鸿蒙应用信息查询",
-    version=_version_,
+    version=VERSION,
     description="查询 鸿蒙 NEXT 某个应用的下载量 和一些其他查询",
     authors=["shenjack"],
-    config={"main": cfg}
+    config={"main": cfg},
 )
 
-HELP_MSG = f"""鸿蒙应用市场信息查询-v{_version_}:
-/hm pkg <包名>
-/hm id <应用ID>
-/hm info 获取应用市场当前数据
-/hm rank 获取应用市场下载量排名
-/hm down rank 获取近一天的下载量增量排行
-/hm substance <专题ID>
+HELP_MSG = f"""鸿蒙应用市场信息查询-v{VERSION}:
+{PKG_CMD}<包名>
+{ID_CMD}<应用ID>
+{INFO_CMD} 获取应用市场当前数据
+{RANK_CMD} 获取应用市场下载量排名
+{DOWN_RANK_CMD} 获取近一天的下载量增量排行
+{SUBSTANCE_CMD}<专题ID>
 或者直接发送应用市场链接/应用市场专题/游戏中心链接"""
 
 MARKET_PREFIX = "https://appgallery.huawei.com/app/detail?id="
@@ -83,7 +91,7 @@ def get_id_from_link(link: str) -> str:
         return ""
     # 正则表达式支持匹配 id= 或 appId= 后面的包名/应用ID
     # 匹配模式: id=xxxx 或 appId=xxxx，其中xxxx由字母、数字、下划线或点组成
-    regex = r"(?:id=|appId=)([a-zA-Z0-9_\.]+)"
+    regex = r"(?:id=|appId=)([a-zA-Z0-9_.]+)"
     match = re.search(regex, link)
 
     if match:
@@ -96,9 +104,11 @@ def reqeust_info(name: str, method: str, sender_name: str) -> dict | None:
         # data = requests.get(f"{API_URL}/api/v0/apps/{method}/{name}")
         send_data = {
             method: name,
-            "comment": {"user": sender_name, "platform": f"shenbot-{_version_}"}
+            "comment": {"user": sender_name, "platform": f"shenbot-{VERSION}"},
         }
-        data = requests.post(f"{API_URL}/api/v0/submit", json=send_data)
+        data = requests.post(
+            f"{API_URL}/api/v0/submit", json=send_data, timeout=REQUEST_TIMEOUT
+        )
         json_data = data.json()
         if not json_data['success']:
             return None
@@ -110,9 +120,13 @@ def reqeust_info(name: str, method: str, sender_name: str) -> dict | None:
 def request_substance(substance_id: str, sender_name: str) -> dict | None:
     try:
         send_data = {
-            "comment": {"user": sender_name, "platform": f"shenbot-{_version_}"}
+            "comment": {"user": sender_name, "platform": f"shenbot-{VERSION}"},
         }
-        data = requests.post(f"{API_URL}/api/v0/submit_substance/{substance_id}", json=send_data)
+        data = requests.post(
+            f"{API_URL}/api/v0/submit_substance/{substance_id}",
+            json=send_data,
+            timeout=REQUEST_TIMEOUT,
+        )
         json_data = data.json()
         if not json_data['success']:
             return None
@@ -204,9 +218,9 @@ def query_pkg(msg: IcaNewMessage, client: IcaClient, pkg_name: str, method: str)
 def api_helper(method: str, post: bool = False):
     try:
         if post:
-            data = requests.post(f"{API_URL}/api/v0/{method}")
+            data = requests.post(f"{API_URL}/api/v0/{method}", timeout=REQUEST_TIMEOUT)
         else:
-            data = requests.get(f"{API_URL}/api/v0/{method}")
+            data = requests.get(f"{API_URL}/api/v0/{method}", timeout=REQUEST_TIMEOUT)
         json_data = data.json()
         if "error" in json_data or not json_data['success']:
             return None
@@ -310,48 +324,55 @@ def query_down_rank(msg: IcaNewMessage, client: IcaClient) -> None:
         _ = client.send_message(reply)
 
 def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
-    if msg.content.startswith(MARKET_PREFIX):
+    if msg.is_from_self or msg.is_reply:
+        return
+
+    content = msg.content.strip()
+    if content.startswith(MARKET_PREFIX):
         # 支持多行
-        lines = msg.content.splitlines()
-        for line in lines:
+        for line in content.splitlines():
             if line.startswith(MARKET_PREFIX):
                 pkg_name = get_id_from_link(line)
                 print(f"获取到新的链接: {pkg_name}")
                 query_pkg(msg, client, pkg_name, "pkg_name")
-    elif msg.content.startswith(SUBSTANCE_PREFIX):
-        substance_id = get_id_from_link(msg.content)
+        return
+
+    if content.startswith(SUBSTANCE_PREFIX):
+        substance_id = get_id_from_link(content)
         print(f"获取到新的专题链接: {substance_id}")
         query_substance(msg, client, substance_id)
-    elif msg.content.startswith(GAME_PREFIX):
-        game_id = get_id_from_link(msg.content)
+        return
+
+    if content.startswith(GAME_PREFIX):
+        game_id = get_id_from_link(content)
         print(f"获取到新的游戏链接: {game_id}")
         query_pkg(msg, client, game_id, "app_id")
+        return
 
-    elif msg.content.startswith("/hm pkg "):
-        pkg_name = msg.content[len("/hm pkg "):]
+    if content.startswith(PKG_CMD):
+        pkg_name = content[len(PKG_CMD) :]
         print(f"获取到新的链接: {pkg_name}")
         query_pkg(msg, client, pkg_name, "pkg_name")
-    elif msg.content.startswith("/hm id "):
-        pkg_name = msg.content[len("/hm id "):]
+    elif content.startswith(ID_CMD):
+        pkg_name = content[len(ID_CMD) :]
         print(f"获取到新的链接: {pkg_name}")
         query_pkg(msg, client, pkg_name, "app_id")
-    elif msg.content.startswith("/hm substance "):
-        substance_id = msg.content[len("/hm substance "):]
+    elif content.startswith(SUBSTANCE_CMD):
+        substance_id = content[len(SUBSTANCE_CMD) :]
         print(f"获取到新的专题链接: {substance_id}")
         query_substance(msg, client, substance_id)
-
-    elif msg.content == "/hm info":
+    elif content == INFO_CMD:
         query_info(msg, client)
-    elif msg.content == "/hm rank":
+    elif content == RANK_CMD:
         query_rank(msg, client)
-    elif msg.content == "/hm down rank":
+    elif content == DOWN_RANK_CMD:
         query_down_rank(msg, client)
-
-    elif msg.content.startswith("/hm"):
+    elif content.startswith(CMD_PREFIX):
         # help msg
         reply = msg.reply_with(HELP_MSG)
         client.send_message(reply)
 
-def on_load():
+
+def on_load() -> None:
     global API_URL
     API_URL = str(PLUGIN_MANIFEST.config_unchecked("main").get_value("api_url")) or ""

@@ -15,10 +15,13 @@ else:
 
 from shenbot_api import PluginManifest
 
+VERSION = "0.0.2"
+COUNT_CMD = "/bot-count"
+
 PLUGIN_MANIFEST = PluginManifest(
     plugin_id="status",
     name="计数插件",
-    version="0.0.1",
+    version=VERSION,
     description="用来计数有多少条消息",
     authors=["shenjack"],
 )
@@ -32,24 +35,24 @@ class Counter:
         self.tc_msg: list[float] = []
         self.count_time = count_time
 
-    def ica_update(self):
+    def ica_update(self) -> None:
         now = time.time()
         self.ica_msg.append(now)
         self.ica_msg = [x for x in self.ica_msg if now - x <= self.count_time]
         self.msg_pre_min_ica = len(self.ica_msg) / (self.count_time / 60)
 
-    def tc_update(self):
+    def tc_update(self) -> None:
         now = time.time()
         self.tc_msg.append(now)
         self.tc_msg = [x for x in self.tc_msg if now - x <= self.count_time]
         self.msg_pre_min_tc = len(self.tc_msg) / (self.count_time / 60)
 
     @property
-    def ica_frequence(self):
+    def ica_frequence(self) -> float:
         return self.msg_pre_min_ica
 
     @property
-    def tc_frequence(self):
+    def tc_frequence(self) -> float:
         return self.msg_pre_min_tc
 
 
@@ -62,7 +65,7 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
     COUNTER.ica_update()
     if msg.is_reply:
         return
-    if msg.content == "/bot-count":
+    if msg.content == COUNT_CMD:
         reply = f"ica 每分钟消息数: {COUNTER.ica_frequence:.2f}\ntailchat 每分钟消息数: {COUNTER.tc_frequence:.2f}"
         client.send_message(msg.reply_with(reply))
 
@@ -73,6 +76,6 @@ def on_tailchat_message(msg: TailchatReciveMessage, client: TailchatClient) -> N
     COUNTER.tc_update()
     if msg.is_reply:
         return
-    if msg.content == "/bot-count":
+    if msg.content == COUNT_CMD:
         reply = f"ica 每分钟消息数: {COUNTER.ica_frequence:.2f}\ntailchat 每分钟消息数: {COUNTER.tc_frequence:.2f}"
         client.send_message(msg.reply_with(reply))

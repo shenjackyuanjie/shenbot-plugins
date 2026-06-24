@@ -1,42 +1,42 @@
 from __future__ import annotations
+
 import io
 import time
-import requests
 import traceback
+from typing import TYPE_CHECKING, List, Optional
+
+import requests
+from shenbot_api import ConfigStorage, PluginManifest
 
 # import PIL
 
-from typing import TYPE_CHECKING, TypeVar, Optional, Tuple, List
-
 if TYPE_CHECKING:
-    from ica_typing import IcaNewMessage, IcaClient, TailchatClient
-else:
-    IcaNewMessage = TypeVar("NewMessage")
-    IcaClient = TypeVar("IcaClient")
+    from ica_typing import IcaClient, IcaNewMessage, TailchatClient
 
+VERSION = "2.9.2-rs"
+CMD_PREFIX = "/bmcl"
+BRRS_CMD = "/brrs"
+RANK_CMD = f"{CMD_PREFIX} rank"
+REQUEST_TIMEOUT = 10
 
 COOKIE = None
-
-_version_ = "2.9.1-rs"
 backend_version = "unknown"
 
-from shenbot_api import PluginManifest, ConfigStorage
-
 cfg = ConfigStorage(
-    cookie = None
+    cookie=None,
 )
 
 PLUGIN_MANIFEST = PluginManifest(
     plugin_id="bmcl",
     name="openbmclapi查询",
-    version=_version_,
+    version=VERSION,
     description="查询 openbmclapi 的各项数据",
     authors=["shenjack"],
-    config={"main": cfg}
+    config={"main": cfg},
 )
 
 
-def on_load():
+def on_load() -> None:
     global COOKIE
     cfg = PLUGIN_MANIFEST.config_unchecked("main").get_value("cookie")
     if cfg is not None:
@@ -89,10 +89,12 @@ def wrap_request(
 ) -> Optional[dict]:
     try:
         if COOKIE is None:
-            response = requests.get(url)
+            response = requests.get(url, timeout=REQUEST_TIMEOUT)
         else:
             # print(f"cookie: |{COOKIE}|")
-            response = requests.get(url, cookies={"openbmclapi-jwt": COOKIE})
+            response = requests.get(
+                url, cookies={"openbmclapi-jwt": COOKIE}, timeout=REQUEST_TIMEOUT
+            )
     except requests.exceptions.RequestException:
         warn_msg = f"数据请求失败, 请检查网络\n{traceback.format_exc()}"
         reply = msg.reply_with(warn_msg)
@@ -135,7 +137,7 @@ def bmcl_dashboard(msg: IcaNewMessage, client: IcaClient | TailchatClient) -> No
     hits_count = format_hit_count(data_hits)
 
     report_msg = (
-        f"OpenBMCLAPI 面板v{_version_}-状态\n"
+        f"OpenBMCLAPI 面板v{VERSION}-状态\n"
         f"api版本 {backend_version} commit:{backend_commit}\n"
         f"实时信息: {online_node}  理论可用带宽: {online_bandwidth}Mbps\n"
         f"负载: {load_str:.2f}% 实际带宽: {data_bandwidth:.2f}Mbps\n"
@@ -154,7 +156,7 @@ def check_is_full_data(data: list) -> bool:
 
 def display_rank_min(ranks: list, req_time) -> str:
     cache = io.StringIO()
-    cache.write(f"bmclapi v{_version_}-排名({len(ranks)})")
+    cache.write(f"bmclapi v{VERSION}-排名({len(ranks)})")
     if check_is_full_data(ranks):
         cache.write("完整\n")
         for rank in ranks:
@@ -179,7 +181,7 @@ def display_rank_min(ranks: list, req_time) -> str:
 
 def display_rank_full(ranks: list, req_time) -> str:
     cache = io.StringIO()
-    cache.write(f"bmclapi v{_version_}-排名({len(ranks)})")
+    cache.write(f"bmclapi v{VERSION}-排名({len(ranks)})")
     if check_is_full_data(ranks):
         cache.write("完整\n")
         for rank in ranks:
@@ -318,10 +320,10 @@ def bmcl_rank(
 #     client.send_message(reply)
 
 
-help = f"""/bmcl -> dashboard
-/bmcl rank -> all rank
-/bmcl rank <name> -> rank of <name>
-/brrs <name> -> rank of <name>
+HELP_MSG = f"""{CMD_PREFIX} -> dashboard
+{RANK_CMD} -> all rank
+{RANK_CMD} <name> -> rank of <name>
+{BRRS_CMD} <name> -> rank of <name>
 搜索限制:
 1-{FULL_DISPLAY} 显示全部信息
 {FULL_DISPLAY + 1}-{MAX_DISPLAY} 显示状态、名称
@@ -330,94 +332,73 @@ help = f"""/bmcl -> dashboard
 # /bm93 -> 随机怪图
 
 
-def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
-    if not (msg.is_from_self or msg.is_reply):
-        if "\n" in msg.content:
+def ensure_backend_version(
+    msg: IcaNewMessage, client: IcaClient | TailchatClient
+) -> bool:
+    global backend_version
+    if backend_version != "unknown":
+        return True
+
+    dashboard_status = wrap_request(
+        "https://bd.bangbang93.com/openbmclapi/metric/version", msg, client
+    )
+    if dashboard_status is None:
+        return False
+    backend_version = dashboard_status["version"]
+    return True
+
+
+def handle_bmcl_message(
+    msg: IcaNewMessage, client: IcaClient | TailchatClient
+) -> None:
+    content = msg.content.strip()
+    if "\n" in content:
+        return
+    if not (content.startswith(CMD_PREFIX) or content.startswith(BRRS_CMD)):
+        return
+
+    try:
+        if not ensure_backend_version(msg, client):
             return
-        try:
-            if not msg.content.startswith("/b"):
-                return
-            global backend_version
-            if backend_version == "unknown":
-                dashboard_status = wrap_request(
-                    "https://bd.bangbang93.com/openbmclapi/metric/version", msg, client
-                )
-                if dashboard_status is None:
-                    return
-                backend_version = dashboard_status["version"]
-            if msg.content.startswith("/bmcl"):
-                if msg.content == "/bmcl":
-                    bmcl_dashboard(msg, client)
-                elif msg.content == "/bmcl rank":
-                    bmcl_rank_general(msg, client)
-                elif msg.content.startswith("/bmcl rank") and len(msg.content) > 11:
-                    name = msg.content[11:]
-                    bmcl_rank(msg, client, name)
-                else:
-                    reply = msg.reply_with(help)
-                    client.send_message(reply)
-            elif msg.content.startswith("/brrs"):
-                if msg.content == "/brrs":
-                    reply = msg.reply_with(help)
-                    client.send_message(reply)
-                else:
-                    name = msg.content.split(" ")
-                    if len(name) > 1:
-                        name = name[1]
-                        bmcl_rank(msg, client, name)
-            # elif msg.content == "/bm93":
-            #     bangbang_img(msg, client)
-        except:  # noqa
-            report_msg = f"bmcl插件发生错误,请呼叫shenjack\n{traceback.format_exc()}"
-            client.warn(report_msg)
-            if len(report_msg) > 200:
-                report_msg = report_msg[:200] + "..."  # 防止消息过长
-            reply = msg.reply_with(report_msg)
-            client.send_and_warn(reply)
+
+        if content.startswith(CMD_PREFIX):
+            if content == CMD_PREFIX:
+                bmcl_dashboard(msg, client)
+            elif content == RANK_CMD:
+                bmcl_rank_general(msg, client)
+            elif content.startswith(RANK_CMD) and len(content) > len(RANK_CMD) + 1:
+                name = content[len(RANK_CMD) + 1 :]
+                bmcl_rank(msg, client, name)
+            else:
+                reply = msg.reply_with(HELP_MSG)
+                client.send_message(reply)  # pyright: ignore reportArgumentType
+        elif content.startswith(BRRS_CMD):
+            if content == BRRS_CMD:
+                reply = msg.reply_with(HELP_MSG)
+                client.send_message(reply)  # pyright: ignore reportArgumentType
+            else:
+                name = content.split(" ")
+                if len(name) > 1:
+                    bmcl_rank(msg, client, name[1])
+        # elif content == "/bm93":
+        #     bangbang_img(msg, client)
+    except Exception:  # noqa
+        report_msg = f"bmcl插件发生错误,请呼叫shenjack\n{traceback.format_exc()}"
+        client.warn(report_msg)
+        if len(report_msg) > 200:
+            report_msg = report_msg[:200] + "..."  # 防止消息过长
+        reply = msg.reply_with(report_msg)
+        client.send_and_warn(reply)  # pyright: ignore reportArgumentType
+
+
+def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
+    if msg.is_from_self or msg.is_reply:
+        return
+    handle_bmcl_message(msg, client)
 
 
 def on_tailchat_message(msg, client: TailchatClient) -> None:
-    if not msg.is_reply:
-        if "\n" in msg.content:
-            return
-        try:
-            if not msg.content.startswith("/bm") or not msg.content.startswith("/brrs"):
-                return
-            global backend_version
-            if backend_version == "unknown":
-                dashboard_status = wrap_request(
-                    "https://bd.bangbang93.com/openbmclapi/metric/version", msg, client
-                )
-                if dashboard_status is None:
-                    return
-                backend_version = dashboard_status["version"]
-            if msg.content.startswith("/bmcl"):
-                if msg.content == "/bmcl":
-                    bmcl_dashboard(msg, client)
-                elif msg.content == "/bmcl rank":
-                    bmcl_rank_general(msg, client)
-                elif msg.content.startswith("/bmcl rank") and len(msg.content) > 11:
-                    name = msg.content[11:]
-                    bmcl_rank(msg, client, name)
-                else:
-                    reply = msg.reply_with(help)
-                    client.send_message(reply)
-            elif msg.content.startswith("/brrs"):
-                if msg.content == "/brrs":
-                    reply = msg.reply_with(help)
-                    client.send_message(reply)
-                else:
-                    name = msg.content.split(" ")
-                    if len(name) > 1:
-                        name = name[1]
-                        bmcl_rank(msg, client, name)
-            # elif msg.content == "/bm93":
-            #     bangbang_img(msg, client)
-        except:  # noqa
-            report_msg = f"bmcl插件发生错误,请呼叫shenjack\n{traceback.format_exc()}"
-            client.warn(report_msg)
-            if len(report_msg) > 200:
-                report_msg = report_msg[:200] + "..."  # 防止消息过长
-            reply = msg.reply_with(report_msg)
-            client.send_and_warn(reply)
+    if msg.is_reply:
+        return
+    handle_bmcl_message(msg, client)
 
