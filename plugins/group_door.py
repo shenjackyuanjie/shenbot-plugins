@@ -400,3 +400,7 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
         log(client, "info", f"已在群 {room_id} 禁言新成员 {user_id} {duration} 秒")
     else:
         log(client, "warn", f"在群 {room_id} 禁言新成员 {user_id} 失败")
+
+
+def on_ica_system_message(msg: IcaNewMessage, client: IcaClient) -> None:
+    on_ica_message(msg, client)
