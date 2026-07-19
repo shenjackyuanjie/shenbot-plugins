@@ -113,11 +113,14 @@ VERSION_CACHE: dict[tuple[str, ...], str | None] = {}
 def out_msg(cost_time: float) -> str:
     runtime = get_js_runtime()
     use_bun = runtime == "bun"
-    lines = [f"耗时: {cost_time:.3f}s", f"版本: {_version_}-{runtime}"]
+    runtime_label = runtime or "no-runtime"
+    lines = [f"耗时: {cost_time:.3f}s", f"版本: {_version_}-{runtime_label}"]
 
     runtime_version = get_runtime_version()
     if runtime_version:
         lines.append(f"{runtime}: {runtime_version}")
+    elif runtime is None:
+        lines.append("运行时: 未找到 Node.js 或 Bun")
 
     tswn_version = get_tswn_version()
     if tswn_version:
@@ -285,11 +288,20 @@ def resolve_command_version(command: list[str], cwd: str | None = None) -> str |
 
 
 def get_runtime_version() -> str | None:
-    return resolve_command_version([get_js_runtime()])
+    runtime = get_js_runtime()
+    if runtime is None:
+        return None
+    return resolve_command_version([runtime])
 
 
-def get_js_runtime() -> str:
-    return "node" if shutil.which("node") is not None else "bun"
+def get_js_runtime() -> str | None:
+    preferred_runtime = "bun" if USE_BUN else "node"
+    fallback_runtime = "node" if USE_BUN else "bun"
+    if shutil.which(preferred_runtime) is not None:
+        return preferred_runtime
+    if shutil.which(fallback_runtime) is not None:
+        return fallback_runtime
+    return None
 
 
 def get_tswn_version() -> str | None:
@@ -664,7 +676,10 @@ def run_namerena(input_text: str, fight_mode: bool = False) -> tuple[str, float]
     runner_path = (root_path / "md5" / "md5-api.js").resolve()
     if not runner_path.exists():
         return "未找到namerena运行文件", 0.0
-    run_cmd = [get_js_runtime(), str(runner_path), "any", str(TSWN_COMPARE_ROUNDS)]
+    runtime = get_js_runtime()
+    if runtime is None:
+        return "未找到 JavaScript 运行时，请安装 Node.js 或 Bun", 0.0
+    run_cmd = [runtime, str(runner_path), "any", str(TSWN_COMPARE_ROUNDS)]
     if fight_mode:
         run_cmd[2] = "fight"
 
