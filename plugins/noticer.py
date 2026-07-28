@@ -10,6 +10,10 @@ noticer.py - 本地 Webhook 提醒服务插件
 [main]
 host = "127.0.0.1"   # 监听地址，默认 127.0.0.1
 port = 10020         # 监听端口，默认 10020
+auth_token = ""      # 可选：保护 /send、/v1/send、/status
+direct_token = ""    # 必填后才启用 /v1/send/direct
+queue_capacity = 256
+send_timeout_seconds = 60
 
 [rooms]
 notice  = { id = -111111111, desc = "项目提醒群" }
@@ -30,13 +34,15 @@ warning = { id = -222222222 }
 
 ## GET /status — 服务状态（含房间列表）
   curl http://127.0.0.1:10020/status
-  → {"server":"noticer/0.3.2","status":"running","client_ready":true,"rooms":{...}}
+  → {"server":"noticer/0.4.0","status":"running","client_ready":true,"rooms":{...}}
 
 ## GET /health — 健康检查
   curl http://127.0.0.1:10020/health
   → {"status":"running","client_ready":true}
 
-## POST /send — 发送消息
+## GET /ready — 就绪检查；未捕获 bot client 或队列未启动时返回 503
+
+## POST /send — 兼容发送接口
 
   # 方式 A：写文件 + curl（跨平台，推荐）
   python -c "open('payload.json','w',encoding='utf-8').write('{\"room\":\"notice\",\"message\":\"🤖 任务完成！\\\\n耗时: 12.3s\"}')"
@@ -47,6 +53,7 @@ warning = { id = -222222222 }
 
   参数:
     room         - 房间名（必填，见 [rooms] 配置）
+    room_id      - 0.4 仅为兼容保留，已弃用；请迁移到 /v1/send/direct
     message      - 消息内容（可选，支持 \\n 换行；不发图片时必填）
     image        - 图片（可选）。可传 data URL/base64 字符串，或对象：
                    {"base64":"...", "type":"image/png", "as_sticker":false}
@@ -56,6 +63,15 @@ warning = { id = -222222222 }
 
   成功: {"status":"ok","room":"notice"}
   失败: {"error":"描述信息"}
+
+## POST /v1/send — 严格房间名接口
+  只接受配置中的 room 名；成功响应包含 request_id。
+  可选请求头 Idempotency-Key，用于安全重试。
+
+## POST /v1/send/direct — 任意当前会话接口
+  只接受整数 room_id，且必须配置 direct_token 并携带：
+    Authorization: Bearer <direct_token>
+  文本、图片与贴纸字段和 /v1/send 相同。
 
   错误码:
     400 - room 缺失/未知/message 和 image 均为空/图片参数无效/房间未配置
@@ -118,6 +134,9 @@ Windows 的 cmd/PowerShell 默认编码为 GBK，直接在 curl -d 参数中写�
   Q: 如何新增自定义房间?
   A: 在 noticer.toml 的 [rooms] 下添加键值对即可，插件自动发现。
 
+  Q: direct API 返回 503?
+  A: 在 noticer.toml 配置 direct_token 并重载插件；调用方必须携带同值 Bearer Token。
+
   Q: curl 报 utf-8 decode 错误?
   A: Windows 终端编码问题。见上方「⚠️ Windows / GBK 编码注意事项」章节。
 """
@@ -127,12 +146,19 @@ from __future__ import annotations
 import base64
 import binascii
 import builtins
+import hashlib
+import hmac
 import json
+import math
 import os
+import queue
 import re
 import socket
 import threading
 import time
+import uuid
+from collections import OrderedDict
+from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import TYPE_CHECKING, Any, cast
 
@@ -164,13 +190,17 @@ DEFAULT_PORT = 10020
 PLUGIN_MANIFEST = PluginManifest(
     plugin_id="noticer",
     name="Noticer 本地提醒服务",
-    version="0.3.2",
+    version="0.4.0",
     description="启动本地 HTTP 服务，接收外部请求并通过 bot 发送提醒/警告消息到指定群聊",
-    authors=["your_name"],
+    authors=["shenjack"],
     config={
         "main": ConfigStorage(
             host=DEFAULT_HOST,
             port=DEFAULT_PORT,
+            auth_token="",
+            direct_token="",
+            queue_capacity=256,
+            send_timeout_seconds=60,
         ),
         "rooms": ConfigStorage(
             notice={"id": 0, "desc": ""},
@@ -189,10 +219,14 @@ ROOM_DESCRIPTIONS: dict[str, str] = {
 }
 """房间名 → 中文描述映射。仅作为 fallback，配置中的 desc 优先级更高。"""
 
-MAX_BODY_SIZE = 10 * 1024 * 1024
+MAX_BODY_SIZE = 12 * 1024 * 1024
 MAX_IMAGE_SIZE = 8 * 1024 * 1024
 SOCKET_TIMEOUT = 10.0
 RELOAD_NOTICE_TTL = 30.0
+DEFAULT_QUEUE_CAPACITY = 256
+DEFAULT_SEND_TIMEOUT_SECONDS = 60.0
+IDEMPOTENCY_TTL_SECONDS = 10 * 60.0
+IDEMPOTENCY_MAX_ENTRIES = 2048
 _RUNTIME_STATE_KEY = "_ica_noticer_runtime_state"
 _RELOAD_COMMAND_RE = re.compile(r"^/bot-reload-\d+\s+noticer(?:\s+.*)?$")
 _DATA_IMAGE_RE = re.compile(
@@ -215,8 +249,45 @@ _ica_client: IcaClient | None = None
 
 _host: str = DEFAULT_HOST
 _port: int = DEFAULT_PORT
+_auth_token = ""
+_direct_token = ""
+_queue_capacity = DEFAULT_QUEUE_CAPACITY
+_send_timeout_seconds = DEFAULT_SEND_TIMEOUT_SECONDS
 _rooms: dict[str, int] = {}                 # room_name -> room_id
 _room_descriptions: dict[str, str] = {}     # room_name -> desc (来自配置或自动生成)
+
+
+@dataclass
+class _SendJob:
+    request_id: str
+    room_name: str
+    room_id: int
+    message: str
+    image_bytes: bytes | None
+    image_type: str
+    as_sticker: bool
+    done: threading.Event = field(default_factory=threading.Event)
+    lock: threading.Lock = field(default_factory=threading.Lock)
+    started: bool = False
+    cancelled: bool = False
+    status: int = 500
+    detail: str = "send failed"
+
+
+@dataclass
+class _IdempotencyEntry:
+    fingerprint: str
+    job: _SendJob
+    expires_at: float
+
+
+_send_queue: queue.Queue[_SendJob | None] | None = None
+_send_worker_thread: threading.Thread | None = None
+_send_accepting = False
+_send_state_lock = threading.Lock()
+_idempotency_lock = threading.Lock()
+_idempotency_entries: OrderedDict[str, _IdempotencyEntry] = OrderedDict()
+_reload_notice_lock = threading.Lock()
 
 
 def _runtime_state() -> dict[str, object]:
@@ -283,6 +354,156 @@ def _send_text_to_room(client: IcaClient, room_id: int, text: str) -> bool:
     return bool(client.send_message(target_room.new_message_to(text)))
 
 
+def _run_send_job(job: _SendJob) -> None:
+    with job.lock:
+        if job.cancelled:
+            job.done.set()
+            return
+        job.started = True
+
+    with _client_lock:
+        client = _ica_client
+
+    status = 500
+    detail = "send failed"
+    if client is None:
+        status = 503
+        detail = "bot client not ready yet"
+    else:
+        try:
+            target_room = _find_room(client, job.room_id)
+            if target_room is None:
+                status = 404
+                detail = (
+                    f"room {job.room_id} not found in current session "
+                    "(bot may not have joined this group)"
+                )
+            else:
+                send_msg = target_room.new_message_to(job.message)
+                if job.image_bytes is not None:
+                    send_msg.set_img(job.image_bytes, job.image_type, job.as_sticker)
+                if client.send_message(send_msg):
+                    status = 200
+                    detail = "ok"
+                else:
+                    status = 500
+                    detail = "send_message returned false"
+        except Exception as exc:
+            _log_warn(
+                f"request_id={job.request_id} target={job.room_name!r} "
+                f"send raised {type(exc).__name__}"
+            )
+            status = 500
+            detail = "send failed"
+
+    with job.lock:
+        job.status = status
+        job.detail = detail
+        job.done.set()
+
+
+def _send_worker_loop(send_queue: queue.Queue[_SendJob | None]) -> None:
+    while True:
+        job = send_queue.get()
+        try:
+            if job is None:
+                return
+            _run_send_job(job)
+        finally:
+            send_queue.task_done()
+
+
+def _start_send_worker() -> None:
+    global _send_queue, _send_worker_thread, _send_accepting
+    send_queue: queue.Queue[_SendJob | None] = queue.Queue(maxsize=_queue_capacity)
+    worker = threading.Thread(
+        target=_send_worker_loop,
+        args=(send_queue,),
+        name="noticer-send-worker",
+        daemon=True,
+    )
+    with _send_state_lock:
+        _send_queue = send_queue
+        _send_worker_thread = worker
+        _send_accepting = True
+    worker.start()
+
+
+def _stop_send_worker() -> None:
+    global _send_queue, _send_worker_thread, _send_accepting
+    with _send_state_lock:
+        _send_accepting = False
+        send_queue = _send_queue
+        worker = _send_worker_thread
+
+    if send_queue is None:
+        return
+
+    while True:
+        try:
+            pending = send_queue.get_nowait()
+        except queue.Empty:
+            break
+        try:
+            if pending is not None:
+                with pending.lock:
+                    if not pending.started:
+                        pending.cancelled = True
+                        pending.status = 503
+                        pending.detail = "service is stopping"
+                        pending.done.set()
+        finally:
+            send_queue.task_done()
+
+    try:
+        send_queue.put_nowait(None)
+    except queue.Full:
+        pass
+    if worker is not None and worker.is_alive():
+        worker.join(timeout=_send_timeout_seconds)
+        if worker.is_alive():
+            _log_warn("send worker did not stop before timeout; in-flight outcome unknown")
+
+    with _send_state_lock:
+        if _send_queue is send_queue:
+            _send_queue = None
+            _send_worker_thread = None
+
+
+def _enqueue_job(job: _SendJob) -> tuple[bool, str]:
+    with _send_state_lock:
+        if not _send_accepting or _send_queue is None:
+            return False, "send queue is not available"
+        send_queue = _send_queue
+        try:
+            send_queue.put_nowait(job)
+        except queue.Full:
+            return False, "send queue is full"
+    return True, ""
+
+
+def _wait_for_job(job: _SendJob) -> tuple[int, str]:
+    if job.done.wait(timeout=_send_timeout_seconds):
+        with job.lock:
+            return job.status, job.detail
+
+    with job.lock:
+        if not job.started:
+            job.cancelled = True
+            job.status = 504
+            job.detail = "queue wait timeout; message was not sent"
+            job.done.set()
+            return job.status, job.detail
+    return 504, "send timeout; outcome unknown"
+
+
+def _queue_send(job: _SendJob) -> tuple[int, str]:
+    enqueued, detail = _enqueue_job(job)
+    if not enqueued:
+        return 503, detail
+    return _wait_for_job(job)
+
+
 def _normalize_image_type(file_type: object) -> str:
     if not isinstance(file_type, str) or not file_type.strip():
         return "image/png"
@@ -304,6 +525,22 @@ def _parse_bool(value: object, default: bool = False) -> bool:
         if value in {"0", "false", "no", "off", ""}:
             return False
     return bool(value)
+
+
+def _detect_image_type(image_bytes: bytes) -> str | None:
+    if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if image_bytes.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if image_bytes.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if (
+        len(image_bytes) >= 12
+        and image_bytes.startswith(b"RIFF")
+        and image_bytes[8:12] == b"WEBP"
+    ):
+        return "image/webp"
+    return None
 
 
 def _decode_base64_image(raw_image: str, fallback_type: object) -> tuple[bytes, str, str | None]:
@@ -330,15 +567,29 @@ def _decode_base64_image(raw_image: str, fallback_type: object) -> tuple[bytes, 
         return b"", file_type, "image is empty"
     if len(image_bytes) > MAX_IMAGE_SIZE:
         return b"", file_type, f"image too large (max {MAX_IMAGE_SIZE} bytes)"
+    detected_type = _detect_image_type(image_bytes)
+    if detected_type is None:
+        return b"", file_type, "unsupported or malformed image data"
+    if detected_type != file_type:
+        return b"", file_type, (
+            f"image MIME mismatch: declared {file_type}, detected {detected_type}"
+        )
     return image_bytes, file_type, None
 
 
-def _parse_image_payload(data: dict[str, object]) -> tuple[bytes | None, str, bool, str | None]:
+def _parse_image_payload(
+    data: dict[str, object],
+    *,
+    strict: bool = False,
+) -> tuple[bytes | None, str, bool, str | None]:
     """解析 JSON 图片参数。返回 (bytes, mime, as_sticker, error)。"""
     image_payload = data.get("image")
     top_level_base64 = data.get("image_base64")
     file_type: object = data.get("image_type")
-    as_sticker = _parse_bool(data.get("as_sticker"), False)
+    raw_as_sticker = data.get("as_sticker")
+    if strict and raw_as_sticker is not None and not isinstance(raw_as_sticker, bool):
+        return None, "image/png", False, "`as_sticker` must be a boolean"
+    as_sticker = _parse_bool(raw_as_sticker, False)
 
     if image_payload is None and top_level_base64 is None:
         return None, "image/png", as_sticker, None
@@ -355,7 +606,16 @@ def _parse_image_payload(data: dict[str, object]) -> tuple[bytes | None, str, bo
             or image_payload.get("file_type")
             or file_type
         )
-        as_sticker = _parse_bool(image_payload.get("as_sticker"), as_sticker)
+        nested_as_sticker = image_payload.get("as_sticker")
+        if (
+            strict
+            and nested_as_sticker is not None
+            and not isinstance(nested_as_sticker, bool)
+        ):
+            return None, _normalize_image_type(file_type), as_sticker, (
+                "`image.as_sticker` must be a boolean"
+            )
+        as_sticker = _parse_bool(nested_as_sticker, as_sticker)
     else:
         base64_payload = image_payload if image_payload is not None else top_level_base64
 
@@ -372,23 +632,27 @@ def _parse_image_payload(data: dict[str, object]) -> tuple[bytes | None, str, bo
 
 def _maybe_send_reload_notice(client: IcaClient) -> None:
     """如有待发送的重载完成通知，则立即发送"""
-    room_id = _get_pending_reload_notice()
-    if room_id is None:
-        return
+    with _reload_notice_lock:
+        room_id = _get_pending_reload_notice()
+        if room_id is None:
+            return
 
-    try:
-        ok = _send_text_to_room(
-            client,
-            room_id,
-            f"✅ noticer 重载完成\n服务地址: http://{_host}:{_port}",
-        )
-        if ok:
-            _clear_pending_reload_notice()
-            _log_info(f"Reload completion notice sent to room {room_id}")
-        else:
-            _log_warn(f"Reload completion notice pending: room {room_id} not found yet")
-    except Exception as e:
-        _log_warn(f"Failed to send reload completion notice: {e}")
+        try:
+            ok = _send_text_to_room(
+                client,
+                room_id,
+                f"✅ noticer 重载完成\n服务地址: http://{_host}:{_port}",
+            )
+            if ok:
+                _clear_pending_reload_notice()
+                _log_info(f"Reload completion notice sent to room {room_id}")
+            else:
+                _log_warn(f"Reload completion notice pending: room {room_id} not found yet")
+        except Exception as exc:
+            _log_warn(
+                "Failed to send reload completion notice: "
+                f"{type(exc).__name__}"
+            )
 
 
 class _NoticerServer(ThreadingHTTPServer):
@@ -462,8 +726,11 @@ def _load_rooms() -> None:
                     _rooms[name] = rid
                     _room_descriptions[name] = desc or f"{name} room"
             return  # 解析成功
-        except Exception:
-            pass  # 解析失败，走 fallback
+        except Exception as exc:
+            _log_warn(
+                "Failed to parse noticer.toml rooms; using manifest fallback "
+                f"({type(exc).__name__})"
+            )
 
     # ── fallback: 通过 ConfigStorage 逐 key 读取 ──
     # （仅对 ROOM_DESCRIPTIONS 中的已知房间生效）
@@ -514,90 +781,170 @@ def _get_room_names_str() -> str:
     return ", ".join(ROOM_DESCRIPTIONS.keys())
 
 
+def _reject_json_constant(value: str) -> None:
+    raise ValueError(f"non-standard JSON number is not allowed: {value}")
+
+
+def _send_fingerprint(path: str, job: _SendJob) -> str:
+    digest = hashlib.sha256()
+    digest.update(path.encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(str(job.room_id).encode("ascii"))
+    digest.update(b"\0")
+    digest.update(job.message.encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(job.image_type.encode("ascii"))
+    digest.update(b"\0")
+    digest.update(b"1" if job.as_sticker else b"0")
+    if job.image_bytes is not None:
+        digest.update(hashlib.sha256(job.image_bytes).digest())
+    return digest.hexdigest()
+
+
+def _purge_idempotency_locked(now: float) -> None:
+    expired = [
+        key
+        for key, entry in _idempotency_entries.items()
+        if entry.expires_at <= now
+    ]
+    for key in expired:
+        _idempotency_entries.pop(key, None)
+
+
+def _idempotent_enqueue(
+    key: str,
+    fingerprint: str,
+    job: _SendJob,
+) -> tuple[_SendJob | None, int, str]:
+    now = time.monotonic()
+    with _idempotency_lock:
+        _purge_idempotency_locked(now)
+        existing = _idempotency_entries.get(key)
+        if existing is not None:
+            if existing.fingerprint != fingerprint:
+                return None, 409, "idempotency key was already used for another request"
+            existing.expires_at = now + IDEMPOTENCY_TTL_SECONDS
+            _idempotency_entries.move_to_end(key)
+            return existing.job, 0, ""
+
+        enqueued, detail = _enqueue_job(job)
+        if not enqueued:
+            return None, 503, detail
+        while len(_idempotency_entries) >= IDEMPOTENCY_MAX_ENTRIES:
+            _idempotency_entries.popitem(last=False)
+        _idempotency_entries[key] = _IdempotencyEntry(
+            fingerprint=fingerprint,
+            job=job,
+            expires_at=now + IDEMPOTENCY_TTL_SECONDS,
+        )
+        return job, 0, ""
+
+
+def _validate_idempotency_key(value: str | None) -> str | None:
+    if value is None:
+        return None
+    if not 1 <= len(value) <= 128:
+        raise ValueError("Idempotency-Key must contain 1 to 128 characters")
+    if any(ord(char) < 0x21 or ord(char) > 0x7e for char in value):
+        raise ValueError("Idempotency-Key must use printable ASCII without spaces")
+    return value
+
+
 # ============================================================
 # HTTP Handler
 # ============================================================
 
-class _NoticerHandler(BaseHTTPRequestHandler):
-    """处理 webhook HTTP 请求"""
+class _RequestError(Exception):
+    def __init__(self, status: int, code: str, message: str) -> None:
+        super().__init__(message)
+        self.status = status
+        self.code = code
+        self.message = message
 
-    # ---------- 路由 ----------
+
+class _NoticerHandler(BaseHTTPRequestHandler):
+    """兼容 legacy API，并提供严格、可鉴权的 v1 webhook API。"""
+
+    _COMMON_FIELDS = {
+        "message",
+        "image",
+        "image_base64",
+        "image_type",
+        "as_sticker",
+    }
 
     def setup(self) -> None:
         super().setup()
         self.connection.settimeout(SOCKET_TIMEOUT)
 
     def handle(self) -> None:
-        """处理单个请求后关闭连接，避免 keep-alive 导致 curl 卡住"""
         self.close_connection = True
         self.handle_one_request()
 
     def do_GET(self) -> None:
         from urllib.parse import urlparse
-        parsed = urlparse(self.path)
-        if parsed.path == "/":
+
+        path = urlparse(self.path).path
+        if path == "/":
             self._handle_root()
-        elif parsed.path == "/status":
-            self._handle_status()
-        elif parsed.path == "/health":
+        elif path == "/health":
             self._handle_health()
+        elif path == "/ready":
+            self._handle_ready()
+        elif path == "/status":
+            if not self._authorize(_auth_token, optional=True):
+                return
+            self._handle_status()
         else:
-            self._send_json(404, {"error": f"not found: {self.path}"})
+            self._send_api_error(404, "not_found", f"not found: {path}")
 
     def do_POST(self) -> None:
         from urllib.parse import urlparse
-        parsed = urlparse(self.path)
-        if parsed.path == "/send":
-            self._handle_send()
-        else:
-            self._send_json(404, {"error": f"not found: {self.path}"})
 
-    # ---------- GET / ----------
+        path = urlparse(self.path).path
+        if path == "/send":
+            self._handle_send("legacy")
+        elif path == "/v1/send":
+            self._handle_send("strict")
+        elif path == "/v1/send/direct":
+            self._handle_send("direct")
+        else:
+            self._send_api_error(404, "not_found", f"not found: {path}")
+
+    def do_HEAD(self) -> None:
+        self._method_not_allowed()
+
+    def do_OPTIONS(self) -> None:
+        self._method_not_allowed()
+
+    def do_PUT(self) -> None:
+        self._method_not_allowed()
+
+    def do_PATCH(self) -> None:
+        self._method_not_allowed()
+
+    def do_DELETE(self) -> None:
+        self._method_not_allowed()
+
+    def send_error(
+        self,
+        code: int,
+        message: str | None = None,
+        explain: str | None = None,
+    ) -> None:
+        del code, message, explain
+        self._method_not_allowed()
+
+    def _method_not_allowed(self) -> None:
+        self._send_api_error(405, "method_not_allowed", "method not allowed")
 
     def _handle_root(self) -> None:
-        """返回 README 文档（模块 docstring），方便 curl 查阅"""
         body = __doc__.encode("utf-8") if __doc__ else b""
-        self.close_connection = True
-        response = (
-            "HTTP/1.1 200 OK\r\n"
-            "Content-Type: text/plain; charset=utf-8\r\n"
-            f"Content-Length: {len(body)}\r\n"
-            "Connection: close\r\n"
-            "\r\n"
-        ).encode("utf-8") + body
-        self.request.sendall(response)
-
-    # ---------- GET /status ----------
-
-    def _handle_status(self) -> None:
-        """返回服务状态 + 所有已配置房间列表 JSON"""
-        rooms = {}
-        for name, rid in _rooms.items():
-            rooms[name] = {
-                "room_id": rid,
-                "description": _get_room_description(name),
-                "configured": True,
-            }
-        # 也包含 ROOM_DESCRIPTIONS 中定义了但未配置的房间（room_id=0，configured=False）
-        for name in ROOM_DESCRIPTIONS:
-            if name not in _rooms:
-                rooms[name] = {
-                    "room_id": 0,
-                    "description": ROOM_DESCRIPTIONS[name],
-                    "configured": False,
-                }
-
-        with _client_lock:
-            client_ready = _ica_client is not None
-
-        self._send_json(200, {
-            "server": f"noticer/{PLUGIN_MANIFEST.version}",
-            "status": "running",
-            "client_ready": client_ready,
-            "rooms": rooms,
-        })
-
-    # ---------- GET /health ----------
+        self._send_raw(
+            200,
+            body,
+            "text/plain; charset=utf-8",
+        )
 
     def _handle_health(self) -> None:
         with _client_lock:
@@ -607,232 +954,455 @@ class _NoticerHandler(BaseHTTPRequestHandler):
             "client_ready": client_ready,
         })
 
-    # ---------- POST /send ----------
-
-    def _handle_send(self) -> None:
-        """处理发送消息请求"""
-        remote = self.client_address[0]
-
-        # 1. 校验并读取 body
-        content_len_raw = self.headers.get("Content-Length")
-        try:
-            content_len = int(content_len_raw or "0")
-        except (TypeError, ValueError):
-            self._log_and_response(remote, "", "", 400, "invalid Content-Length")
-            return
-
-        if content_len <= 0:
-            self._log_and_response(remote, "", "", 400, "empty body")
-            return
-
-        if content_len > MAX_BODY_SIZE:
-            self._log_and_response(
-                remote,
-                "",
-                "",
-                413,
-                f"request body too large (max {MAX_BODY_SIZE} bytes)",
-            )
-            return
-
-        try:
-            raw = self.rfile.read(content_len)
-        except (socket.timeout, TimeoutError):
-            self._log_and_response(remote, "", "", 408, "request body read timeout")
-            return
-        except OSError as e:
-            self._log_and_response(remote, "", "", 400, f"failed to read body: {e}")
-            return
-
-        if len(raw) != content_len:
-            self._log_and_response(remote, "", "", 400, "incomplete request body")
-            return
-
-        try:
-            data = json.loads(raw)
-        except Exception as e:
-            self._log_and_response(remote, "?", "?", 400, f"invalid json: {e}")
-            return
-
-        if not isinstance(data, dict):
-            self._log_and_response(remote, "?", "?", 400, "json body must be an object")
-            return
-
-        # 2. 取参 + 校验类型
-        room_name = data.get("room")
-        room_id_raw = data.get("room_id")
-        message = data.get("message")
-        image_bytes, image_type, as_sticker, image_error = _parse_image_payload(data)
-
-        # room_id 优先（直接指定群号），否则用 room 名称查找
-        if isinstance(room_id_raw, (int, float)):
-            room_id = int(room_id_raw)
-            room_name = str(room_name).strip() if isinstance(room_name, str) else f"room_{room_id}"
-        elif isinstance(room_name, str) and room_name.strip():
-            room_name = room_name.strip()
-            if room_name not in _rooms:
-                self._log_and_response(remote, room_name, self._msg_preview(message), 400,
-                                       f"unknown room '{room_name}', available: " +
-                                       _get_room_names_str())
-                return
-            room_id = _get_room_id(room_name)
-            if room_id == 0:
-                self._log_and_response(remote, room_name, self._msg_preview(message), 400,
-                                       f"room '{room_name}' is not configured (room_id = 0)")
-                return
-        else:
-            self._log_and_response(
-                remote,
-                "" if room_name is None else self._msg_preview(room_name),
-                self._msg_preview(message),
-                400,
-                "`room` or `room_id` is required (available rooms: " + _get_room_names_str() + ")",
-            )
-            return
-
-        if message is None:
-            message = ""
-        if not isinstance(message, str):
-            self._log_and_response(
-                remote,
-                room_name,
-                self._msg_preview(message),
-                400,
-                "`message` must be a string",
-            )
-            return
-
-        if image_error is not None:
-            self._log_and_response(
-                remote,
-                room_name,
-                self._msg_preview(message),
-                400,
-                image_error,
-            )
-            return
-
-        if message == "" and image_bytes is None:
-            self._log_and_response(
-                remote,
-                room_name,
-                "",
-                400,
-                "`message` or `image` is required",
-            )
-            return
-
-        # 4. 获取 client
+    def _handle_ready(self) -> None:
         with _client_lock:
-            client = _ica_client
-        if client is None:
-            self._log_and_response(remote, room_name, self._msg_preview(message), 503,
-                                   "bot client not ready yet")
+            client_ready = _ica_client is not None
+        with _send_state_lock:
+            queue_ready = _send_accepting and _send_queue is not None
+        ready = client_ready and queue_ready
+        self._send_json(
+            200 if ready else 503,
+            {
+                "status": "ready" if ready else "not_ready",
+                "client_ready": client_ready,
+                "queue_ready": queue_ready,
+            },
+        )
+
+    def _handle_status(self) -> None:
+        rooms: dict[str, dict[str, object]] = {}
+        for name, room_id in _rooms.items():
+            rooms[name] = {
+                "room_id": room_id,
+                "description": _get_room_description(name),
+                "configured": True,
+            }
+        for name, description in ROOM_DESCRIPTIONS.items():
+            if name not in rooms:
+                rooms[name] = {
+                    "room_id": 0,
+                    "description": description,
+                    "configured": False,
+                }
+
+        with _client_lock:
+            client_ready = _ica_client is not None
+        with _send_state_lock:
+            send_queue = _send_queue
+            queue_ready = _send_accepting and send_queue is not None
+            queue_depth = send_queue.qsize() if send_queue is not None else 0
+        self._send_json(200, {
+            "server": f"noticer/{PLUGIN_MANIFEST.version}",
+            "status": "running",
+            "client_ready": client_ready,
+            "rooms": rooms,
+            "queue": {
+                "ready": queue_ready,
+                "depth": queue_depth,
+                "capacity": _queue_capacity,
+            },
+        })
+
+    def _handle_send(self, mode: str) -> None:
+        started_at = time.monotonic()
+        request_id = uuid.uuid4().hex
+        legacy = mode == "legacy"
+
+        if mode == "direct":
+            if not _direct_token:
+                self._send_api_error(
+                    503,
+                    "direct_api_disabled",
+                    "direct API is disabled",
+                    request_id,
+                    legacy=False,
+                )
+                return
+            if not self._authorize(_direct_token, optional=False, request_id=request_id):
+                return
+        elif not self._authorize(
+            _auth_token,
+            optional=True,
+            request_id=request_id,
+            legacy=legacy,
+        ):
             return
 
-        # 5. 查找 room 对象并发消息
-        try:
-            target_room = _find_room(client, room_id)
-
-            if target_room is None:
-                self._log_and_response(remote, room_name, self._msg_preview(message), 404,
-                                       f"room {room_id} not found in current session "
-                                       "(bot may not have joined this group)")
-                return
-
-            send_msg = target_room.new_message_to(message)
-            if image_bytes is not None:
-                send_msg.set_img(image_bytes, image_type, as_sticker)
-            ok = client.send_message(send_msg)
-
-            preview = self._msg_preview_with_image(message, image_bytes, image_type)
-            if ok:
-                self._log_and_response(remote, room_name, preview, 200,
-                                       "ok")
-            else:
-                self._log_and_response(remote, room_name, preview, 500,
-                                       "send_message returned false")
-
-        except Exception as e:
-            self._log_and_response(
-                remote,
-                room_name,
-                self._msg_preview_with_image(message, image_bytes, image_type),
-                500,
-                str(e),
+        content_type = self.headers.get("Content-Type", "")
+        if content_type.split(";", 1)[0].strip().lower() != "application/json":
+            self._send_api_error(
+                415,
+                "unsupported_media_type",
+                "Content-Type must be application/json",
+                request_id,
+                legacy=legacy,
             )
+            return
 
-    # ---------- 辅助方法 ----------
+        try:
+            data = self._read_json_body()
+            job, deprecated_direct = self._build_job(data, mode, request_id)
+            idempotency_key = (
+                _validate_idempotency_key(self.headers.get("Idempotency-Key"))
+                if not legacy
+                else None
+            )
+        except _RequestError as exc:
+            self._send_api_error(
+                exc.status,
+                exc.code,
+                exc.message,
+                request_id,
+                legacy=legacy,
+            )
+            return
+        except ValueError as exc:
+            self._send_api_error(
+                400,
+                "invalid_idempotency_key",
+                str(exc),
+                request_id,
+                legacy=legacy,
+            )
+            return
 
-    @staticmethod
-    def _msg_preview(message: object, max_len: int = 60) -> str:
-        """截取消息预览，用于日志"""
-        if message is None:
-            return ""
-        preview = message if isinstance(message, str) else repr(message)
-        preview = preview.replace("\n", "\\n").replace("\r", "\\r")
-        if len(preview) > max_len:
-            preview = preview[:max_len] + "..."
-        return preview
+        with _client_lock:
+            client_ready = _ica_client is not None
+        if not client_ready:
+            self._send_api_error(
+                503,
+                "client_not_ready",
+                "bot client not ready yet",
+                request_id,
+                legacy=legacy,
+            )
+            return
 
-    @classmethod
-    def _msg_preview_with_image(
-        cls,
-        message: object,
-        image_bytes: bytes | None,
-        image_type: str,
-    ) -> str:
-        preview = cls._msg_preview(message)
-        if image_bytes is None:
-            return preview
-        image_preview = f"[image {image_type} {len(image_bytes)} bytes]"
-        if preview:
-            return f"{preview} {image_preview}"
-        return image_preview
+        if idempotency_key is None:
+            status, detail = _queue_send(job)
+        else:
+            fingerprint = _send_fingerprint(self.path, job)
+            selected_job, error_status, error_detail = _idempotent_enqueue(
+                idempotency_key,
+                fingerprint,
+                job,
+            )
+            if selected_job is None:
+                self._send_api_error(
+                    error_status,
+                    self._error_code(error_status, error_detail),
+                    error_detail,
+                    request_id,
+                    legacy=False,
+                )
+                return
+            job = selected_job
+            request_id = job.request_id
+            status, detail = _wait_for_job(job)
 
-    def _log_and_response(self, remote: str, room_name: str, msg_preview: str,
-                          status: int, detail: str) -> None:
-        """统一的日志 + 响应"""
-        # 日志
+        elapsed_ms = int((time.monotonic() - started_at) * 1000)
+        image_size = len(job.image_bytes) if job.image_bytes is not None else 0
         log_line = (
-            f"POST /send from {remote} "
-            f"→ room=\"{room_name}\" msg=\"{msg_preview}\" "
-            f"→ {status} {detail}"
+            f"request_id={request_id} path={self.path!r} "
+            f"target={job.room_name!r} text_len={len(job.message)} "
+            f"image_bytes={image_size} status={status} elapsed_ms={elapsed_ms}"
         )
         if 200 <= status < 300:
             _log_info(log_line)
         else:
             _log_warn(log_line)
 
-        # 响应
-        body = {} if status == 200 else {"error": detail}
-        if status == 200:
-            body = {"status": "ok", "room": room_name}
-        self._send_json(status, body)
+        headers: dict[str, str] = {}
+        if deprecated_direct:
+            headers = {
+                "Deprecation": "true",
+                "Link": '</v1/send/direct>; rel="successor-version"',
+            }
+            _log_warn(
+                f"request_id={request_id} legacy /send room_id is deprecated "
+                "and will be removed in noticer 0.5"
+            )
 
-    def _send_json(self, status: int, data: dict) -> None:
-        body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+        if status == 200:
+            if legacy:
+                self._send_json(
+                    200,
+                    {"status": "ok", "room": job.room_name},
+                    headers=headers,
+                )
+            else:
+                body: dict[str, object] = {
+                    "status": "ok",
+                    "request_id": request_id,
+                }
+                if mode == "direct":
+                    body["room_id"] = job.room_id
+                else:
+                    body["room"] = job.room_name
+                self._send_json(200, body)
+            return
+
+        if status == 503 and detail == "send queue is full":
+            headers["Retry-After"] = "1"
+        self._send_api_error(
+            status,
+            self._error_code(status, detail),
+            detail,
+            request_id,
+            legacy=legacy,
+            headers=headers,
+        )
+
+    def _read_json_body(self) -> dict[str, object]:
+        content_len_raw = self.headers.get("Content-Length")
+        try:
+            content_len = int(content_len_raw or "0")
+        except (TypeError, ValueError):
+            raise _RequestError(400, "invalid_content_length", "invalid Content-Length")
+        if content_len <= 0:
+            raise _RequestError(400, "empty_body", "empty body")
+        if content_len > MAX_BODY_SIZE:
+            raise _RequestError(
+                413,
+                "payload_too_large",
+                f"request body too large (max {MAX_BODY_SIZE} bytes)",
+            )
+        try:
+            raw = self.rfile.read(content_len)
+        except (socket.timeout, TimeoutError):
+            raise _RequestError(408, "request_timeout", "request body read timeout")
+        except OSError:
+            raise _RequestError(400, "body_read_failed", "failed to read request body")
+        if len(raw) != content_len:
+            raise _RequestError(400, "incomplete_body", "incomplete request body")
+        try:
+            data = json.loads(raw, parse_constant=_reject_json_constant)
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+            raise _RequestError(400, "invalid_json", f"invalid JSON: {exc}")
+        if not isinstance(data, dict):
+            raise _RequestError(400, "invalid_request", "JSON body must be an object")
+        return cast(dict[str, object], data)
+
+    def _build_job(
+        self,
+        data: dict[str, object],
+        mode: str,
+        request_id: str,
+    ) -> tuple[_SendJob, bool]:
+        legacy = mode == "legacy"
+        deprecated_direct = False
+
+        if mode == "strict":
+            unknown = set(data) - (self._COMMON_FIELDS | {"room"})
+            if unknown:
+                names = ", ".join(sorted(unknown))
+                raise _RequestError(400, "unknown_field", f"unknown field(s): {names}")
+        elif mode == "direct":
+            unknown = set(data) - (self._COMMON_FIELDS | {"room_id"})
+            if unknown:
+                names = ", ".join(sorted(unknown))
+                raise _RequestError(400, "unknown_field", f"unknown field(s): {names}")
+
+        room_name_raw = data.get("room")
+        room_id_raw = data.get("room_id")
+
+        if mode == "direct":
+            room_id = self._require_room_id(room_id_raw)
+            room_name = f"room_{room_id}"
+        elif legacy and room_id_raw is not None:
+            room_id = self._require_room_id(room_id_raw)
+            room_name = (
+                room_name_raw.strip()
+                if isinstance(room_name_raw, str) and room_name_raw.strip()
+                else f"room_{room_id}"
+            )
+            deprecated_direct = True
+        else:
+            if not isinstance(room_name_raw, str) or not room_name_raw.strip():
+                raise _RequestError(
+                    400,
+                    "room_required",
+                    "`room` is required (available rooms: "
+                    + _get_room_names_str()
+                    + ")",
+                )
+            room_name = room_name_raw.strip()
+            if room_name not in _rooms:
+                raise _RequestError(
+                    400,
+                    "unknown_room",
+                    f"unknown room '{room_name}', available: {_get_room_names_str()}",
+                )
+            room_id = _get_room_id(room_name)
+            if room_id == 0:
+                raise _RequestError(
+                    400,
+                    "room_not_configured",
+                    f"room '{room_name}' is not configured (room_id = 0)",
+                )
+
+        message = data.get("message")
+        if message is None:
+            message = ""
+        if not isinstance(message, str):
+            raise _RequestError(400, "invalid_message", "`message` must be a string")
+
+        image_bytes, image_type, as_sticker, image_error = _parse_image_payload(
+            data,
+            strict=not legacy,
+        )
+        if image_error is not None:
+            raise _RequestError(400, "invalid_image", image_error)
+        if message == "" and image_bytes is None:
+            raise _RequestError(
+                400,
+                "content_required",
+                "`message` or `image` is required",
+            )
+
+        return (
+            _SendJob(
+                request_id=request_id,
+                room_name=room_name,
+                room_id=room_id,
+                message=message,
+                image_bytes=image_bytes,
+                image_type=image_type,
+                as_sticker=as_sticker,
+            ),
+            deprecated_direct,
+        )
+
+    @staticmethod
+    def _require_room_id(value: object) -> int:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise _RequestError(
+                400,
+                "invalid_room_id",
+                "`room_id` must be an integer",
+            )
+        return value
+
+    def _authorize(
+        self,
+        expected_token: str,
+        *,
+        optional: bool,
+        request_id: str | None = None,
+        legacy: bool = False,
+    ) -> bool:
+        if optional and not expected_token:
+            return True
+        authorization = self.headers.get("Authorization", "")
+        scheme, separator, supplied = authorization.partition(" ")
+        authorized = (
+            bool(separator)
+            and scheme.lower() == "bearer"
+            and bool(supplied)
+            and hmac.compare_digest(supplied.strip(), expected_token)
+        )
+        if authorized:
+            return True
+        self._send_api_error(
+            401,
+            "unauthorized",
+            "valid Bearer token required",
+            request_id,
+            legacy=legacy,
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+        return False
+
+    @staticmethod
+    def _error_code(status: int, detail: str) -> str:
+        if status == 404:
+            return "room_not_found"
+        if status == 409:
+            return "idempotency_conflict"
+        if status == 503:
+            if "queue" in detail:
+                return "queue_unavailable"
+            return "client_not_ready"
+        if status == 504:
+            if "outcome unknown" in detail:
+                return "outcome_unknown"
+            return "queue_timeout"
+        return "send_failed"
+
+    def _send_api_error(
+        self,
+        status: int,
+        code: str,
+        message: str,
+        request_id: str | None = None,
+        *,
+        legacy: bool = False,
+        headers: dict[str, str] | None = None,
+    ) -> None:
+        if legacy:
+            body: dict[str, object] = {"error": message}
+        else:
+            body = {
+                "status": "error",
+                "error": {"code": code, "message": message},
+            }
+            if request_id is not None:
+                body["request_id"] = request_id
+        self._send_json(status, body, headers=headers)
+
+    def _send_json(
+        self,
+        status: int,
+        data: dict[str, object],
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> None:
+        body = json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        self._send_raw(
+            status,
+            body,
+            "application/json; charset=utf-8",
+            headers=headers,
+        )
+
+    def _send_raw(
+        self,
+        status: int,
+        body: bytes,
+        content_type: str,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         status_text = {
             200: "OK",
             400: "Bad Request",
+            401: "Unauthorized",
             404: "Not Found",
+            405: "Method Not Allowed",
             408: "Request Timeout",
+            409: "Conflict",
             413: "Payload Too Large",
+            415: "Unsupported Media Type",
             500: "Internal Server Error",
             503: "Service Unavailable",
+            504: "Gateway Timeout",
         }.get(status, "Unknown")
+        response_headers = [
+            f"HTTP/1.1 {status} {status_text}",
+            f"Content-Type: {content_type}",
+            f"Content-Length: {len(body)}",
+            "Connection: close",
+        ]
+        for name, value in (headers or {}).items():
+            response_headers.append(f"{name}: {value}")
+        response = ("\r\n".join(response_headers) + "\r\n\r\n").encode("utf-8") + body
         self.close_connection = True
-        response = (
-            f"HTTP/1.1 {status} {status_text}\r\n"
-            "Content-Type: application/json; charset=utf-8\r\n"
-            f"Content-Length: {len(body)}\r\n"
-            "Connection: close\r\n"
-            "\r\n"
-        ).encode("utf-8") + body
-        self.request.sendall(response)
+        try:
+            self.request.sendall(response)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
 
-    def log_message(self, format: str, *args) -> None:
-        """抑制 http.server 默认的 stderr 日志，由我们自己接管"""
+    def log_message(self, format: str, *args: object) -> None:
         pass
 
 
@@ -843,6 +1413,7 @@ class _NoticerHandler(BaseHTTPRequestHandler):
 def on_load() -> None:
     """插件加载时 — 读取配置 + 启动 HTTP server"""
     global _server, _server_thread, _host, _port, _ica_client
+    global _auth_token, _direct_token, _queue_capacity, _send_timeout_seconds
 
     # 读取配置 — [main] 部分
     main_cfg = PLUGIN_MANIFEST.config_unchecked("main")
@@ -855,6 +1426,38 @@ def on_load() -> None:
         _port = int(raw_port) if raw_port not in (None, "") else DEFAULT_PORT
     except (TypeError, ValueError):
         _port = DEFAULT_PORT
+    if not 1 <= _port <= 65535:
+        _log_warn(f"Invalid port {_port}; using default {DEFAULT_PORT}")
+        _port = DEFAULT_PORT
+
+    raw_auth_token: Any = main_cfg.get_value("auth_token")
+    _auth_token = str(raw_auth_token).strip() if raw_auth_token else ""
+    raw_direct_token: Any = main_cfg.get_value("direct_token")
+    _direct_token = str(raw_direct_token).strip() if raw_direct_token else ""
+
+    raw_queue_capacity: Any = main_cfg.get_value("queue_capacity")
+    try:
+        _queue_capacity = int(raw_queue_capacity)
+    except (TypeError, ValueError):
+        _queue_capacity = DEFAULT_QUEUE_CAPACITY
+    if not 1 <= _queue_capacity <= 4096:
+        _log_warn(
+            f"Invalid queue_capacity {_queue_capacity}; "
+            f"using default {DEFAULT_QUEUE_CAPACITY}"
+        )
+        _queue_capacity = DEFAULT_QUEUE_CAPACITY
+
+    raw_send_timeout: Any = main_cfg.get_value("send_timeout_seconds")
+    try:
+        _send_timeout_seconds = float(raw_send_timeout)
+    except (TypeError, ValueError):
+        _send_timeout_seconds = DEFAULT_SEND_TIMEOUT_SECONDS
+    if not math.isfinite(_send_timeout_seconds) or not 1 <= _send_timeout_seconds <= 300:
+        _log_warn(
+            f"Invalid send_timeout_seconds {_send_timeout_seconds}; "
+            f"using default {DEFAULT_SEND_TIMEOUT_SECONDS}"
+        )
+        _send_timeout_seconds = DEFAULT_SEND_TIMEOUT_SECONDS
 
     # 动态读取所有房间 — [rooms] 部分
     _load_rooms()
@@ -864,6 +1467,9 @@ def on_load() -> None:
 
     # 启动 HTTP server (daemon 线程, 主线程退出时自动结束)
     try:
+        with _idempotency_lock:
+            _idempotency_entries.clear()
+        _start_send_worker()
         _server = _NoticerServer((_host, _port), _NoticerHandler)
         _server_thread = threading.Thread(
             target=_server.serve_forever,
@@ -882,6 +1488,10 @@ def on_load() -> None:
 
         _log_info(
             f"HTTP server started on {_host}:{_port}\n"
+            f"queue_capacity={_queue_capacity} "
+            f"send_timeout={_send_timeout_seconds:g}s "
+            f"auth={'enabled' if _auth_token else 'disabled'} "
+            f"direct={'enabled' if _direct_token else 'disabled'}\n"
             + rooms_str
         )
 
@@ -889,8 +1499,9 @@ def on_load() -> None:
             client = _ica_client
         if client is not None:
             _maybe_send_reload_notice(client)
-    except Exception as e:
-        print(f"[noticer] Failed to start HTTP server: {e}")
+    except Exception as exc:
+        _stop_send_worker()
+        print(f"[noticer] Failed to start HTTP server: {type(exc).__name__}: {exc}")
 
 
 def on_unload() -> None:
@@ -906,7 +1517,10 @@ def on_unload() -> None:
         server.server_close()
         if thread is not None and thread.is_alive():
             thread.join(timeout=5.0)
-        print("[noticer] HTTP server stopped")
+    _stop_send_worker()
+    with _idempotency_lock:
+        _idempotency_entries.clear()
+    print("[noticer] HTTP server stopped")
 
 
 def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
@@ -915,15 +1529,17 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
 
     client_updated = False
     with _client_lock:
-        current_client_id = _ica_client.client_id if _ica_client is not None else None
-        new_client_id = client.client_id
-        if current_client_id != new_client_id:
-            _ica_client = client
-            _set_persisted_client(client)
-            client_updated = True
-        elif _ica_client is None:
-            _ica_client = client
-            _set_persisted_client(client)
+        previous_client_id = (
+            _ica_client.client_id if _ica_client is not None else None
+        )
+        client_updated = (
+            _ica_client is None
+            or previous_client_id != client.client_id
+        )
+        # bot 可能为每次回调创建新的 Python wrapper。始终刷新引用以免持有
+        # 失效对象，但不要把 wrapper 身份变化误报成 client 重连。
+        _ica_client = client
+        _set_persisted_client(client)
 
     if client_updated:
         _log_info("Client captured, webhook ready")

@@ -3,6 +3,7 @@ ds_monitor.py - DeepSeek 网页更新监测插件
 
 启动 ds-monitor 二进制的 watch 模式监控 chat.deepseek.com 页面变更，
 检测到变化时由 ds-monitor 自动通过 noticer 发送 AI 分析结果。
+配置房间通知走 /v1/send；命令触发的动态 room_id 通知走受 Token 保护的 direct API。
 
 配置 (config/ds_monitor.toml):
 
@@ -12,6 +13,9 @@ binary = "D:\\githubs\\deepseek\\web_craw\\target\\release\\ds-monitor.exe"
 config = "D:\\githubs\\deepseek\\web_craw\\config.toml"
 interval = 600
 ```
+
+`web_craw/config.toml` 保存 noticer strict/direct URL 与本地 Token；
+仓库只提交不含密钥的 `config.example.toml`。
 """
 
 from __future__ import annotations
@@ -32,7 +36,7 @@ from shenbot_api import PluginManifest, ConfigStorage
 PLUGIN_MANIFEST = PluginManifest(
     plugin_id="ds_monitor",
     name="DeepSeek 网页更新监测",
-    version="0.1.0",
+    version="0.2.0",
     description="定期检查 chat.deepseek.com 页面变更，Claude Code 分析后推送通知",
     authors=["shenjack"],
     config={
@@ -86,21 +90,21 @@ def notify_error(msg: str, room_id: int | None = None) -> None:
         if _client is not None:
             _client.warn(ds(msg))
             if room_id is not None:
-                import urllib.request
-
-                body = json.dumps({
-                    "room_id": room_id,
-                    "message": ds(msg),
-                }).encode()
-                req = urllib.request.Request(
-                    "http://127.0.0.1:10020/send",
-                    data=body,
-                    headers={"Content-Type": "application/json"},
-                    method="POST",
+                target_room = next(
+                    (
+                        room
+                        for room in _client.status.rooms
+                        if int(room.room_id) == room_id
+                    ),
+                    None,
                 )
-                urllib.request.urlopen(req, timeout=5)
-    except Exception:
-        pass
+                if target_room is None:
+                    log(f"错误通知目标会话不存在: {room_id}")
+                    return
+                if not _client.send_message(target_room.new_message_to(ds(msg))):
+                    log(f"错误通知发送失败: {room_id}")
+    except Exception as exc:
+        log(f"错误通知发送异常: {type(exc).__name__}")
 
 
 def load_config() -> None:
