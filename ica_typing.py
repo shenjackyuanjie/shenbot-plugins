@@ -56,7 +56,13 @@ class IcaStatus:
     @property
     def resident_set_size(self) -> str: ...
     @property
-    def head_used(self) -> str: ...
+    def heap_used(self) -> str: ...
+    @property
+    def loaded_messages_count(self) -> int: ...
+
+    def loaded_messages_count_for(self, room_id: IcaType.RoomId) -> int:
+        """获取指定房间最近一次成功加载的消息数量，未知房间返回 0。"""
+        ...
     @property
     def load(self) -> str: ...
     @property
@@ -381,7 +387,7 @@ class IcaClient:
         于 1.6.7 添加"""
         ...
 
-    def reload_plugin_status(self) -> bool:
+    def sync_status_from_file(self) -> None:
         """重载插件状态"""
         ...
 
@@ -389,15 +395,15 @@ class IcaClient:
         """重载插件"""
         ...
 
-    def set_plugin_status(self, plugin_name: str, status: bool):
+    def set_plugin_status(self, plugin_name: str, status: bool) -> None:
         """设置插件状态"""
         ...
 
-    def get_plugin_status(self, plugin_name: str) -> bool:
+    def get_plugin_status(self, plugin_name: str) -> bool | None:
         """获取插件状态"""
         ...
 
-    def sync_status_to_config(self) -> None:
+    def sync_status_to_file(self) -> None:
         """将插件状态同步到配置文件"""
         ...
 
