@@ -1,7 +1,7 @@
 """
 ds_monitor.py - DeepSeek 网页更新监测插件
 
-启动 ds-monitor 二进制的 watch 模式监控 chat.deepseek.com 页面变更，
+启动 ds-monitor 二进制的 watch 模式监控 Chat、Platform 和 API Docs 页面变更，
 检测到变化时由 ds-monitor 自动通过 noticer 发送 AI 分析结果。
 配置房间通知走 /v1/send；命令触发的动态 room_id 通知走受 Token 保护的 direct API。
 
@@ -26,6 +26,7 @@ import subprocess
 import threading
 import time
 from datetime import datetime, timezone
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -36,8 +37,8 @@ from shenbot_api import PluginManifest, ConfigStorage
 PLUGIN_MANIFEST = PluginManifest(
     plugin_id="ds_monitor",
     name="DeepSeek 网页更新监测",
-    version="0.2.0",
-    description="定期检查 chat.deepseek.com 页面变更，Claude Code 分析后推送通知",
+    version="0.3.0",
+    description="定期检查 DeepSeek Chat、Platform 和 API Docs 变更，Claude Code 分析后推送通知",
     authors=["shenjack"],
     config={
         "ds_monitor": ConfigStorage(
@@ -52,10 +53,15 @@ _binary_path: str = ""
 _config_path: str = ""
 _check_interval: int = 600
 _enabled: bool = True
+_target_configs: dict[str, "MonitorTarget"] = {}
 
 _last_check_time: datetime | None = None
 _last_change_time: datetime | None = None
 _last_change_summary: str = ""
+_last_check_times: dict[str, datetime] = {}
+_last_change_times: dict[str, datetime] = {}
+_last_change_summaries: dict[str, str] = {}
+_active_output_target: str | None = None
 
 _client: "IcaClient | None" = None
 _watch_process: subprocess.Popen[str] | None = None
@@ -68,6 +74,15 @@ _last_recent_cmd_at: float = 0.0
 _last_analyze_cmd_at: float = 0.0
 
 COMMAND_COOLDOWN_SECS = 60.0
+
+
+@dataclass(frozen=True)
+class MonitorTarget:
+    key: str
+    label: str
+    url: str
+    output: str
+    enabled: bool = True
 
 
 def ds(msg: str) -> str:
@@ -108,7 +123,7 @@ def notify_error(msg: str, room_id: int | None = None) -> None:
 
 
 def load_config() -> None:
-    global _binary_path, _config_path, _check_interval
+    global _binary_path, _config_path, _check_interval, _target_configs
 
     cfg = PLUGIN_MANIFEST.config_unchecked("ds_monitor")
 
@@ -127,6 +142,8 @@ def load_config() -> None:
     except (TypeError, ValueError):
         _check_interval = 600
 
+    _target_configs = load_target_configs()
+
 
 def work_dir() -> str:
     # ds-monitor resolves relative paths in config.toml (output/settings)
@@ -138,24 +155,52 @@ def work_dir() -> str:
     return cwd
 
 
-def output_dir() -> str:
-    base = work_dir()
-    output = "output"
+def load_target_configs() -> dict[str, MonitorTarget]:
+    """读取 ds-monitor 的三类监测目标，缺省值与 Rust 配置保持一致。"""
+    raw: dict[str, Any] = {}
     if _config_path and os.path.isfile(_config_path):
         try:
             import tomllib
 
             with open(_config_path, "rb") as f:
-                cfg = tomllib.load(f)
-            raw_output = cfg.get("target", {}).get("output")
-            if raw_output:
-                output = str(raw_output)
-        except Exception as e:
-            log(f"读取 output 配置失败，使用默认 output: {e}")
+                raw = tomllib.load(f)
+        except Exception as exc:
+            log(f"读取监测目标配置失败，使用默认目标: {exc}")
 
-    if not os.path.isabs(output):
-        output = os.path.join(base, output)
-    return output
+    sections = {
+        "chat": ("Chat", raw.get("target", {}), True, "https://chat.deepseek.com/", "output/chat"),
+        "platform": (
+            "Platform",
+            raw.get("platform", {}),
+            True,
+            "https://platform.deepseek.com/",
+            "output/platform",
+        ),
+        "docs": (
+            "API Docs",
+            raw.get("docs", {}),
+            True,
+            "https://api-docs.deepseek.com/zh-cn/",
+            "output/docs",
+        ),
+    }
+    targets: dict[str, MonitorTarget] = {}
+    for key, (label, section, default_enabled, default_url, default_output) in sections.items():
+        section = section if isinstance(section, dict) else {}
+        enabled = bool(section.get("enabled", default_enabled))
+        url = str(section.get("url", section.get("base_url", default_url)))
+        output = str(section.get("output", default_output))
+        if not os.path.isabs(output):
+            output = os.path.join(work_dir(), output)
+        targets[key] = MonitorTarget(key, label, url, output, enabled)
+    return targets
+
+
+def output_dir() -> str:
+    target = _target_configs.get("chat")
+    if target is not None:
+        return target.output
+    return os.path.join(work_dir(), "output/chat")
 
 
 def base_args(command: str) -> list[str]:
@@ -187,7 +232,6 @@ def run_binary(room_id: int | None = None) -> str:
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=300,
             cwd=work_dir(),
         )
         out = result.stdout
@@ -195,7 +239,7 @@ def run_binary(room_id: int | None = None) -> str:
             out += "\n" + result.stderr
         return out
     except subprocess.TimeoutExpired:
-        msg = "❌ ds-monitor 检查超时 (300s)"
+        msg = "❌ ds-monitor 检查超时（由外部进程终止）"
         log(msg)
         notify_error(msg, room_id)
         return msg
@@ -206,11 +250,12 @@ def run_binary(room_id: int | None = None) -> str:
         return msg
 
 
-def run_last_analyze(room_id: int | None = None) -> str:
+def run_last_analyze(target: str, room_id: int | None = None) -> str:
     if not validate_binary(room_id):
         return f"❌ ds-monitor 二进制不存在: {_binary_path}"
 
     args = base_args("analyze-last")
+    args.append(f"--target={target}")
     if room_id is not None:
         args.append(f"--noticer-room-id={room_id}")
         args.append(f"--room=room_{room_id}")
@@ -222,7 +267,6 @@ def run_last_analyze(room_id: int | None = None) -> str:
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=300,
             cwd=work_dir(),
         )
         out = result.stdout
@@ -230,7 +274,7 @@ def run_last_analyze(room_id: int | None = None) -> str:
             out += "\n" + result.stderr
         return out
     except subprocess.TimeoutExpired:
-        msg = "❌ ds-monitor 最近变更分析超时 (300s)"
+        msg = "❌ ds-monitor 最近变更分析超时（由外部进程终止）"
         log(msg)
         notify_error(msg, room_id)
         return msg
@@ -242,7 +286,8 @@ def run_last_analyze(room_id: int | None = None) -> str:
 
 
 def handle_output_line(line: str) -> None:
-    global _last_check_time, _last_change_time, _last_change_summary, _watch_summary_lines
+    global _last_check_time, _last_change_time, _last_change_summary
+    global _watch_summary_lines, _active_output_target
 
     line = line.rstrip()
     if not line:
@@ -250,30 +295,47 @@ def handle_output_line(line: str) -> None:
 
     log(line[:300])
 
-    if "检测到变化" in line:
-        now = datetime.now(timezone.utc)
+    payload = line
+    for key, target in _target_configs.items():
+        prefix = f"[{target.label}]"
+        if line.startswith(prefix):
+            _active_output_target = key
+            payload = line[len(prefix) :].lstrip()
+            break
+
+    target_key = _active_output_target or "chat"
+    now = datetime.now(timezone.utc)
+
+    if "检测到变化" in payload:
         _last_check_time = now
         _last_change_time = now
+        _last_check_times[target_key] = now
+        _last_change_times[target_key] = now
         _watch_summary_lines = []
         return
 
-    if "无变化" in line:
-        _last_check_time = datetime.now(timezone.utc)
+    if "无变化" in payload or "首次抓取" in payload:
+        _last_check_time = now
+        _last_check_times[target_key] = now
         _watch_summary_lines = None
         return
 
     if _watch_summary_lines is not None:
-        if line.startswith("===") or "已发送通知" in line:
+        if payload.startswith("===") or "已发送通知" in payload:
             if _watch_summary_lines:
-                _last_change_summary = "\n".join(_watch_summary_lines)
+                summary = "\n".join(_watch_summary_lines)
+                _last_change_summary = summary
+                _last_change_summaries[target_key] = summary
             _watch_summary_lines = None
             return
 
-        stripped = line.strip()
+        stripped = payload.strip()
         if stripped:
             _watch_summary_lines.append(stripped)
             if len(_watch_summary_lines) >= 20:
-                _last_change_summary = "\n".join(_watch_summary_lines)
+                summary = "\n".join(_watch_summary_lines)
+                _last_change_summary = summary
+                _last_change_summaries[target_key] = summary
                 _watch_summary_lines = None
 
 
@@ -406,21 +468,19 @@ def changed_files_from_diff(diff: str) -> list[str]:
     return files[:8]
 
 
-def latest_change_report() -> str:
-    latest_output_dir = output_dir()
-    if not os.path.isdir(latest_output_dir):
-        return ds(f"还没有历史输出目录: {latest_output_dir}")
+def latest_web_change_report(target: MonitorTarget) -> str:
+    if not os.path.isdir(target.output):
+        return f"{target.label}: 还没有历史输出目录 ({target.output})"
 
     try:
-        names = sorted(os.listdir(latest_output_dir), reverse=True)
-    except OSError as e:
-        return ds(f"读取历史输出目录失败: {e}")
+        names = sorted(os.listdir(target.output), reverse=True)
+    except OSError as exc:
+        return f"{target.label}: 读取历史输出目录失败: {exc}"
 
     for name in names:
-        path = os.path.join(latest_output_dir, name)
+        path = os.path.join(target.output, name)
         if not os.path.isdir(path):
             continue
-
         diff_path = os.path.join(path, "diff-from-previous.patch")
         if not os.path.isfile(diff_path):
             continue
@@ -431,19 +491,19 @@ def latest_change_report() -> str:
             try:
                 with open(metadata_path, "r", encoding="utf-8") as f:
                     metadata = json.load(f)
-            except Exception as e:
-                log(f"读取最近变更 metadata 失败: {e}")
+            except Exception as exc:
+                log(f"读取 {target.label} 最近变更 metadata 失败: {exc}")
 
         try:
             with open(diff_path, "r", encoding="utf-8", errors="replace") as f:
                 diff = f.read()
-        except OSError as e:
-            return ds(f"读取最近变更 diff 失败: {e}")
+        except OSError as exc:
+            return f"{target.label}: 读取最近变更 diff 失败: {exc}"
 
         add, delete = count_diff_lines(diff)
         changed_files = changed_files_from_diff(diff)
         lines = [
-            "DS 监测：最近一次网页修改",
+            f"{target.label} 最近一次网页修改",
             f"时间: {metadata.get('timestamp', name)}",
             f"Commit: {metadata.get('commit_id') or 'N/A'}",
             f"SHA256: {str(metadata.get('sha256') or 'N/A')[:12]}",
@@ -452,12 +512,79 @@ def latest_change_report() -> str:
         if changed_files:
             lines.append("变更范围:")
             lines.extend(f"  - {file}" for file in changed_files)
-        if _last_change_summary:
-            lines.append(f"运行摘要:\n{_last_change_summary}")
+        if target.key in _last_change_summaries:
+            lines.append(f"运行摘要:\n{_last_change_summaries[target.key]}")
         lines.append(f"目录: {name}")
         return "\n".join(lines)
 
-    return ds("还没有记录到带 diff 的历史网页修改")
+    return f"{target.label}: 还没有记录到带 diff 的历史网页修改"
+
+
+def latest_docs_change_report(target: MonitorTarget) -> str:
+    changes_dir = os.path.join(target.output, "changes")
+    try:
+        names = sorted(os.listdir(changes_dir), reverse=True)
+    except FileNotFoundError:
+        return f"{target.label}: 还没有历史变更 manifest"
+    except OSError as exc:
+        return f"{target.label}: 读取变更目录失败: {exc}"
+
+    for name in names:
+        manifest_path = os.path.join(changes_dir, name, "manifest.json")
+        if not os.path.isfile(manifest_path):
+            continue
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                manifest = json.load(f)
+        except (OSError, json.JSONDecodeError) as exc:
+            return f"{target.label}: 读取 manifest 失败: {exc}"
+
+        entries = manifest.get("changes", [])
+        counts = {kind: 0 for kind in ("added", "updated", "removed")}
+        for entry in entries:
+            kind = str(entry.get("kind", "")).lower()
+            if kind in counts:
+                counts[kind] += 1
+        lines = [
+            f"{target.label} 最近一次网页修改",
+            f"时间: {manifest.get('timestamp', name)}",
+            f"页面: {len(entries)}（新增 {counts['added']} · 更新 {counts['updated']} · 删除 {counts['removed']}）",
+        ]
+        for entry in entries[:8]:
+            lines.append(
+                f"  - [{entry.get('kind', 'unknown')}] {entry.get('title') or entry.get('url', 'N/A')}"
+            )
+        lines.append(f"Manifest: {os.path.relpath(manifest_path, target.output)}")
+        return "\n".join(lines)
+    return f"{target.label}: 还没有历史变更 manifest"
+
+
+def latest_change_report(target_key: str | None = None) -> str:
+    targets = _target_configs
+    if target_key is not None:
+        target = targets.get(target_key)
+        if target is None:
+            return ds(f"未知监测目标: {target_key}（可选 chat、platform、docs）")
+        if not target.enabled:
+            return ds(f"{target.label} 监测未启用")
+        reports = [
+            latest_docs_change_report(target)
+            if target.key == "docs"
+            else latest_web_change_report(target)
+        ]
+    else:
+        reports = []
+        for key in ("chat", "platform", "docs"):
+            target = targets.get(key)
+            if target is not None and target.enabled:
+                reports.append(
+                    latest_docs_change_report(target)
+                    if target.key == "docs"
+                    else latest_web_change_report(target)
+                )
+    if not reports:
+        return ds("没有启用任何监测目标")
+    return ds("最近一次网页修改汇总\n\n" + "\n\n".join(reports))
 
 
 def do_check(room_id: int | None = None) -> None:
@@ -494,7 +621,10 @@ def do_check(room_id: int | None = None) -> None:
 
 def on_load() -> None:
     load_config()
-    log(f"加载完成 (binary={_binary_path}, interval={_check_interval}s)")
+    enabled = ", ".join(
+        target.label for target in _target_configs.values() if target.enabled
+    )
+    log(f"加载完成 (binary={_binary_path}, interval={_check_interval}s, targets={enabled})")
     if _enabled:
         start_watch()
 
@@ -517,14 +647,17 @@ def on_ica_message(msg: "IcaNewMessage", client: "IcaClient") -> None:
     if not content:
         return
 
+    parts = content.split()
     if content == "/monitor":
         cmd_status(msg, client)
     elif content == "/monitor check":
         cmd_check(msg, client)
-    elif content == "/monitor last analyze":
-        cmd_last_analyze(msg, client)
+    elif len(parts) == 3 and parts[:2] == ["/monitor", "last"]:
+        cmd_last(msg, client, parts[2])
     elif content == "/monitor last":
         cmd_last(msg, client)
+    elif len(parts) == 4 and parts[:3] == ["/monitor", "analyze", "last"]:
+        cmd_last_analyze(msg, client, parts[3])
     elif content == "/monitor on":
         cmd_enable(msg, client, True)
     elif content == "/monitor off":
@@ -541,16 +674,22 @@ def cmd_status(msg: "IcaNewMessage", client: "IcaClient") -> None:
     ]
     if _watch_process is not None and _watch_process.poll() is None:
         lines.append(f"watch pid: {_watch_process.pid}")
-    if _last_check_time:
-        lines.append(
-            f"上次检查: {_last_check_time.strftime('%Y-%m-%d %H:%M:%S')} UTC"
-        )
-    if _last_change_time:
-        lines.append(
-            f"上次变更: {_last_change_time.strftime('%Y-%m-%d %H:%M:%S')} UTC"
-        )
-        if _last_change_summary:
-            lines.append(f"变更摘要:\n{_last_change_summary}")
+    for key in ("chat", "platform", "docs"):
+        target = _target_configs.get(key)
+        if target is None:
+            continue
+        state = "✅ 启用" if target.enabled else "⏸ 未启用"
+        lines.append(f"{target.label}: {state}")
+        lines.append(f"  输出: {target.output}")
+        checked = _last_check_times.get(key)
+        changed = _last_change_times.get(key)
+        if checked:
+            lines.append(f"  上次检查: {checked.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+        if changed:
+            lines.append(f"  上次变更: {changed.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+        summary = _last_change_summaries.get(key)
+        if summary:
+            lines.append(f"  变更摘要: {summary[:300]}")
 
     client.send_message(msg.reply_with("\n".join(lines)))
 
@@ -575,24 +714,33 @@ def cmd_check(msg: "IcaNewMessage", client: "IcaClient") -> None:
     threading.Thread(target=restart, daemon=True).start()
 
 
-def cmd_last(msg: "IcaNewMessage", client: "IcaClient") -> None:
+def cmd_last(
+    msg: "IcaNewMessage", client: "IcaClient", target_key: str | None = None
+) -> None:
     global _last_recent_cmd_at
 
     if cooling_down(_last_recent_cmd_at):
         return
 
     _last_recent_cmd_at = time.monotonic()
-    client.send_message(msg.reply_with(latest_change_report()))
+    client.send_message(msg.reply_with(latest_change_report(target_key)))
 
 
-def cmd_last_analyze(msg: "IcaNewMessage", client: "IcaClient") -> None:
+def cmd_last_analyze(
+    msg: "IcaNewMessage", client: "IcaClient", target_key: str
+) -> None:
     global _last_analyze_cmd_at
 
-    report = latest_change_report()
+    target = _target_configs.get(target_key)
+    if target is None or not target.enabled:
+        client.send_message(msg.reply_with(ds(f"未知或未启用监测目标: {target_key}（可选 chat、platform、docs）")))
+        return
+
+    report = latest_change_report(target_key)
     if not is_admin(msg, client):
         client.send_message(
             msg.reply_with(
-                report + "\n\n只有管理员才能触发 Claude code分析"
+                report + "\n\n只有管理员才能触发 Claude Code 分析"
             )
         )
         return
@@ -602,23 +750,27 @@ def cmd_last_analyze(msg: "IcaNewMessage", client: "IcaClient") -> None:
 
     _last_analyze_cmd_at = time.monotonic()
     room_id = int(msg.room_id)
-    client.send_message(msg.reply_with(ds("正在触发最近一次变更的 Claude Code 分析")))
+    client.send_message(
+        msg.reply_with(ds(f"正在触发 {target.label} 最近一次变更的 Claude Code 分析"))
+    )
 
     def analyze() -> None:
-        output = run_last_analyze(room_id)
+        output = run_last_analyze(target_key, room_id)
         log(f"最近变更分析结果: {output[:500]}")
-        if "没有找到带 diff 的历史变更" in output:
-            client.send_message(msg.reply_with(ds("没有找到带 diff 的历史变更")))
+        if "没有找到带 diff 的历史变更" in output or "没有找到历史变更 manifest" in output:
+            client.send_message(msg.reply_with(ds(f"没有找到 {target.label} 的历史变更")))
         elif "分析失败" in output or "❌" in output:
-            client.send_message(msg.reply_with(ds(f"最近变更分析失败:\n{output[:800]}")))
-        elif "已发送最近一次变更分析" in output:
+            client.send_message(msg.reply_with(ds(f"{target.label} 最近变更分析失败:\n{output[:800]}")))
+        elif "已发送" in output and "分析" in output:
             client.send_message(
                 msg.reply_with(
-                    latest_change_report()
+                    latest_change_report(target_key)
                     + "\n\n"
-                    + ds("最近一次变更的 Claude Code 分析已发送")
+                    + ds(f"{target.label} 最近一次变更的 Claude Code 分析已发送")
                 )
             )
+        else:
+            client.send_message(msg.reply_with(ds(f"{target.label} 分析命令已结束，请查看日志")))
 
     threading.Thread(target=analyze, daemon=True).start()
 
@@ -640,8 +792,9 @@ def cmd_help(msg: "IcaNewMessage", client: "IcaClient") -> None:
             "🔍 DS 监测：DeepSeek 网页监测\n"
             "/monitor         - 查看状态\n"
             "/monitor check   - 重启 watch 并触发检查\n"
-            "/monitor last    - 查看最近一次网页修改\n"
-            "/monitor last analyze - 管理员重新分析最近一次修改\n"
+            "/monitor last    - 汇总 Chat、Platform、API Docs 最近修改\n"
+            "/monitor last <chat|platform|docs> - 查看指定目标最近修改\n"
+            "/monitor analyze last <chat|platform|docs> - 管理员重新分析指定目标\n"
             "/monitor on/off  - 开关\n"
             "/monitor help    - 帮助"
         )
