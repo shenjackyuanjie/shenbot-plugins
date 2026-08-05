@@ -7,10 +7,10 @@ from typing import Callable, Union, TYPE_CHECKING
 if TYPE_CHECKING:
     from ica_typing import IcaSendMessage
 
-__version__: str = "0.9.2"
+__version__: str = "0.9.3"
 _version_: str = __version__
 
-_ica_version_: str = "2.0.3"
+_ica_version_: str = "2.0.4"
 _tailchat_version_: str = "2.0.0"
 
 

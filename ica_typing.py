@@ -199,6 +199,9 @@ class IcaSendMessage:
         @param as_sticker: 是否作为贴纸发送
         """
 
+    def add_img(self, file: bytes, file_type: str):
+        """追加一张图片/媒体；多次调用可构造多图消息。"""
+
     def remove_reply(self) -> IcaSendMessage:
         """删除回复"""
         ...
