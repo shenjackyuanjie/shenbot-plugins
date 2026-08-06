@@ -37,8 +37,8 @@ from shenbot_api import PluginManifest, ConfigStorage
 PLUGIN_MANIFEST = PluginManifest(
     plugin_id="ds_monitor",
     name="DeepSeek 网页更新监测",
-    version="0.3.0",
-    description="定期检查 DeepSeek Chat、Platform 和 API Docs 变更，Claude Code 分析后推送通知",
+    version="0.3.2",
+    description="定期检查 DeepSeek Chat、Platform 和 API Docs 变更，DeepSeek V4F 分析后推送通知",
     authors=["shenjack"],
     config={
         "ds_monitor": ConfigStorage(
@@ -54,6 +54,7 @@ _config_path: str = ""
 _check_interval: int = 600
 _enabled: bool = True
 _target_configs: dict[str, "MonitorTarget"] = {}
+_fingerprint_history_path: str = ""
 
 _last_check_time: datetime | None = None
 _last_change_time: datetime | None = None
@@ -124,6 +125,7 @@ def notify_error(msg: str, room_id: int | None = None) -> None:
 
 def load_config() -> None:
     global _binary_path, _config_path, _check_interval, _target_configs
+    global _fingerprint_history_path
 
     cfg = PLUGIN_MANIFEST.config_unchecked("ds_monitor")
 
@@ -143,6 +145,7 @@ def load_config() -> None:
         _check_interval = 600
 
     _target_configs = load_target_configs()
+    _fingerprint_history_path = load_fingerprint_history_path()
 
 
 def work_dir() -> str:
@@ -194,6 +197,26 @@ def load_target_configs() -> dict[str, MonitorTarget]:
             output = os.path.join(work_dir(), output)
         targets[key] = MonitorTarget(key, label, url, output, enabled)
     return targets
+
+
+def load_fingerprint_history_path() -> str:
+    """Read the Rust fingerprint history path, using the same default."""
+    raw: dict[str, Any] = {}
+    if _config_path and os.path.isfile(_config_path):
+        try:
+            import tomllib
+
+            with open(_config_path, "rb") as f:
+                raw = tomllib.load(f)
+        except Exception as exc:
+            log(f"Failed to read fingerprint config; using default history path: {exc}")
+
+    section = raw.get("fingerprint", {})
+    section = section if isinstance(section, dict) else {}
+    history = str(section.get("history", "output/fingerprint-history.jsonl"))
+    if not os.path.isabs(history):
+        history = os.path.join(work_dir(), history)
+    return history
 
 
 def output_dir() -> str:
@@ -256,6 +279,8 @@ def run_last_analyze(target: str, room_id: int | None = None) -> str:
 
     args = base_args("analyze-last")
     args.append(f"--target={target}")
+    args.append("--reanalyze")
+    args.append("--unlimited-timeout")
     if room_id is not None:
         args.append(f"--noticer-room-id={room_id}")
         args.append(f"--room=room_{room_id}")
@@ -587,6 +612,86 @@ def latest_change_report(target_key: str | None = None) -> str:
     return ds("最近一次网页修改汇总\n\n" + "\n\n".join(reports))
 
 
+def fingerprint_history_report(limit: int = 5) -> str:
+    if not _fingerprint_history_path:
+        return ds("Fingerprint history file is not configured")
+    if not os.path.isfile(_fingerprint_history_path):
+        return ds(f"No fingerprint history yet (file does not exist: {_fingerprint_history_path})")
+
+    try:
+        with open(_fingerprint_history_path, "r", encoding="utf-8") as f:
+            raw_lines = f.readlines()
+    except OSError as exc:
+        return ds(f"Failed to read fingerprint history: {exc}")
+
+    records: list[dict[str, Any]] = []
+    for line in reversed(raw_lines):
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(record, dict):
+            continue
+        if record.get("event") not in {"baseline", "change"}:
+            continue
+        if not isinstance(record.get("checked_at"), str):
+            continue
+        if not isinstance(record.get("changes"), list):
+            continue
+        if not isinstance(record.get("models"), dict):
+            continue
+        if not isinstance(record.get("errors"), list):
+            continue
+        records.append(record)
+        if len(records) >= limit:
+            break
+
+    if not records:
+        return ds(f"No valid fingerprint history records: {_fingerprint_history_path}")
+
+    lines = [f"DeepSeek fingerprint history (latest {len(records)})"]
+    for record in records:
+        event = record["event"]
+        lines.extend(["", f"Time: {record['checked_at']}", f"Event: {event}"])
+
+        changes = record["changes"]
+        if changes:
+            lines.append("Fingerprint changes:")
+            for change in changes:
+                if not isinstance(change, dict):
+                    continue
+                old = change.get("old")
+                old_text = "no previous value" if old is None else str(old)
+                lines.append(
+                    f"  - {change.get('model', 'N/A')}: {old_text} -> {change.get('new', 'N/A')}"
+                )
+        else:
+            lines.append("Fingerprint changes: none")
+
+        lines.append("Model snapshot:")
+        models = record["models"]
+        if not models:
+            lines.append("  - no known models")
+        for model_key, snapshot in sorted(models.items()):
+            if not isinstance(snapshot, dict):
+                lines.append(f"  - {model_key}: {snapshot}")
+                continue
+            lines.append(
+                "  - "
+                f"{model_key}: fingerprint={snapshot.get('fingerprint', 'N/A')}, "
+                f"model={snapshot.get('model', 'N/A')}, "
+                f"cached_tokens={snapshot.get('cached_tokens', 'N/A')}"
+            )
+
+        errors = record["errors"]
+        if errors:
+            lines.append("Errors:")
+            lines.extend(f"  - {error}" for error in errors)
+
+    lines.append(f"\nFile: {_fingerprint_history_path}")
+    return ds("\n".join(lines))
+
+
 def do_check(room_id: int | None = None) -> None:
     global _last_check_time, _last_change_time, _last_change_summary
 
@@ -652,6 +757,10 @@ def on_ica_message(msg: "IcaNewMessage", client: "IcaClient") -> None:
         cmd_status(msg, client)
     elif content == "/monitor check":
         cmd_check(msg, client)
+    elif content == "/monitor fp":
+        cmd_fingerprint(msg, client)
+    elif len(parts) == 3 and parts[:2] == ["/monitor", "fp"]:
+        cmd_fingerprint(msg, client, parts[2])
     elif len(parts) == 3 and parts[:2] == ["/monitor", "last"]:
         cmd_last(msg, client, parts[2])
     elif content == "/monitor last":
@@ -714,6 +823,24 @@ def cmd_check(msg: "IcaNewMessage", client: "IcaClient") -> None:
     threading.Thread(target=restart, daemon=True).start()
 
 
+def cmd_fingerprint(
+    msg: "IcaNewMessage", client: "IcaClient", raw_limit: str | None = None
+) -> None:
+    if raw_limit is None:
+        limit = 5
+    else:
+        try:
+            limit = int(raw_limit)
+        except ValueError:
+            client.send_message(msg.reply_with(ds("用法: /monitor fp [N]，N 必须是 1-20 的整数")))
+            return
+        if not 1 <= limit <= 20:
+            client.send_message(msg.reply_with(ds("N 必须是 1-20 的整数")))
+            return
+
+    client.send_message(msg.reply_with(fingerprint_history_report(limit)))
+
+
 def cmd_last(
     msg: "IcaNewMessage", client: "IcaClient", target_key: str | None = None
 ) -> None:
@@ -740,7 +867,7 @@ def cmd_last_analyze(
     if not is_admin(msg, client):
         client.send_message(
             msg.reply_with(
-                report + "\n\n只有管理员才能触发 Claude Code 分析"
+                report + "\n\n只有管理员才能触发 DeepSeek V4F 分析"
             )
         )
         return
@@ -751,7 +878,7 @@ def cmd_last_analyze(
     _last_analyze_cmd_at = time.monotonic()
     room_id = int(msg.room_id)
     client.send_message(
-        msg.reply_with(ds(f"正在触发 {target.label} 最近一次变更的 Claude Code 分析"))
+        msg.reply_with(ds(f"正在触发 {target.label} 最近一次变更的 DeepSeek V4F 分析（无限时长）"))
     )
 
     def analyze() -> None:
@@ -766,7 +893,7 @@ def cmd_last_analyze(
                 msg.reply_with(
                     latest_change_report(target_key)
                     + "\n\n"
-                    + ds(f"{target.label} 最近一次变更的 Claude Code 分析已发送")
+                    + ds(f"{target.label} 最近一次变更的 DeepSeek V4F 分析已发送")
                 )
             )
         else:
@@ -794,7 +921,8 @@ def cmd_help(msg: "IcaNewMessage", client: "IcaClient") -> None:
             "/monitor check   - 重启 watch 并触发检查\n"
             "/monitor last    - 汇总 Chat、Platform、API Docs 最近修改\n"
             "/monitor last <chat|platform|docs> - 查看指定目标最近修改\n"
-            "/monitor analyze last <chat|platform|docs> - 管理员重新分析指定目标\n"
+            "/monitor fp      - 查看最近 5 次 fingerprint 历史" + chr(10) + "/monitor fp <N>  - 查看最近 N 次 fingerprint 历史（1-20）" + chr(10) +
+            "/monitor analyze last <chat|platform|docs> - 管理员重新分析指定目标（无限时长）\n"
             "/monitor on/off  - 开关\n"
             "/monitor help    - 帮助"
         )
