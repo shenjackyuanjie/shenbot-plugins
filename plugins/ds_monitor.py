@@ -37,7 +37,7 @@ from shenbot_api import PluginManifest, ConfigStorage
 PLUGIN_MANIFEST = PluginManifest(
     plugin_id="ds_monitor",
     name="DeepSeek 网页更新监测",
-    version="0.3.2",
+    version="0.3.3",
     description="定期检查 DeepSeek Chat、Platform 和 API Docs 变更，DeepSeek V4F 分析后推送通知",
     authors=["shenjack"],
     config={
@@ -228,6 +228,36 @@ def output_dir() -> str:
 
 def base_args(command: str) -> list[str]:
     return [_binary_path, "--config", _config_path, command]
+
+
+def binary_version() -> str:
+    if not _binary_path:
+        return "未配置"
+    if not os.path.isfile(_binary_path):
+        return f"不可用（二进制不存在: {_binary_path}）"
+
+    try:
+        result = subprocess.run(
+            [_binary_path, "--version"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            cwd=work_dir(),
+            timeout=5,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return "获取失败（--version 超时）"
+    except OSError as exc:
+        return f"获取失败（{exc}）"
+
+    output = result.stdout or result.stderr
+    version = next((line.strip() for line in reversed(output.splitlines()) if line.strip()), "")
+    if result.returncode != 0:
+        detail = version or f"退出码 {result.returncode}"
+        return f"获取失败（{detail}）"
+    return version or "获取失败（--version 无输出）"
 
 
 def validate_binary(room_id: int | None = None) -> bool:
@@ -778,6 +808,8 @@ def on_ica_message(msg: "IcaNewMessage", client: "IcaClient") -> None:
 def cmd_status(msg: "IcaNewMessage", client: "IcaClient") -> None:
     lines = [
         "🔍 DS 监测：DeepSeek 网页监测",
+        f"插件版本: {PLUGIN_MANIFEST.version}",
+        f"EXE版本: {binary_version()}",
         f"状态: {'✅ 运行中' if _enabled and _watch_process is not None and _watch_process.poll() is None else '⏸ 已暂停'}",
         f"检查间隔: {_check_interval}s",
     ]
