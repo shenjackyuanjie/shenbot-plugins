@@ -37,7 +37,7 @@ from shenbot_api import PluginManifest, ConfigStorage
 PLUGIN_MANIFEST = PluginManifest(
     plugin_id="ds_monitor",
     name="DeepSeek 网页更新监测",
-    version="0.3.3",
+    version="0.3.4",
     description="定期检查 DeepSeek Chat、Platform 和 API Docs 变更，DeepSeek V4F 分析后推送通知",
     authors=["shenjack"],
     config={
@@ -609,7 +609,7 @@ def latest_docs_change_report(target: MonitorTarget) -> str:
             lines.append(
                 f"  - [{entry.get('kind', 'unknown')}] {entry.get('title') or entry.get('url', 'N/A')}"
             )
-        lines.append(f"Manifest: {os.path.relpath(manifest_path, target.output)}")
+        lines.append(f"清单: {os.path.relpath(manifest_path, target.output)}")
         return "\n".join(lines)
     return f"{target.label}: 还没有历史变更 manifest"
 
@@ -644,15 +644,15 @@ def latest_change_report(target_key: str | None = None) -> str:
 
 def fingerprint_history_report(limit: int = 5) -> str:
     if not _fingerprint_history_path:
-        return ds("Fingerprint history file is not configured")
+        return ds("未配置 fingerprint 历史文件")
     if not os.path.isfile(_fingerprint_history_path):
-        return ds(f"No fingerprint history yet (file does not exist: {_fingerprint_history_path})")
+        return ds(f"还没有 fingerprint 历史记录（文件不存在：{_fingerprint_history_path}）")
 
     try:
         with open(_fingerprint_history_path, "r", encoding="utf-8") as f:
             raw_lines = f.readlines()
     except OSError as exc:
-        return ds(f"Failed to read fingerprint history: {exc}")
+        return ds(f"读取 fingerprint 历史失败：{exc}")
 
     records: list[dict[str, Any]] = []
     for line in reversed(raw_lines):
@@ -677,48 +677,48 @@ def fingerprint_history_report(limit: int = 5) -> str:
             break
 
     if not records:
-        return ds(f"No valid fingerprint history records: {_fingerprint_history_path}")
+        return ds(f"没有有效的 fingerprint 历史记录：{_fingerprint_history_path}")
 
-    lines = [f"DeepSeek fingerprint history (latest {len(records)})"]
+    lines = [f"DeepSeek 指纹历史（最近 {len(records)} 条）"]
     for record in records:
         event = record["event"]
-        lines.extend(["", f"Time: {record['checked_at']}", f"Event: {event}"])
+        lines.extend(["", f"时间: {record['checked_at']}", f"事件: {'基线' if event == 'baseline' else '变化'}"])
 
         changes = record["changes"]
         if changes:
-            lines.append("Fingerprint changes:")
+            lines.append("指纹变化:")
             for change in changes:
                 if not isinstance(change, dict):
                     continue
                 old = change.get("old")
-                old_text = "no previous value" if old is None else str(old)
+                old_text = "无此前记录" if old is None else str(old)
                 lines.append(
-                    f"  - {change.get('model', 'N/A')}: {old_text} -> {change.get('new', 'N/A')}"
+                    f"  - {change.get('model', 'N/A')}: {old_text} → {change.get('new', 'N/A')}"
                 )
         else:
-            lines.append("Fingerprint changes: none")
+            lines.append("指纹变化：无")
 
-        lines.append("Model snapshot:")
+        lines.append("模型快照:")
         models = record["models"]
         if not models:
-            lines.append("  - no known models")
+            lines.append("  - 无已知模型")
         for model_key, snapshot in sorted(models.items()):
             if not isinstance(snapshot, dict):
                 lines.append(f"  - {model_key}: {snapshot}")
                 continue
             lines.append(
                 "  - "
-                f"{model_key}: fingerprint={snapshot.get('fingerprint', 'N/A')}, "
-                f"model={snapshot.get('model', 'N/A')}, "
-                f"cached_tokens={snapshot.get('cached_tokens', 'N/A')}"
+                f"{model_key}: 指纹={snapshot.get('fingerprint', 'N/A')}, "
+                f"模型={snapshot.get('model', 'N/A')}, "
+                f"缓存命中={snapshot.get('cached_tokens', 'N/A')}"
             )
 
         errors = record["errors"]
         if errors:
-            lines.append("Errors:")
+            lines.append("错误:")
             lines.extend(f"  - {error}" for error in errors)
 
-    lines.append(f"\nFile: {_fingerprint_history_path}")
+    lines.append(f"\n文件: {_fingerprint_history_path}")
     return ds("\n".join(lines))
 
 
@@ -953,7 +953,7 @@ def cmd_help(msg: "IcaNewMessage", client: "IcaClient") -> None:
             "/monitor check   - 重启 watch 并触发检查\n"
             "/monitor last    - 汇总 Chat、Platform、API Docs 最近修改\n"
             "/monitor last <chat|platform|docs> - 查看指定目标最近修改\n"
-            "/monitor fp      - 查看最近 5 次 fingerprint 历史" + chr(10) + "/monitor fp <N>  - 查看最近 N 次 fingerprint 历史（1-20）" + chr(10) +
+            "/monitor fp      - 查看最近 5 次指纹历史" + chr(10) + "/monitor fp <N>  - 查看最近 N 次指纹历史（1-20）" + chr(10) +
             "/monitor analyze last <chat|platform|docs> - 管理员重新分析指定目标（无限时长）\n"
             "/monitor on/off  - 开关\n"
             "/monitor help    - 帮助"
