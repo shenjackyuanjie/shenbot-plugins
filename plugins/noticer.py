@@ -14,6 +14,8 @@ auth_token = ""      # 可选：保护 /send、/v1/send、/status
 direct_token = ""    # 必填后才启用 /v1/send/direct
 queue_capacity = 256
 send_timeout_seconds = 60
+retry_attempts = 3       # send_message 失败后的重试次数（含首次），默认 3
+retry_delay_seconds = 1.0  # 每次重试前的固定等待秒数，默认 1.0
 
 [rooms]
 notice  = { id = -111111111, desc = "项目提醒群" }
@@ -190,7 +192,7 @@ DEFAULT_PORT = 10020
 PLUGIN_MANIFEST = PluginManifest(
     plugin_id="noticer",
     name="Noticer 本地提醒服务",
-    version="0.4.0",
+    version="0.4.1",
     description="启动本地 HTTP 服务，接收外部请求并通过 bot 发送提醒/警告消息到指定群聊",
     authors=["shenjack"],
     config={
@@ -201,6 +203,8 @@ PLUGIN_MANIFEST = PluginManifest(
             direct_token="",
             queue_capacity=256,
             send_timeout_seconds=60,
+            retry_attempts=3,
+            retry_delay_seconds=1.0,
         ),
         "rooms": ConfigStorage(
             notice={"id": 0, "desc": ""},
@@ -225,6 +229,8 @@ SOCKET_TIMEOUT = 10.0
 RELOAD_NOTICE_TTL = 30.0
 DEFAULT_QUEUE_CAPACITY = 256
 DEFAULT_SEND_TIMEOUT_SECONDS = 60.0
+DEFAULT_RETRY_ATTEMPTS = 3
+DEFAULT_RETRY_DELAY_SECONDS = 1.0
 IDEMPOTENCY_TTL_SECONDS = 10 * 60.0
 IDEMPOTENCY_MAX_ENTRIES = 2048
 _RUNTIME_STATE_KEY = "_ica_noticer_runtime_state"
@@ -253,6 +259,8 @@ _auth_token = ""
 _direct_token = ""
 _queue_capacity = DEFAULT_QUEUE_CAPACITY
 _send_timeout_seconds = DEFAULT_SEND_TIMEOUT_SECONDS
+_retry_attempts = DEFAULT_RETRY_ATTEMPTS
+_retry_delay_seconds = DEFAULT_RETRY_DELAY_SECONDS
 _rooms: dict[str, int] = {}                 # room_name -> room_id
 _room_descriptions: dict[str, str] = {}     # room_name -> desc (来自配置或自动生成)
 
@@ -382,12 +390,33 @@ def _run_send_job(job: _SendJob) -> None:
                 send_msg = target_room.new_message_to(job.message)
                 if job.image_bytes is not None:
                     send_msg.set_img(job.image_bytes, job.image_type, job.as_sticker)
-                if client.send_message(send_msg):
-                    status = 200
-                    detail = "ok"
-                else:
+                attempts = max(1, int(_retry_attempts))
+                for attempt in range(1, attempts + 1):
+                    try:
+                        sent = bool(client.send_message(send_msg))
+                    except Exception as exc:
+                        _log_warn(
+                            f"request_id={job.request_id} target={job.room_name!r} "
+                            f"send raised {type(exc).__name__} "
+                            f"(attempt {attempt}/{attempts})"
+                        )
+                        sent = False
+                    if sent:
+                        status = 200
+                        detail = "ok"
+                        break
                     status = 500
-                    detail = "send_message returned false"
+                    detail = (
+                        f"send_message returned false "
+                        f"(attempt {attempt}/{attempts})"
+                    )
+                    if attempt < attempts:
+                        _log_warn(
+                            f"request_id={job.request_id} target={job.room_name!r} "
+                            f"发送失败 (attempt {attempt}/{attempts})，"
+                            f"{_retry_delay_seconds:g}s 后重试"
+                        )
+                        time.sleep(_retry_delay_seconds)
         except Exception as exc:
             _log_warn(
                 f"request_id={job.request_id} target={job.room_name!r} "
@@ -1414,6 +1443,7 @@ def on_load() -> None:
     """插件加载时 — 读取配置 + 启动 HTTP server"""
     global _server, _server_thread, _host, _port, _ica_client
     global _auth_token, _direct_token, _queue_capacity, _send_timeout_seconds
+    global _retry_attempts, _retry_delay_seconds
 
     # 读取配置 — [main] 部分
     main_cfg = PLUGIN_MANIFEST.config_unchecked("main")
@@ -1459,6 +1489,30 @@ def on_load() -> None:
         )
         _send_timeout_seconds = DEFAULT_SEND_TIMEOUT_SECONDS
 
+    raw_retry_attempts: Any = main_cfg.get_value("retry_attempts")
+    try:
+        _retry_attempts = int(raw_retry_attempts)
+    except (TypeError, ValueError):
+        _retry_attempts = DEFAULT_RETRY_ATTEMPTS
+    if not 1 <= _retry_attempts <= 16:
+        _log_warn(
+            f"Invalid retry_attempts {_retry_attempts}; "
+            f"using default {DEFAULT_RETRY_ATTEMPTS}"
+        )
+        _retry_attempts = DEFAULT_RETRY_ATTEMPTS
+
+    raw_retry_delay: Any = main_cfg.get_value("retry_delay_seconds")
+    try:
+        _retry_delay_seconds = float(raw_retry_delay)
+    except (TypeError, ValueError):
+        _retry_delay_seconds = DEFAULT_RETRY_DELAY_SECONDS
+    if not math.isfinite(_retry_delay_seconds) or not 0 <= _retry_delay_seconds <= 30:
+        _log_warn(
+            f"Invalid retry_delay_seconds {_retry_delay_seconds}; "
+            f"using default {DEFAULT_RETRY_DELAY_SECONDS}"
+        )
+        _retry_delay_seconds = DEFAULT_RETRY_DELAY_SECONDS
+
     # 动态读取所有房间 — [rooms] 部分
     _load_rooms()
 
@@ -1490,6 +1544,7 @@ def on_load() -> None:
             f"HTTP server started on {_host}:{_port}\n"
             f"queue_capacity={_queue_capacity} "
             f"send_timeout={_send_timeout_seconds:g}s "
+            f"retry={_retry_attempts}x/{_retry_delay_seconds:g}s "
             f"auth={'enabled' if _auth_token else 'disabled'} "
             f"direct={'enabled' if _direct_token else 'disabled'}\n"
             + rooms_str
