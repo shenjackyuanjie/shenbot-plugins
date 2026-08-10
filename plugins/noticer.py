@@ -36,7 +36,7 @@ warning = { id = -222222222 }
 
 ## GET /status — 服务状态（含房间列表）
   curl http://127.0.0.1:10020/status
-  → {"server":"noticer/0.4.0","status":"running","client_ready":true,"rooms":{...}}
+  → {"server":"noticer/0.4.2","status":"running","client_ready":true,"rooms":{...}}
 
 ## GET /health — 健康检查
   curl http://127.0.0.1:10020/health
@@ -60,6 +60,8 @@ warning = { id = -222222222 }
     image        - 图片（可选）。可传 data URL/base64 字符串，或对象：
                    {"base64":"...", "type":"image/png", "as_sticker":false}
     image_base64 - 图片 base64（可选，等价于 image；需配合 image_type）
+    images       - 有序多图数组（最多 9 张；不可与单图字段或贴纸字段混用）
+                   元素为 data URL 或 {"base64":"...", "type":"image/png"}
     image_type   - 图片 MIME，默认 image/png；常用 image/png 或 image/jpeg
     as_sticker   - 是否作为贴纸发送，默认 false
 
@@ -76,7 +78,8 @@ warning = { id = -222222222 }
   文本、图片与贴纸字段和 /v1/send 相同。
 
   错误码:
-    400 - room 缺失/未知/message 和 image 均为空/图片参数无效/房间未配置
+    400 - room 缺失/未知/内容为空/图片参数无效或冲突/房间未配置
+    413 - 请求体超过 72 MiB
     404 - bot 未加入该群
     503 - 客户端未就绪（需先向 bot 发条消息初始化）
     500 - 发送失败
@@ -192,7 +195,7 @@ DEFAULT_PORT = 10020
 PLUGIN_MANIFEST = PluginManifest(
     plugin_id="noticer",
     name="Noticer 本地提醒服务",
-    version="0.4.1",
+    version="0.4.2",
     description="启动本地 HTTP 服务，接收外部请求并通过 bot 发送提醒/警告消息到指定群聊",
     authors=["shenjack"],
     config={
@@ -223,8 +226,11 @@ ROOM_DESCRIPTIONS: dict[str, str] = {
 }
 """房间名 → 中文描述映射。仅作为 fallback，配置中的 desc 优先级更高。"""
 
-MAX_BODY_SIZE = 12 * 1024 * 1024
+MAX_BODY_SIZE = 72 * 1024 * 1024
 MAX_IMAGE_SIZE = 8 * 1024 * 1024
+MAX_IMAGE_COUNT = 9
+MAX_TOTAL_IMAGE_SIZE = 48 * 1024 * 1024
+MAX_QUEUED_IMAGE_BYTES = 128 * 1024 * 1024
 SOCKET_TIMEOUT = 10.0
 RELOAD_NOTICE_TTL = 30.0
 DEFAULT_QUEUE_CAPACITY = 256
@@ -265,6 +271,12 @@ _rooms: dict[str, int] = {}                 # room_name -> room_id
 _room_descriptions: dict[str, str] = {}     # room_name -> desc (来自配置或自动生成)
 
 
+@dataclass(frozen=True)
+class _ImagePayload:
+    data: bytes
+    mime: str
+
+
 @dataclass
 class _SendJob:
     request_id: str
@@ -274,12 +286,25 @@ class _SendJob:
     image_bytes: bytes | None
     image_type: str
     as_sticker: bool
+    images: list[_ImagePayload] = field(default_factory=list)
     done: threading.Event = field(default_factory=threading.Event)
     lock: threading.Lock = field(default_factory=threading.Lock)
     started: bool = False
     cancelled: bool = False
     status: int = 500
     detail: str = "send failed"
+    image_count: int = field(init=False)
+    image_total_bytes: int = field(init=False)
+
+    def __post_init__(self) -> None:
+        if self.image_bytes is not None and not self.images:
+            self.images.append(_ImagePayload(self.image_bytes, self.image_type))
+        self.image_count = len(self.images)
+        self.image_total_bytes = sum(len(image.data) for image in self.images)
+
+    def discard_image_data(self) -> None:
+        self.image_bytes = None
+        self.images.clear()
 
 
 @dataclass
@@ -293,6 +318,7 @@ _send_queue: queue.Queue[_SendJob | None] | None = None
 _send_worker_thread: threading.Thread | None = None
 _send_accepting = False
 _send_state_lock = threading.Lock()
+_queued_image_bytes = 0
 _idempotency_lock = threading.Lock()
 _idempotency_entries: OrderedDict[str, _IdempotencyEntry] = OrderedDict()
 _reload_notice_lock = threading.Lock()
@@ -388,8 +414,12 @@ def _run_send_job(job: _SendJob) -> None:
                 )
             else:
                 send_msg = target_room.new_message_to(job.message)
-                if job.image_bytes is not None:
-                    send_msg.set_img(job.image_bytes, job.image_type, job.as_sticker)
+                if job.as_sticker and job.images:
+                    image = job.images[0]
+                    send_msg.set_img(image.data, image.mime, True)
+                else:
+                    for image in job.images:
+                        send_msg.add_img(image.data, image.mime)
                 attempts = max(1, int(_retry_attempts))
                 for attempt in range(1, attempts + 1):
                     try:
@@ -439,11 +469,13 @@ def _send_worker_loop(send_queue: queue.Queue[_SendJob | None]) -> None:
                 return
             _run_send_job(job)
         finally:
+            if job is not None:
+                _release_job_images(job)
             send_queue.task_done()
 
 
 def _start_send_worker() -> None:
-    global _send_queue, _send_worker_thread, _send_accepting
+    global _send_queue, _send_worker_thread, _send_accepting, _queued_image_bytes
     send_queue: queue.Queue[_SendJob | None] = queue.Queue(maxsize=_queue_capacity)
     worker = threading.Thread(
         target=_send_worker_loop,
@@ -455,6 +487,7 @@ def _start_send_worker() -> None:
         _send_queue = send_queue
         _send_worker_thread = worker
         _send_accepting = True
+        _queued_image_bytes = 0
     worker.start()
 
 
@@ -481,6 +514,7 @@ def _stop_send_worker() -> None:
                         pending.status = 503
                         pending.detail = "service is stopping"
                         pending.done.set()
+                _release_job_images(pending)
         finally:
             send_queue.task_done()
 
@@ -500,15 +534,26 @@ def _stop_send_worker() -> None:
 
 
 def _enqueue_job(job: _SendJob) -> tuple[bool, str]:
+    global _queued_image_bytes
     with _send_state_lock:
         if not _send_accepting or _send_queue is None:
             return False, "send queue is not available"
+        if _queued_image_bytes + job.image_total_bytes > MAX_QUEUED_IMAGE_BYTES:
+            return False, "send queue is full"
         send_queue = _send_queue
         try:
             send_queue.put_nowait(job)
         except queue.Full:
             return False, "send queue is full"
+        _queued_image_bytes += job.image_total_bytes
     return True, ""
+
+
+def _release_job_images(job: _SendJob) -> None:
+    global _queued_image_bytes
+    with _send_state_lock:
+        _queued_image_bytes = max(0, _queued_image_bytes - job.image_total_bytes)
+    job.discard_image_data()
 
 
 def _wait_for_job(job: _SendJob) -> tuple[int, str]:
@@ -657,6 +702,49 @@ def _parse_image_payload(
     if error is not None:
         return None, normalized_type, as_sticker, error
     return image_bytes, normalized_type, as_sticker, None
+
+
+def _parse_images_payload(value: object) -> tuple[list[_ImagePayload], str | None]:
+    if not isinstance(value, list):
+        return [], "`images` must be an array"
+    if not value:
+        return [], "`images` must contain at least one image"
+    if len(value) > MAX_IMAGE_COUNT:
+        return [], f"too many images (max {MAX_IMAGE_COUNT})"
+
+    images: list[_ImagePayload] = []
+    total_size = 0
+    for index, item in enumerate(value):
+        file_type: object = "image/png"
+        if isinstance(item, str):
+            base64_payload: object = item
+        elif isinstance(item, dict):
+            unknown = set(item) - {"base64", "type"}
+            if unknown:
+                names = ", ".join(sorted(str(name) for name in unknown))
+                return [], f"images[{index}] has unknown field(s): {names}"
+            base64_payload = item.get("base64")
+            file_type = item.get("type", file_type)
+        else:
+            return [], (
+                f"images[{index}] must be a data-url string or an object with `base64`"
+            )
+
+        if not isinstance(base64_payload, str) or not base64_payload.strip():
+            return [], f"images[{index}].base64 must be a non-empty string"
+        image_bytes, normalized_type, error = _decode_base64_image(
+            base64_payload,
+            file_type,
+        )
+        if error is not None:
+            return [], f"images[{index}]: {error}"
+        total_size += len(image_bytes)
+        if total_size > MAX_TOTAL_IMAGE_SIZE:
+            return [], (
+                f"images total too large (max {MAX_TOTAL_IMAGE_SIZE} bytes)"
+            )
+        images.append(_ImagePayload(image_bytes, normalized_type))
+    return images, None
 
 
 def _maybe_send_reload_notice(client: IcaClient) -> None:
@@ -822,11 +910,13 @@ def _send_fingerprint(path: str, job: _SendJob) -> str:
     digest.update(b"\0")
     digest.update(job.message.encode("utf-8"))
     digest.update(b"\0")
-    digest.update(job.image_type.encode("ascii"))
-    digest.update(b"\0")
     digest.update(b"1" if job.as_sticker else b"0")
-    if job.image_bytes is not None:
-        digest.update(hashlib.sha256(job.image_bytes).digest())
+    digest.update(b"\0")
+    for image in job.images:
+        digest.update(image.mime.encode("ascii"))
+        digest.update(b"\0")
+        digest.update(hashlib.sha256(image.data).digest())
+        digest.update(b"\0")
     return digest.hexdigest()
 
 
@@ -900,6 +990,7 @@ class _NoticerHandler(BaseHTTPRequestHandler):
         "image_base64",
         "image_type",
         "as_sticker",
+        "images",
     }
 
     def setup(self) -> None:
@@ -1020,6 +1111,7 @@ class _NoticerHandler(BaseHTTPRequestHandler):
             send_queue = _send_queue
             queue_ready = _send_accepting and send_queue is not None
             queue_depth = send_queue.qsize() if send_queue is not None else 0
+            queued_image_bytes = _queued_image_bytes
         self._send_json(200, {
             "server": f"noticer/{PLUGIN_MANIFEST.version}",
             "status": "running",
@@ -1029,6 +1121,8 @@ class _NoticerHandler(BaseHTTPRequestHandler):
                 "ready": queue_ready,
                 "depth": queue_depth,
                 "capacity": _queue_capacity,
+                "image_bytes": queued_image_bytes,
+                "image_byte_capacity": MAX_QUEUED_IMAGE_BYTES,
             },
         })
 
@@ -1130,11 +1224,11 @@ class _NoticerHandler(BaseHTTPRequestHandler):
             status, detail = _wait_for_job(job)
 
         elapsed_ms = int((time.monotonic() - started_at) * 1000)
-        image_size = len(job.image_bytes) if job.image_bytes is not None else 0
         log_line = (
             f"request_id={request_id} path={self.path!r} "
             f"target={job.room_name!r} text_len={len(job.message)} "
-            f"image_bytes={image_size} status={status} elapsed_ms={elapsed_ms}"
+            f"image_count={job.image_count} image_bytes={job.image_total_bytes} "
+            f"status={status} elapsed_ms={elapsed_ms}"
         )
         if 200 <= status < 300:
             _log_info(log_line)
@@ -1276,17 +1370,38 @@ class _NoticerHandler(BaseHTTPRequestHandler):
         if not isinstance(message, str):
             raise _RequestError(400, "invalid_message", "`message` must be a string")
 
-        image_bytes, image_type, as_sticker, image_error = _parse_image_payload(
-            data,
-            strict=not legacy,
-        )
-        if image_error is not None:
-            raise _RequestError(400, "invalid_image", image_error)
-        if message == "" and image_bytes is None:
+        image_bytes: bytes | None = None
+        image_type = "image/png"
+        as_sticker = False
+        images: list[_ImagePayload] = []
+        if "images" in data:
+            conflicting = {
+                field
+                for field in ("image", "image_base64", "image_type", "as_sticker")
+                if field in data
+            }
+            if conflicting:
+                names = ", ".join(sorted(conflicting))
+                raise _RequestError(
+                    400,
+                    "conflicting_image_fields",
+                    f"`images` cannot be combined with: {names}",
+                )
+            images, image_error = _parse_images_payload(data.get("images"))
+            if image_error is not None:
+                raise _RequestError(400, "invalid_images", image_error)
+        else:
+            image_bytes, image_type, as_sticker, image_error = _parse_image_payload(
+                data,
+                strict=not legacy,
+            )
+            if image_error is not None:
+                raise _RequestError(400, "invalid_image", image_error)
+        if message == "" and image_bytes is None and not images:
             raise _RequestError(
                 400,
                 "content_required",
-                "`message` or `image` is required",
+                "`message`, `image`, or `images` is required",
             )
 
         return (
@@ -1298,6 +1413,7 @@ class _NoticerHandler(BaseHTTPRequestHandler):
                 image_bytes=image_bytes,
                 image_type=image_type,
                 as_sticker=as_sticker,
+                images=images,
             ),
             deprecated_direct,
         )
