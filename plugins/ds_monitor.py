@@ -37,7 +37,7 @@ from shenbot_api import PluginManifest, ConfigStorage
 PLUGIN_MANIFEST = PluginManifest(
     plugin_id="ds_monitor",
     name="DeepSeek 网页更新监测",
-    version="0.3.4",
+    version="0.3.6",
     description="定期检查 DeepSeek Chat、Platform 和 API Docs 变更，DeepSeek V4F 分析后推送通知",
     authors=["shenjack"],
     config={
@@ -73,6 +73,7 @@ _watch_summary_lines: list[str] | None = None
 _last_restart_cmd_at: float = 0.0
 _last_recent_cmd_at: float = 0.0
 _last_analyze_cmd_at: float = 0.0
+_last_render_cmd_at: float = 0.0
 
 COMMAND_COOLDOWN_SECS = 60.0
 
@@ -335,6 +336,42 @@ def run_last_analyze(target: str, room_id: int | None = None) -> str:
         return msg
     except Exception as e:
         msg = f"❌ ds-monitor 最近变更分析失败: {e}"
+        log(msg)
+        notify_error(msg, room_id)
+        return msg
+
+
+def run_last_render(target: str | None, room_id: int | None = None) -> str:
+    if not validate_binary(room_id):
+        return f"❌ ds-monitor 二进制不存在: {_binary_path}"
+
+    args = base_args("render-last")
+    if target is not None:
+        args.append(f"--target={target}")
+    if room_id is not None:
+        args.append(f"--noticer-room-id={room_id}")
+        args.append(f"--room=room_{room_id}")
+
+    try:
+        result = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            cwd=work_dir(),
+        )
+        out = result.stdout
+        if result.stderr:
+            out += "\n" + result.stderr
+        return out
+    except subprocess.TimeoutExpired:
+        msg = "❌ ds-monitor 最近分析渲染超时（由外部进程终止）"
+        log(msg)
+        notify_error(msg, room_id)
+        return msg
+    except Exception as e:
+        msg = f"❌ ds-monitor 最近分析渲染失败: {e}"
         log(msg)
         notify_error(msg, room_id)
         return msg
@@ -795,6 +832,10 @@ def on_ica_message(msg: "IcaNewMessage", client: "IcaClient") -> None:
         cmd_last(msg, client, parts[2])
     elif content == "/monitor last":
         cmd_last(msg, client)
+    elif len(parts) == 4 and parts[:3] == ["/monitor", "render", "last"]:
+        cmd_render_last(msg, client, parts[3])
+    elif content == "/monitor render last":
+        cmd_render_last(msg, client)
     elif len(parts) == 4 and parts[:3] == ["/monitor", "analyze", "last"]:
         cmd_last_analyze(msg, client, parts[3])
     elif content == "/monitor on":
@@ -934,6 +975,46 @@ def cmd_last_analyze(
     threading.Thread(target=analyze, daemon=True).start()
 
 
+def cmd_render_last(
+    msg: "IcaNewMessage", client: "IcaClient", target_key: str | None = None
+) -> None:
+    global _last_render_cmd_at
+
+    if target_key is not None:
+        target = _target_configs.get(target_key)
+        if target is None or not target.enabled:
+            client.send_message(msg.reply_with(ds(f"未知或未启用监测目标: {target_key}（可选 chat、platform、docs）")))
+            return
+
+    if not is_admin(msg, client):
+        client.send_message(msg.reply_with("只有管理员才能触发最近分析的主题图片渲染"))
+        return
+
+    if cooling_down(_last_render_cmd_at):
+        return
+
+    _last_render_cmd_at = time.monotonic()
+    room_id = int(msg.room_id)
+    target_label = target_key or "最近目标"
+    client.send_message(
+        msg.reply_with(ds(f"正在渲染 {target_label} 最近一次分析的深色、浅色、哀悼灰和喜庆红图片"))
+    )
+
+    def render_last() -> None:
+        output = run_last_render(target_key, room_id)
+        log(f"最近分析渲染结果: {output[:500]}")
+        if "没有找到" in output:
+            client.send_message(msg.reply_with(ds(output.strip()[:800])))
+        elif "失败" in output or "❌" in output:
+            client.send_message(msg.reply_with(ds(f"最近分析渲染失败:\n{output[:800]}")))
+        elif "已发送" in output:
+            client.send_message(msg.reply_with(ds("最近一次分析的四种主题图片已发送（一条消息，四张图）")))
+        else:
+            client.send_message(msg.reply_with(ds("最近分析渲染命令已结束，请查看日志")))
+
+    threading.Thread(target=render_last, daemon=True).start()
+
+
 def cmd_enable(msg: "IcaNewMessage", client: "IcaClient", on: bool) -> None:
     global _enabled
     _enabled = on
@@ -954,6 +1035,7 @@ def cmd_help(msg: "IcaNewMessage", client: "IcaClient") -> None:
             "/monitor last    - 汇总 Chat、Platform、API Docs 最近修改\n"
             "/monitor last <chat|platform|docs> - 查看指定目标最近修改\n"
             "/monitor fp      - 查看最近 5 次指纹历史" + chr(10) + "/monitor fp <N>  - 查看最近 N 次指纹历史（1-20）" + chr(10) +
+            "/monitor render last [chat|platform|docs] - 管理员发送最近分析四种主题图片\n"
             "/monitor analyze last <chat|platform|docs> - 管理员重新分析指定目标（无限时长）\n"
             "/monitor on/off  - 开关\n"
             "/monitor help    - 帮助"
