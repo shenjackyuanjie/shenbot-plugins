@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from ica_typing import IcaClient, IcaNewMessage
 
 
-VERSION = "0.9.1"
+VERSION = "0.9.2"
 CMD_PREFIX = "/hm"
 REQUEST_TIMEOUT = 10
 USER_AGENT = f"shenbot_hm_market/{VERSION}"
@@ -75,6 +75,14 @@ def format_number(number: int | str) -> str:
     for index in range(len(num_str), 0, -4):
         groups.append(num_str[max(0, index - 4) : index])
     return sign + ",".join(reversed(groups))
+
+
+def _format_download_count(value: Any) -> str:
+    formatted = format_number(value)
+    count = _to_int(value)
+    if count is not None and count < 1000:
+        return f"{formatted}(假数据)"
+    return formatted
 
 
 def _format_delta(value: int) -> str:
@@ -331,7 +339,7 @@ def _format_summary_lines(response: dict[str, Any]) -> list[str]:
     if _has_value(app.get("developer_name")):
         lines.append(f"开发者: {app['developer_name']}")
     if _has_value(app.get("download_count")):
-        lines.append(f"下载量: {format_number(app['download_count'])}")
+        lines.append(f"下载量: {_format_download_count(app['download_count'])}")
 
     ratings = []
     if _has_value(app.get("info_score")):
@@ -556,7 +564,7 @@ def _format_search_result(response: dict[str, Any], keyword: str) -> str:
             lines.append(" | ".join(identifiers))
         metrics = []
         if _has_value(app.get("download_count")):
-            metrics.append(f"下载量 {format_number(app['download_count'])}")
+            metrics.append(f"下载量 {_format_download_count(app['download_count'])}")
         rating = app.get("average_rating")
         if not _has_value(rating):
             rating = app.get("info_score")
@@ -640,7 +648,7 @@ def _format_trend(
     latest_time, latest_count = metrics[-1]
     lines = [
         f"{pkg_name} 下载趋势",
-        f"最新下载量: {format_number(latest_count)}（{_format_datetime(latest_time)}）",
+        f"最新下载量: {_format_download_count(latest_count)}（{_format_datetime(latest_time)}）",
     ]
     if len(metrics) >= 2:
         previous_time, previous_count = metrics[-2]
@@ -770,7 +778,7 @@ def _format_top_group(title: str, apps: list[Any]) -> list[str]:
         app = raw_app if isinstance(raw_app, dict) else {}
         line = f"({index}) {app.get('name') or '未知应用'}"
         if _has_value(app.get("download_count")):
-            line += f" · {format_number(app['download_count'])} 下载"
+            line += f" · {_format_download_count(app['download_count'])} 下载"
         lines.append(line)
         details = []
         category = _join_values(
@@ -825,7 +833,9 @@ def _format_up_group(title: str, apps: list[Any]) -> list[str]:
         current = app.get("current_download_count")
         details = []
         if _has_value(prior) and _has_value(current):
-            details.append(f"{format_number(prior)} → {format_number(current)}")
+            details.append(
+                f"{_format_download_count(prior)} → {_format_download_count(current)}"
+            )
         if _has_value(app.get("pkg_name")):
             details.append(str(app["pkg_name"]))
         if details:
@@ -887,7 +897,7 @@ def query_rating(msg: IcaNewMessage, client: IcaClient) -> None:
                 f"{format_number(app['total_star_rating_count'])} 人评分"
             )
         if _has_value(app.get("download_count")):
-            details.append(f"{format_number(app['download_count'])} 下载")
+            details.append(f"{_format_download_count(app['download_count'])} 下载")
         if _has_value(app.get("pkg_name")):
             details.append(str(app["pkg_name"]))
         if details:
