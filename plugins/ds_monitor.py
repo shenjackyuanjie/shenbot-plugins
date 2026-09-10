@@ -5,6 +5,9 @@ ds_monitor.py - DeepSeek 网页更新监测插件
 检测到变化时由 ds-monitor 自动通过 noticer 发送 AI 分析结果。
 配置房间通知走 /v1/send；命令触发的动态 room_id 通知走受 Token 保护的 direct API。
 
+`/monitor check` 会重启 watch 并等待本轮的 `=== 本轮检查结果 ... ===` 标记
+（ds-monitor 0.2.8 起输出），再回报各目标状态；本轮没有变化时回报“无事发生”。
+
 配置 (config/ds_monitor.toml):
 
 ```toml
@@ -37,7 +40,7 @@ from shenbot_api import PluginManifest, ConfigStorage
 PLUGIN_MANIFEST = PluginManifest(
     plugin_id="ds_monitor",
     name="DeepSeek 网页更新监测",
-    version="0.3.6",
+    version="0.3.7",
     description="定期检查 DeepSeek Chat、Platform 和 API Docs 变更，DeepSeek V4F 分析后推送通知",
     authors=["shenjack"],
     config={
@@ -70,12 +73,41 @@ _watch_thread: threading.Thread | None = None
 _watch_lock = threading.Lock()
 _watch_stop_requested: bool = False
 _watch_summary_lines: list[str] | None = None
+# watch 进程代次：重启后加一，用于丢弃旧进程残留的输出行
+_watch_generation: int = 0
 _last_restart_cmd_at: float = 0.0
 _last_recent_cmd_at: float = 0.0
 _last_analyze_cmd_at: float = 0.0
 _last_render_cmd_at: float = 0.0
 
 COMMAND_COOLDOWN_SECS = 60.0
+
+# ds-monitor 在检查阶段结束时输出的机器可读标记
+# 形如：=== 本轮检查结果 changes=0 notices=0 errors=0 chat=nochange ... ===
+CYCLE_RESULT_MARKER = "本轮检查结果"
+# 等待本轮检查结果的最长时间（秒）：抓取 + 指纹探测通常远快于此
+CYCLE_WAIT_SECS = 300.0
+
+CYCLE_TARGET_LABELS = {
+    "chat": "Chat",
+    "platform": "Platform",
+    "docs": "API Docs",
+    "fingerprint": "系统指纹",
+}
+CYCLE_STATUS_LABELS = {
+    "nochange": "无变化",
+    "baseline": "首次抓取（已建基线）",
+    "change": "检测到变化",
+    "alert": "有告警",
+    "error": "检查失败",
+    "skipped": "本轮跳过",
+}
+PAGE_TARGET_KEYS = ("chat", "platform", "docs")
+
+_cycle_event = threading.Event()
+_cycle_result_generation: int = -1
+_cycle_statuses: dict[str, str] = {}
+_cycle_counts: dict[str, int] = {}
 
 
 @dataclass(frozen=True)
@@ -377,9 +409,13 @@ def run_last_render(target: str | None, room_id: int | None = None) -> str:
         return msg
 
 
-def handle_output_line(line: str) -> None:
+def handle_output_line(line: str, generation: int) -> None:
     global _last_check_time, _last_change_time, _last_change_summary
     global _watch_summary_lines, _active_output_target
+
+    if generation != _watch_generation:
+        # 旧 watch 进程退出前残留的输出，忽略
+        return
 
     line = line.rstrip()
     if not line:
@@ -397,6 +433,10 @@ def handle_output_line(line: str) -> None:
 
     target_key = _active_output_target or "chat"
     now = datetime.now(timezone.utc)
+
+    if payload.startswith("===") and CYCLE_RESULT_MARKER in payload:
+        # 记录本轮检查结果；继续走下面的汇总逻辑，让 "===" 正常结束变更摘要
+        record_cycle_result(payload, generation)
 
     if "检测到变化" in payload:
         _last_check_time = now
@@ -431,13 +471,93 @@ def handle_output_line(line: str) -> None:
                 _watch_summary_lines = None
 
 
-def watch_stdout_loop(proc: subprocess.Popen[str]) -> None:
+def cycle_target_label(key: str) -> str:
+    return CYCLE_TARGET_LABELS.get(key, key)
+
+
+def cycle_status_text(key: str, status: str) -> str:
+    return f"{cycle_target_label(key)} {CYCLE_STATUS_LABELS.get(status, status)}"
+
+
+def record_cycle_result(line: str, generation: int) -> None:
+    """解析 `=== 本轮检查结果 ... ===` 标记，并唤醒等待本轮结果的调用方。"""
+    global _cycle_result_generation, _cycle_statuses, _cycle_counts
+
+    fields: dict[str, str] = {}
+    for token in line.split():
+        key, sep, value = token.partition("=")
+        # 标记两端的 "===" 会被切成空 key，这里只收 "key=value" 形式
+        if not sep or not key:
+            continue
+        fields[key] = value
+
+    counts: dict[str, int] = {}
+    for key in ("changes", "notices", "errors"):
+        raw = fields.pop(key, None)
+        if raw is not None and raw.lstrip("-").isdigit():
+            counts[key] = int(raw)
+
+    _cycle_statuses = fields
+    _cycle_counts = counts
+    _cycle_result_generation = generation
+    _cycle_event.set()
+
+
+def wait_cycle_result(generation: int, timeout: float) -> bool:
+    """等待指定 watch 代次的本轮检查结果。
+
+    超时，或这次检查已被更晚的 /monitor check 取代时返回 False。
+    """
+    deadline = time.monotonic() + timeout
+    while generation == _watch_generation:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        if _cycle_event.wait(min(remaining, 1.0)):
+            _cycle_event.clear()
+            if _cycle_result_generation == generation:
+                return True
+    return False
+
+
+def cycle_report(elapsed: float) -> str:
+    """把本轮检查结果整理成一条 QQ 消息。"""
+    statuses = dict(_cycle_statuses)
+    changes = [key for key, status in statuses.items() if status == "change"]
+    alerts = [key for key, status in statuses.items() if status == "alert"]
+    page_errors = [key for key in PAGE_TARGET_KEYS if statuses.get(key) == "error"]
+
+    if changes:
+        headline = "🔔 检测到变化：" + "、".join(cycle_target_label(key) for key in changes)
+    elif alerts:
+        headline = "⚠️ 本轮有告警：" + "、".join(cycle_target_label(key) for key in alerts)
+    elif page_errors:
+        headline = (
+            "⚠️ 本轮没有变化，但 "
+            + "、".join(cycle_target_label(key) for key in page_errors)
+            + " 检查失败"
+        )
+    else:
+        headline = "✅ 无事发生"
+
+    lines = [f"{headline}（用时 {elapsed:.0f}s）"]
+    detail = " · ".join(
+        cycle_status_text(key, status) for key, status in statuses.items()
+    )
+    if detail:
+        lines.append(detail)
+    if changes:
+        lines.append("变更摘要与 DeepSeek V4F 分析稍后由监测推送")
+    return ds("\n".join(lines))
+
+
+def watch_stdout_loop(proc: subprocess.Popen[str], generation: int) -> None:
     global _watch_process
 
     try:
         assert proc.stdout is not None
         for line in proc.stdout:
-            handle_output_line(line)
+            handle_output_line(line, generation)
     except Exception as e:
         log(f"watch 输出读取失败: {e}")
     finally:
@@ -450,7 +570,7 @@ def watch_stdout_loop(proc: subprocess.Popen[str]) -> None:
 
 
 def start_watch() -> bool:
-    global _watch_process, _watch_thread, _watch_stop_requested
+    global _watch_process, _watch_thread, _watch_stop_requested, _watch_generation
 
     with _watch_lock:
         if _watch_process is not None and _watch_process.poll() is None:
@@ -483,13 +603,15 @@ def start_watch() -> bool:
             notify_error(f"❌ ds-monitor watch 启动失败: {e}")
             return False
 
+        _watch_generation += 1
+        generation = _watch_generation
         _watch_thread = threading.Thread(
             target=watch_stdout_loop,
-            args=(_watch_process,),
+            args=(_watch_process, generation),
             daemon=True,
         )
         _watch_thread.start()
-        log(f"watch 已启动 (pid={_watch_process.pid}, interval={_check_interval}s)")
+        log(f"watch 已启动 (pid={_watch_process.pid}, interval={_check_interval}s, gen={generation})")
         return True
 
 
@@ -717,6 +839,7 @@ def fingerprint_history_report(limit: int = 5) -> str:
         return ds(f"没有有效的 fingerprint 历史记录：{_fingerprint_history_path}")
 
     lines = [f"DeepSeek 指纹历史（最近 {len(records)} 条）"]
+    shown_errors: list[str] | None = None
     for record in records:
         event = record["event"]
         lines.extend(["", f"时间: {record['checked_at']}", f"事件: {'基线' if event == 'baseline' else '变化'}"])
@@ -752,8 +875,13 @@ def fingerprint_history_report(limit: int = 5) -> str:
 
         errors = record["errors"]
         if errors:
-            lines.append("错误:")
-            lines.extend(f"  - {error}" for error in errors)
+            if shown_errors is not None and sorted(errors) == sorted(shown_errors):
+                lines.append(f"错误: 与上一条相同（{len(errors)} 项）")
+            else:
+                lines.append("错误:")
+                lines.extend(f"  - {error}" for error in errors)
+        # 记录本条展示（或未展示）的错误，供下一条判断能否折叠
+        shown_errors = errors or None
 
     lines.append(f"\n文件: {_fingerprint_history_path}")
     return ds("\n".join(lines))
@@ -856,6 +984,14 @@ def cmd_status(msg: "IcaNewMessage", client: "IcaClient") -> None:
     ]
     if _watch_process is not None and _watch_process.poll() is None:
         lines.append(f"watch pid: {_watch_process.pid}")
+    if _cycle_statuses:
+        last_cycle = "上一轮检查: " + " · ".join(
+            cycle_status_text(key, status) for key, status in _cycle_statuses.items()
+        )
+        failed = _cycle_counts.get("errors", 0)
+        if failed:
+            last_cycle += f"（失败 {failed} 项）"
+        lines.append(last_cycle)
     for key in ("chat", "platform", "docs"):
         target = _target_configs.get(key)
         if target is None:
@@ -880,18 +1016,38 @@ def cmd_check(msg: "IcaNewMessage", client: "IcaClient") -> None:
     global _enabled, _last_restart_cmd_at
 
     if cooling_down(_last_restart_cmd_at):
+        remain = int(COMMAND_COOLDOWN_SECS - (time.monotonic() - _last_restart_cmd_at)) + 1
+        client.send_message(msg.reply_with(ds(f"命令冷却中，请 {remain} 秒后再试")))
         return
 
     _last_restart_cmd_at = time.monotonic()
     _enabled = True
-    client.send_message(msg.reply_with(ds("正在重启 watch，启动后会立即检查")))
+    client.send_message(msg.reply_with(ds("正在重启 watch，启动后会立即检查并回报本轮结果")))
 
     def restart() -> None:
         stop_watch()
-        ok = start_watch()
-        client.send_message(
-            msg.reply_with(ds("watch 已重启") if ok else ds("watch 重启失败"))
-        )
+        _cycle_event.clear()
+        if not start_watch():
+            client.send_message(msg.reply_with(ds("watch 重启失败")))
+            return
+
+        generation = _watch_generation
+        started = time.monotonic()
+        if not wait_cycle_result(generation, CYCLE_WAIT_SECS):
+            if generation != _watch_generation:
+                # 已被更晚的 /monitor check 取代，让那次检查回报结果
+                return
+            client.send_message(
+                msg.reply_with(
+                    ds(
+                        f"watch 已重启，但 {int(CYCLE_WAIT_SECS)}s 内没等到本轮检查结果，"
+                        "请稍后用 /monitor 查看状态与日志"
+                    )
+                )
+            )
+            return
+
+        client.send_message(msg.reply_with(cycle_report(time.monotonic() - started)))
 
     threading.Thread(target=restart, daemon=True).start()
 
@@ -1031,7 +1187,7 @@ def cmd_help(msg: "IcaNewMessage", client: "IcaClient") -> None:
         msg.reply_with(
             "🔍 DS 监测：DeepSeek 网页监测\n"
             "/monitor         - 查看状态\n"
-            "/monitor check   - 重启 watch 并触发检查\n"
+            "/monitor check   - 重启 watch 并立即检查，回报本轮结果（无变化则回“无事发生”）\n"
             "/monitor last    - 汇总 Chat、Platform、API Docs 最近修改\n"
             "/monitor last <chat|platform|docs> - 查看指定目标最近修改\n"
             "/monitor fp      - 查看最近 5 次指纹历史" + chr(10) + "/monitor fp <N>  - 查看最近 N 次指纹历史（1-20）" + chr(10) +
