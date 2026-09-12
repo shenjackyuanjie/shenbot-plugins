@@ -37,11 +37,14 @@ if TYPE_CHECKING:
 
 from shenbot_api import PluginManifest, ConfigStorage
 
+# 分析所用模型名，统一从这里取，避免各处文案写成不同版本
+ANALYZE_MODEL = "V41F"
+
 PLUGIN_MANIFEST = PluginManifest(
     plugin_id="ds_monitor",
     name="DeepSeek 网页更新监测",
     version="0.3.7",
-    description="定期检查 DeepSeek Chat、Platform 和 API Docs 变更，DeepSeek V4F 分析后推送通知",
+    description=f"定期检查 DeepSeek Chat、Platform 和 API Docs 变更，DeepSeek {ANALYZE_MODEL} 分析后推送通知",
     authors=["shenjack"],
     config={
         "ds_monitor": ConfigStorage(
@@ -547,7 +550,7 @@ def cycle_report(elapsed: float) -> str:
     if detail:
         lines.append(detail)
     if changes:
-        lines.append("变更摘要与 DeepSeek V4F 分析稍后由监测推送")
+        lines.append(f"变更摘要与 DeepSeek {ANALYZE_MODEL} 分析稍后由监测推送")
     return ds("\n".join(lines))
 
 
@@ -1096,7 +1099,7 @@ def cmd_last_analyze(
     if not is_admin(msg, client):
         client.send_message(
             msg.reply_with(
-                report + "\n\n只有管理员才能触发 DeepSeek V4F 分析"
+                report + f"\n\n只有管理员才能触发 DeepSeek {ANALYZE_MODEL} 分析"
             )
         )
         return
@@ -1107,7 +1110,7 @@ def cmd_last_analyze(
     _last_analyze_cmd_at = time.monotonic()
     room_id = int(msg.room_id)
     client.send_message(
-        msg.reply_with(ds(f"正在触发 {target.label} 最近一次变更的 DeepSeek V4F 分析（无限时长）"))
+        msg.reply_with(ds(f"正在触发 {target.label} 最近一次变更的 DeepSeek {ANALYZE_MODEL} 分析（无限时长）"))
     )
 
     def analyze() -> None:
@@ -1122,7 +1125,7 @@ def cmd_last_analyze(
                 msg.reply_with(
                     latest_change_report(target_key)
                     + "\n\n"
-                    + ds(f"{target.label} 最近一次变更的 DeepSeek V4F 分析已发送")
+                    + ds(f"{target.label} 最近一次变更的 DeepSeek {ANALYZE_MODEL} 分析已发送")
                 )
             )
         else:
