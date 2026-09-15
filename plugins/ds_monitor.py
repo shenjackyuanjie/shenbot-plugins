@@ -1,12 +1,15 @@
 """
 ds_monitor.py - DeepSeek 网页更新监测插件
 
-启动 ds-monitor 二进制的 watch 模式监控 Chat、Platform 和 API Docs 页面变更，
-检测到变化时由 ds-monitor 自动通过 noticer 发送 AI 分析结果。
+启动 ds-monitor 二进制的 watch 模式监控 Chat、Platform、API Docs 页面变更，
+检测到变化时由 ds-monitor 自动通过 noticer 发送 AI 分析结果。ds-monitor 0.3.0 起
+watch 里还多了 `status` 目标：盯 DeepSeek 服务状态页（status.deepseek.com）的事件，
+出现故障 / 状态推进 / 恢复时各推一条文字通知（状态只活在 watch 进程内存里，不落盘）。
 配置房间通知走 /v1/send；命令触发的动态 room_id 通知走受 Token 保护的 direct API。
 
 `/monitor check` 会重启 watch 并等待本轮的 `=== 本轮检查结果 ... ===` 标记
 （ds-monitor 0.2.8 起输出），再回报各目标状态；本轮没有变化时回报“无事发生”。
+`/monitor sp` 用一次只跑 status 的 `check` 现场查询状态页（不发通知，不影响 watch）。
 
 配置 (config/ds_monitor.toml):
 
@@ -43,8 +46,11 @@ ANALYZE_MODEL = "V41F"
 PLUGIN_MANIFEST = PluginManifest(
     plugin_id="ds_monitor",
     name="DeepSeek 网页更新监测",
-    version="0.3.7",
-    description=f"定期检查 DeepSeek Chat、Platform 和 API Docs 变更，DeepSeek {ANALYZE_MODEL} 分析后推送通知",
+    version="0.3.8",
+    description=(
+        f"定期检查 DeepSeek Chat、Platform 和 API Docs 变更，DeepSeek {ANALYZE_MODEL} 分析后推送通知；"
+        "同时盯服务状态页的故障 / 恢复事件"
+    ),
     authors=["shenjack"],
     config={
         "ds_monitor": ConfigStorage(
@@ -61,6 +67,8 @@ _check_interval: int = 600
 _enabled: bool = True
 _target_configs: dict[str, "MonitorTarget"] = {}
 _fingerprint_history_path: str = ""
+# web_craw/config.toml 的 [status] 段（服务状态页订阅源），只用于展示与 /monitor sp
+_status_config: dict[str, Any] = {}
 
 _last_check_time: datetime | None = None
 _last_change_time: datetime | None = None
@@ -76,12 +84,19 @@ _watch_thread: threading.Thread | None = None
 _watch_lock = threading.Lock()
 _watch_stop_requested: bool = False
 _watch_summary_lines: list[str] | None = None
+# 正在收集的摘要在哪个目标名下（见 begin_summary/finish_summary）
+_summary_owner: str | None = None
+# 正在收集的 status 摘要是"基线快照"还是"状态变化"（决定归档到哪个变量）
+_status_summary_baseline: bool = False
+# 基线上就已存在的未恢复事件（watch 启动那一刻的状态），供 /monitor 展示
+_last_status_snapshot: str = ""
 # watch 进程代次：重启后加一，用于丢弃旧进程残留的输出行
 _watch_generation: int = 0
 _last_restart_cmd_at: float = 0.0
 _last_recent_cmd_at: float = 0.0
 _last_analyze_cmd_at: float = 0.0
 _last_render_cmd_at: float = 0.0
+_last_status_page_cmd_at: float = 0.0
 
 COMMAND_COOLDOWN_SECS = 60.0
 
@@ -96,6 +111,7 @@ CYCLE_TARGET_LABELS = {
     "platform": "Platform",
     "docs": "API Docs",
     "fingerprint": "系统指纹",
+    "status": "服务状态页",
 }
 CYCLE_STATUS_LABELS = {
     "nochange": "无变化",
@@ -105,7 +121,9 @@ CYCLE_STATUS_LABELS = {
     "error": "检查失败",
     "skipped": "本轮跳过",
 }
-PAGE_TARGET_KEYS = ("chat", "platform", "docs")
+# 检查失败时要写进 headline 的目标：状态页失败意味着"看不见服务状态"，不能只报无事发生。
+# 指纹刻意不算在内：没配 API key 时它每轮都会失败，不该污染"无事发生"。
+CYCLE_ERROR_KEYS = ("chat", "platform", "docs", "status")
 
 _cycle_event = threading.Event()
 _cycle_result_generation: int = -1
@@ -161,7 +179,7 @@ def notify_error(msg: str, room_id: int | None = None) -> None:
 
 def load_config() -> None:
     global _binary_path, _config_path, _check_interval, _target_configs
-    global _fingerprint_history_path
+    global _fingerprint_history_path, _status_config
 
     cfg = PLUGIN_MANIFEST.config_unchecked("ds_monitor")
 
@@ -182,6 +200,7 @@ def load_config() -> None:
 
     _target_configs = load_target_configs()
     _fingerprint_history_path = load_fingerprint_history_path()
+    _status_config = load_status_config()
 
 
 def work_dir() -> str:
@@ -194,17 +213,24 @@ def work_dir() -> str:
     return cwd
 
 
+def load_rust_config() -> dict[str, Any]:
+    """读取 ds-monitor 的 config.toml；读不到时返回空 dict，由调用方各自用默认值兜底。"""
+    if not _config_path or not os.path.isfile(_config_path):
+        return {}
+    try:
+        import tomllib
+
+        with open(_config_path, "rb") as f:
+            raw = tomllib.load(f)
+        return raw if isinstance(raw, dict) else {}
+    except Exception as exc:
+        log(f"读取 ds-monitor 配置失败，使用默认值: {exc}")
+        return {}
+
+
 def load_target_configs() -> dict[str, MonitorTarget]:
     """读取 ds-monitor 的三类监测目标，缺省值与 Rust 配置保持一致。"""
-    raw: dict[str, Any] = {}
-    if _config_path and os.path.isfile(_config_path):
-        try:
-            import tomllib
-
-            with open(_config_path, "rb") as f:
-                raw = tomllib.load(f)
-        except Exception as exc:
-            log(f"读取监测目标配置失败，使用默认目标: {exc}")
+    raw = load_rust_config()
 
     sections = {
         "chat": ("Chat", raw.get("target", {}), True, "https://chat.deepseek.com/", "output/chat"),
@@ -237,22 +263,30 @@ def load_target_configs() -> dict[str, MonitorTarget]:
 
 def load_fingerprint_history_path() -> str:
     """Read the Rust fingerprint history path, using the same default."""
-    raw: dict[str, Any] = {}
-    if _config_path and os.path.isfile(_config_path):
-        try:
-            import tomllib
-
-            with open(_config_path, "rb") as f:
-                raw = tomllib.load(f)
-        except Exception as exc:
-            log(f"Failed to read fingerprint config; using default history path: {exc}")
-
-    section = raw.get("fingerprint", {})
+    section = load_rust_config().get("fingerprint", {})
     section = section if isinstance(section, dict) else {}
     history = str(section.get("history", "output/fingerprint-history.jsonl"))
     if not os.path.isabs(history):
         history = os.path.join(work_dir(), history)
     return history
+
+
+def load_status_config() -> dict[str, Any]:
+    """读取 Rust 侧 `[status]`（服务状态页监控）配置，缺省值与 `config.example.toml` 一致。"""
+    section = load_rust_config().get("status", {})
+    section = section if isinstance(section, dict) else {}
+    try:
+        interval = int(str(section.get("interval", 120)))
+    except (TypeError, ValueError):
+        interval = 120
+    return {
+        "enabled": bool(section.get("enabled", True)),
+        "url": str(section.get("url", "https://status.deepseek.com/history.rss")),
+        "fallback_url": str(
+            section.get("fallback_url", "https://statuspage.flashduty.com/deepseek/history.rss")
+        ),
+        "interval": interval,
+    }
 
 
 def output_dir() -> str:
@@ -412,6 +446,52 @@ def run_last_render(target: str | None, room_id: int | None = None) -> str:
         return msg
 
 
+# 只跑服务状态页的 check 参数：其余目标全部关掉，一次查询只有一个 RSS 请求，
+# 也不会碰任何快照、不会发通知。
+STATUS_ONLY_FLAGS = (
+    "--no-chat",
+    "--no-official",
+    "--no-platform",
+    "--no-docs",
+    "--no-fingerprint",
+)
+STATUS_PROBE_TIMEOUT_SECS = 60.0
+# 回复长度上限：一次故障可能同时有恢复 + 新故障，别把消息刷屏
+REPLY_MAX_CHARS = 1200
+
+
+def run_status_probe() -> str:
+    """跑一次只含服务状态页的 `check`，用于 `/monitor sp` 现场查询。
+
+    走的是 ds-monitor 自己的抓取链路（含官方域名失败后回退国际镜像），
+    所以 Python 这边不需要也不应该自己去请求状态页。
+    """
+    if not validate_binary():
+        return f"❌ ds-monitor 二进制不存在: {_binary_path}"
+
+    args = base_args("check")
+    args.extend(STATUS_ONLY_FLAGS)
+
+    try:
+        result = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            cwd=work_dir(),
+            timeout=STATUS_PROBE_TIMEOUT_SECS,
+        )
+        out = result.stdout
+        if result.stderr:
+            out += "\n" + result.stderr
+        return out
+    except subprocess.TimeoutExpired:
+        return f"❌ 状态页查询超时（{int(STATUS_PROBE_TIMEOUT_SECS)}s）"
+    except Exception as e:
+        return f"❌ 状态页查询失败: {e}"
+
+
 def handle_output_line(line: str, generation: int) -> None:
     global _last_check_time, _last_change_time, _last_change_summary
     global _watch_summary_lines, _active_output_target
@@ -433,6 +513,12 @@ def handle_output_line(line: str, generation: int) -> None:
             _active_output_target = key
             payload = line[len(prefix) :].lstrip()
             break
+    else:
+        # 服务状态页的进度行没有 `[标签]` 前缀，统一写成 `status: ...`
+        # （见 web_craw/src/status/mod.rs），单独归属到 status 目标，
+        # 免得它的报告被算进上一个网页目标的变更摘要里。
+        if payload.startswith("status:"):
+            _active_output_target = "status"
 
     target_key = _active_output_target or "chat"
     now = datetime.now(timezone.utc)
@@ -441,37 +527,126 @@ def handle_output_line(line: str, generation: int) -> None:
         # 记录本轮检查结果；继续走下面的汇总逻辑，让 "===" 正常结束变更摘要
         record_cycle_result(payload, generation)
 
+    if target_key == "status" and handle_status_output_line(payload, now):
+        return
+
     if "检测到变化" in payload:
         _last_check_time = now
         _last_change_time = now
         _last_check_times[target_key] = now
         _last_change_times[target_key] = now
-        _watch_summary_lines = []
+        begin_summary(target_key)
         return
 
     if "无变化" in payload or "首次抓取" in payload:
         _last_check_time = now
         _last_check_times[target_key] = now
-        _watch_summary_lines = None
+        drop_summary(target_key)
         return
 
-    if _watch_summary_lines is not None:
-        if payload.startswith("===") or "已发送通知" in payload:
-            if _watch_summary_lines:
-                summary = "\n".join(_watch_summary_lines)
-                _last_change_summary = summary
-                _last_change_summaries[target_key] = summary
-            _watch_summary_lines = None
+    finish_summary(target_key, payload)
+
+
+def begin_summary(owner: str) -> None:
+    """开始收集某个目标的变更摘要（覆盖上一份未完成的）。"""
+    global _watch_summary_lines, _summary_owner
+
+    _watch_summary_lines = []
+    _summary_owner = owner
+
+
+def drop_summary(owner: str) -> None:
+    """丢弃某个目标未完成的摘要；owner 不匹配时不动别人的。"""
+    global _watch_summary_lines, _summary_owner
+
+    if _summary_owner == owner:
+        _watch_summary_lines = None
+        _summary_owner = None
+
+
+def finish_summary(owner: str, payload: str) -> None:
+    """按需结束摘要：遇 `===` / “已发送通知” 收尾，满 20 行提前收尾。
+
+    收尾行（`=== 本轮检查结果 ...`）可能被记在别的目标名下——服务状态页是本轮最后一个
+    目标，所以 `===` 到达时 owner 往往是 `status`——因此收尾一律以摘要真正的 owner 归档；
+    只有内容行才要求 owner 匹配。
+    """
+    global _watch_summary_lines, _summary_owner, _last_status_snapshot
+    global _last_change_summary
+
+    lines = _watch_summary_lines
+    ended = payload.startswith("===") or "已发送通知" in payload
+    if ended:
+        owner = _summary_owner or owner
+    else:
+        if _summary_owner != owner or lines is None:
+            return
+        stripped = payload.strip()
+        if not stripped:
+            return
+        lines.append(stripped)
+        if len(lines) < 20:
             return
 
-        stripped = payload.strip()
-        if stripped:
-            _watch_summary_lines.append(stripped)
-            if len(_watch_summary_lines) >= 20:
-                summary = "\n".join(_watch_summary_lines)
-                _last_change_summary = summary
-                _last_change_summaries[target_key] = summary
-                _watch_summary_lines = None
+    _watch_summary_lines = None
+    _summary_owner = None
+    if not lines:
+        return
+
+    text = "\n".join(lines)
+    if owner == "status":
+        # 基线上的未恢复事件只记"当前状态"，不算一次变更（/monitor sp 也是看这个）。
+        if _status_summary_baseline:
+            _last_status_snapshot = text
+        else:
+            _last_change_summary = text
+            _last_change_summaries["status"] = text
+        return
+    _last_change_summary = text
+    _last_change_summaries[owner] = text
+
+
+def handle_status_output_line(payload: str, now: datetime) -> bool:
+    """服务状态页输出的专门记账；返回 True 表示这一行已由本函数处理。
+
+    认得的骨架（见 web_craw/src/status/mod.rs）：
+    - `status: ...`：入口回退提示、首次检查基线、无变化、检测到状态变化；
+    - `【DeepSeek 状态】...`：故障 / 状态推进 / 恢复的报告块（`---` 与空行为分隔）；
+    - `=== 本轮检查结果 ... ===`：收尾（只在摘要确实属于 status 时才吞掉这一行）。
+    """
+    global _status_summary_baseline
+
+    if payload.startswith("status:"):
+        detail = payload[len("status:") :].strip()
+        if "检测到状态变化" in detail:
+            _last_check_times["status"] = now
+            _last_change_times["status"] = now
+            _status_summary_baseline = False
+            begin_summary("status")
+        elif "无变化" in detail:
+            _last_check_times["status"] = now
+            drop_summary("status")
+        elif "首次检查" in detail or "基线" in detail:
+            _last_check_times["status"] = now
+            # 基线上若带着未恢复事件，Rust 会把明细一起打印出来，这里照收
+            _status_summary_baseline = True
+            begin_summary("status")
+        return True
+
+    if payload.startswith("【DeepSeek 状态】"):
+        if _summary_owner != "status":
+            begin_summary("status")
+        if _watch_summary_lines is not None:
+            _watch_summary_lines.append(payload.strip())
+        return True
+
+    if _summary_owner != "status":
+        return False
+
+    if payload.strip() == "---":
+        return True
+    finish_summary("status", payload)
+    return True
 
 
 def cycle_target_label(key: str) -> str:
@@ -528,7 +703,7 @@ def cycle_report(elapsed: float) -> str:
     statuses = dict(_cycle_statuses)
     changes = [key for key, status in statuses.items() if status == "change"]
     alerts = [key for key, status in statuses.items() if status == "alert"]
-    page_errors = [key for key in PAGE_TARGET_KEYS if statuses.get(key) == "error"]
+    page_errors = [key for key in CYCLE_ERROR_KEYS if statuses.get(key) == "error"]
 
     if changes:
         headline = "🔔 检测到变化：" + "、".join(cycle_target_label(key) for key in changes)
@@ -890,6 +1065,83 @@ def fingerprint_history_report(limit: int = 5) -> str:
     return ds("\n".join(lines))
 
 
+def status_page_report(output: str) -> str:
+    """把一次 status-only `check` 的 stdout 整理成一条可读回复。
+
+    认得的骨架（见 web_craw/src/status/mod.rs）：
+    - `status: <摘要>`：入口回退提示、基线/无变化计数；
+    - `【DeepSeek 状态】...` 块：未恢复事件的明细（每块以空行或 `---` 分隔）；
+    - `=== 本轮检查结果 ... status=baseline|nochange|change|error ===`：本轮结论。
+    """
+    if "unexpected argument" in output:
+        return ds(
+            "ds-monitor 二进制不认识状态页查询用的参数（--no-platform 等），"
+            "说明跑的还是旧版本；先重新构建 release 再试"
+        )
+
+    status_field = ""
+    summary = ""
+    error = ""
+    mirror = False
+    blocks: list[str] = []
+    current: list[str] = []
+
+    for raw in output.splitlines():
+        line = raw.strip()
+        if not line or line == "---":
+            if current:
+                blocks.append("\n".join(current))
+                current = []
+            continue
+        if line.startswith("status:"):
+            detail = line[len("status:") :].strip()
+            if "镜像入口" in detail:
+                mirror = True
+            else:
+                summary = detail
+            continue
+        if line.startswith("===") and CYCLE_RESULT_MARKER in line:
+            if current:
+                blocks.append("\n".join(current))
+                current = []
+            for token in line.split():
+                key, sep, value = token.partition("=")
+                if sep and key == "status":
+                    status_field = value
+            continue
+        if line.startswith("【DeepSeek 状态】"):
+            if current:
+                blocks.append("\n".join(current))
+            current = [line]
+            continue
+        if current:
+            current.append(line)
+            continue
+        if not error and ("状态页检查失败" in line or "状态页抓取失败" in line):
+            error = line
+    if current:
+        blocks.append("\n".join(current))
+
+    lines = ["服务状态页查询"]
+    if summary:
+        lines.append(summary)
+    if mirror:
+        lines.append("入口: 官方域名不可用，已自动回退国际镜像")
+    if status_field == "error" or error:
+        lines.append("❌ " + (error or "订阅源抓不到，本轮没拿到状态"))
+    if blocks:
+        lines.append("")
+        for block in blocks[:3]:
+            lines.append(block)
+            lines.append("")
+        if len(blocks) > 3:
+            lines.append(f"（另有 {len(blocks) - 3} 条未恢复事件）")
+    elif status_field in {"baseline", "nochange"}:
+        lines.append("当前没有未恢复事件 ✅")
+
+    return ds("\n".join(lines).strip()[:REPLY_MAX_CHARS])
+
+
 def do_check(room_id: int | None = None) -> None:
     global _last_check_time, _last_change_time, _last_change_summary
 
@@ -923,11 +1175,23 @@ def do_check(room_id: int | None = None) -> None:
 
 
 def on_load() -> None:
-    load_config()
+    # 宿主会在每条消息前按文件哈希热重载插件，并且把模块代码执行进**同一个模块对象**。
+    # 如果扫描恰好撞上"文件正在被编辑"的瞬间（先出现调用、后出现定义），
+    # 模块能编译通过但初始化会抛 NameError，插件就被留在 Disabled 状态，
+    # 之后既 enable 不了也 reload 不了（reload 要求插件处于启用状态），只能重启 bot。
+    # 这里兜住初始化异常：最坏情况是带默认值启用 + 日志报错，下一次热重载就能自愈。
+    try:
+        load_config()
+    except Exception as exc:
+        log(f"加载配置失败，改用内置默认值继续启动: {type(exc).__name__}: {exc}")
     enabled = ", ".join(
         target.label for target in _target_configs.values() if target.enabled
     )
-    log(f"加载完成 (binary={_binary_path}, interval={_check_interval}s, targets={enabled})")
+    status_state = "启用" if _status_config.get("enabled", True) else "未启用"
+    log(
+        f"加载完成 (binary={_binary_path}, interval={_check_interval}s, "
+        f"targets={enabled}, status={status_state})"
+    )
     if _enabled:
         start_watch()
 
@@ -955,6 +1219,8 @@ def on_ica_message(msg: "IcaNewMessage", client: "IcaClient") -> None:
         cmd_status(msg, client)
     elif content == "/monitor check":
         cmd_check(msg, client)
+    elif content == "/monitor sp":
+        cmd_status_page(msg, client)
     elif content == "/monitor fp":
         cmd_fingerprint(msg, client)
     elif len(parts) == 3 and parts[:2] == ["/monitor", "fp"]:
@@ -1012,6 +1278,28 @@ def cmd_status(msg: "IcaNewMessage", client: "IcaClient") -> None:
         if summary:
             lines.append(f"  变更摘要: {summary[:300]}")
 
+    status_cfg = _status_config
+    status_state = "✅ 启用" if status_cfg.get("enabled", True) else "⏸ 未启用"
+    lines.append(f"服务状态页: {status_state}")
+    lines.append(f"  订阅源: {status_cfg.get('url', 'N/A')}")
+    if status_cfg.get("fallback_url"):
+        lines.append(f"  备用入口: {status_cfg['fallback_url']}")
+    lines.append(
+        f"  抓取间隔: {status_cfg.get('interval', 120)}s"
+        "（只在 watch 内存里比较，不落盘；/monitor sp 可现场查询）"
+    )
+    checked = _last_check_times.get("status")
+    changed = _last_change_times.get("status")
+    if checked:
+        lines.append(f"  上次检查: {checked.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+    if changed:
+        lines.append(f"  上次变更: {changed.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+    status_summary = _last_change_summaries.get("status")
+    if status_summary:
+        lines.append(f"  最近状态变化:\n{status_summary[:600]}")
+    if _last_status_snapshot:
+        lines.append(f"  启动时未恢复事件:\n{_last_status_snapshot[:600]}")
+
     client.send_message(msg.reply_with("\n".join(lines)))
 
 
@@ -1053,6 +1341,25 @@ def cmd_check(msg: "IcaNewMessage", client: "IcaClient") -> None:
         client.send_message(msg.reply_with(cycle_report(time.monotonic() - started)))
 
     threading.Thread(target=restart, daemon=True).start()
+
+
+def cmd_status_page(msg: "IcaNewMessage", client: "IcaClient") -> None:
+    """`/monitor sp`：现场查询服务状态页，不重启 watch、不发通知。"""
+    global _last_status_page_cmd_at
+
+    if cooling_down(_last_status_page_cmd_at):
+        remain = int(COMMAND_COOLDOWN_SECS - (time.monotonic() - _last_status_page_cmd_at)) + 1
+        client.send_message(msg.reply_with(ds(f"命令冷却中，请 {remain} 秒后再试")))
+        return
+
+    _last_status_page_cmd_at = time.monotonic()
+
+    def probe() -> None:
+        output = run_status_probe()
+        log(f"状态页查询结果: {output[:500]}")
+        client.send_message(msg.reply_with(status_page_report(output)))
+
+    threading.Thread(target=probe, daemon=True).start()
 
 
 def cmd_fingerprint(
@@ -1191,6 +1498,7 @@ def cmd_help(msg: "IcaNewMessage", client: "IcaClient") -> None:
             "🔍 DS 监测：DeepSeek 网页监测\n"
             "/monitor         - 查看状态\n"
             "/monitor check   - 重启 watch 并立即检查，回报本轮结果（无变化则回“无事发生”）\n"
+            "/monitor sp      - 现场查询服务状态页（故障/恢复事件，不发通知）\n"
             "/monitor last    - 汇总 Chat、Platform、API Docs 最近修改\n"
             "/monitor last <chat|platform|docs> - 查看指定目标最近修改\n"
             "/monitor fp      - 查看最近 5 次指纹历史" + chr(10) + "/monitor fp <N>  - 查看最近 N 次指纹历史（1-20）" + chr(10) +
