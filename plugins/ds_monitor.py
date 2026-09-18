@@ -52,7 +52,7 @@ ANALYZE_MODEL = "V41F"
 PLUGIN_MANIFEST = PluginManifest(
     plugin_id="ds_monitor",
     name="DeepSeek 网页更新监测",
-    version="0.4.0",
+    version="0.4.1",
     description=(
         f"定期检查 DeepSeek Chat、Platform 和 API Docs 变更，DeepSeek {ANALYZE_MODEL} 分析后推送通知；"
         "同时盯服务状态页的故障 / 恢复事件"
@@ -1618,14 +1618,42 @@ def cmd_render_last(
 
 
 def cmd_enable(msg: "IcaNewMessage", client: "IcaClient", on: bool) -> None:
+    """`/monitor on|off`。
+
+    开启时和 `/monitor check` 一样回报本轮检查结果：watch 一起来就会跑一轮，等它的
+    `=== 本轮检查结果 ... ===` 比让用户再发一次 check 省事。已在运行时只报状态，
+    不重复启动（重复 on 拿不到新的代次，等结果会一直等到下一轮 interval）。
+    """
     global _enabled
-    _enabled = on
-    if on:
-        ok = start_watch()
-        client.send_message(msg.reply_with(ds("监测已开启") if ok else ds("监测启动失败")))
-    else:
+
+    if not on:
+        _enabled = False
         stop_watch()
         client.send_message(msg.reply_with(ds("监测已暂停")))
+        return
+
+    _enabled = True
+
+    with _watch_lock:
+        running = _watch_process is not None and _watch_process.poll() is None
+    if running:
+        client.send_message(msg.reply_with(ds("监测已在运行（要立即检查用 /monitor check）")))
+        return
+
+    def enable() -> None:
+        if not start_watch():
+            client.send_message(msg.reply_with(ds("监测启动失败")))
+            return
+
+        generation = _watch_generation
+        started_at = time.monotonic()
+        if wait_cycle_result(generation, CYCLE_WAIT_SECS):
+            report = cycle_report(time.monotonic() - started_at)
+        else:
+            report = ds(f"没在 {int(CYCLE_WAIT_SECS)}s 内等到本轮检查结果，稍后用 /monitor 查看")
+        client.send_message(msg.reply_with(f"{ds('监测已开启')}\n\n{report}"))
+
+    threading.Thread(target=enable, daemon=True).start()
 
 
 def cmd_help(msg: "IcaNewMessage", client: "IcaClient") -> None:
@@ -1641,7 +1669,7 @@ def cmd_help(msg: "IcaNewMessage", client: "IcaClient") -> None:
             "/monitor fp      - 查看最近 5 次指纹历史" + chr(10) + "/monitor fp <N>  - 查看最近 N 次指纹历史（1-20）" + chr(10) +
             "/monitor render last [chat|platform|docs] - 管理员发送最近分析四种主题图片\n"
             "/monitor analyze last <chat|platform|docs> - 管理员重新分析指定目标（无限时长）\n"
-            "/monitor on/off  - 开关\n"
+            "/monitor on/off  - 开关（on 开启后会回报本轮检查结果）\n"
             "/monitor help    - 帮助"
         )
     )
