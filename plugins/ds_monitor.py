@@ -15,10 +15,15 @@ watch 里还多了 `status` 目标：盯 DeepSeek 服务状态页（status.deeps
 
 ```toml
 [ds_monitor]
-binary = "D:\\githubs\\deepseek\\web_craw\\target\\release\\ds-monitor.exe"
+binary = "D:\\githubs\\deepseek\\web_craw\\target\\release\\ds-monitor-copy.exe"
 config = "D:\\githubs\\deepseek\\web_craw\\config.toml"
 interval = 600
 ```
+
+`binary` 指向 release 产物的**副本**：长跑的 watch 会锁住自己那个可执行文件，把构建
+产物 `target\\release\\ds-monitor.exe` 留给 cargo，`cargo build --release` 就不会因为
+监测在跑而失败。`/monitor update` 把这几步连起来：停 watch → 构建 → 刷新副本 →
+重启 watch（复制前必须先停 watch，Windows 不允许覆盖正在运行的 exe）。
 
 `web_craw/config.toml` 保存 noticer strict/direct URL 与本地 Token；
 仓库只提交不含密钥的 `config.example.toml`。
@@ -28,6 +33,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import threading
 import time
@@ -46,7 +52,7 @@ ANALYZE_MODEL = "V41F"
 PLUGIN_MANIFEST = PluginManifest(
     plugin_id="ds_monitor",
     name="DeepSeek 网页更新监测",
-    version="0.3.8",
+    version="0.4.0",
     description=(
         f"定期检查 DeepSeek Chat、Platform 和 API Docs 变更，DeepSeek {ANALYZE_MODEL} 分析后推送通知；"
         "同时盯服务状态页的故障 / 恢复事件"
@@ -54,7 +60,7 @@ PLUGIN_MANIFEST = PluginManifest(
     authors=["shenjack"],
     config={
         "ds_monitor": ConfigStorage(
-            binary="D:\\githubs\\deepseek\\web_craw\\target\\release\\ds-monitor.exe",
+            binary="D:\\githubs\\deepseek\\web_craw\\target\\release\\ds-monitor-copy.exe",
             config="D:\\githubs\\deepseek\\web_craw\\config.toml",
             interval=600,
         ),
@@ -97,8 +103,16 @@ _last_recent_cmd_at: float = 0.0
 _last_analyze_cmd_at: float = 0.0
 _last_render_cmd_at: float = 0.0
 _last_status_page_cmd_at: float = 0.0
+_last_update_cmd_at: float = 0.0
+# 更新期间禁止再次触发：构建 + 换文件 + 重启 watch 不能并发
+_update_in_progress: bool = False
 
 COMMAND_COOLDOWN_SECS = 60.0
+
+# 构建产物的文件名：`binary` 配置的是它的副本（见模块文档）
+SOURCE_BINARY_NAME = "ds-monitor.exe"
+# `cargo build --release` 的最长等待时间（秒）：冷编译可能几分钟
+BUILD_TIMEOUT_SECS = 900.0
 
 # ds-monitor 在检查阶段结束时输出的机器可读标记
 # 形如：=== 本轮检查结果 changes=0 notices=0 errors=0 chat=nochange ... ===
@@ -211,6 +225,22 @@ def work_dir() -> str:
     if not cwd or not os.path.isdir(cwd):
         cwd = os.path.dirname(_binary_path) or "."
     return cwd
+
+
+def source_binary_path() -> str:
+    """构建产物路径：与 `binary` 同目录的 ds-monitor.exe。"""
+    if not _binary_path:
+        return ""
+    return os.path.join(os.path.dirname(_binary_path), SOURCE_BINARY_NAME)
+
+
+def repo_root() -> str:
+    """ds-monitor 仓库根目录（cargo 的工作目录）：优先取 config.toml 所在目录。"""
+    root = os.path.dirname(_config_path) if _config_path else ""
+    if root and os.path.isdir(root):
+        return root
+    # 退路：从 .../target/release/<exe> 上溯三级
+    return os.path.dirname(os.path.dirname(os.path.dirname(_binary_path or "")))
 
 
 def load_rust_config() -> dict[str, Any]:
@@ -1219,6 +1249,8 @@ def on_ica_message(msg: "IcaNewMessage", client: "IcaClient") -> None:
         cmd_status(msg, client)
     elif content == "/monitor check":
         cmd_check(msg, client)
+    elif content == "/monitor update":
+        cmd_update(msg, client)
     elif content == "/monitor sp":
         cmd_status_page(msg, client)
     elif content == "/monitor fp":
@@ -1341,6 +1373,110 @@ def cmd_check(msg: "IcaNewMessage", client: "IcaClient") -> None:
         client.send_message(msg.reply_with(cycle_report(time.monotonic() - started)))
 
     threading.Thread(target=restart, daemon=True).start()
+
+
+def cmd_update(msg: "IcaNewMessage", client: "IcaClient") -> None:
+    """`/monitor update`：构建 release、刷新运行副本、重启 watch。
+
+    watch 锁住的是副本，所以这里可以放心停掉它再覆盖构建产物：
+    停 watch → `cargo build --release` → 复制副本 → 重启 watch。
+    任一步失败都回到"旧副本继续监测"，不把监测留在停止状态。
+    """
+    global _last_update_cmd_at, _update_in_progress
+
+    if not is_admin(msg, client):
+        client.send_message(msg.reply_with(ds("只有管理员才能触发更新")))
+        return
+
+    if _update_in_progress:
+        client.send_message(msg.reply_with(ds("已有一次更新在进行中，请稍候")))
+        return
+
+    if cooling_down(_last_update_cmd_at):
+        remain = int(COMMAND_COOLDOWN_SECS - (time.monotonic() - _last_update_cmd_at)) + 1
+        client.send_message(msg.reply_with(ds(f"命令冷却中，请 {remain} 秒后再试")))
+        return
+
+    source = source_binary_path()
+    if not _binary_path or not source:
+        client.send_message(msg.reply_with(ds("未配置 ds-monitor 二进制路径，无法更新")))
+        return
+    if os.path.normcase(os.path.abspath(source)) == os.path.normcase(os.path.abspath(_binary_path)):
+        client.send_message(
+            msg.reply_with(
+                ds(
+                    "binary 指向的是构建产物本体，长跑 watch 会锁住它；"
+                    "请改成同目录下的副本（例如 ds-monitor-copy.exe）"
+                )
+            )
+        )
+        return
+
+    _last_update_cmd_at = time.monotonic()
+    _update_in_progress = True
+    client.send_message(msg.reply_with(ds("正在更新：停 watch → 构建 release → 刷新副本 → 重启 watch")))
+
+    def update() -> None:
+        global _update_in_progress
+
+        try:
+            stop_watch()
+
+            failure = ""
+            root = repo_root()
+            log(f"开始构建 release (cwd={root or '继承当前目录'})")
+            try:
+                result = subprocess.run(
+                    ["cargo", "build", "--release", "--bin", "ds-monitor"],
+                    cwd=root or None,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=BUILD_TIMEOUT_SECS,
+                )
+                if result.returncode != 0:
+                    tail = (result.stderr or result.stdout or "").strip()
+                    failure = f"构建失败（exit {result.returncode}）:\n{tail[-500:]}"
+            except subprocess.TimeoutExpired:
+                failure = f"构建超时（{int(BUILD_TIMEOUT_SECS)}s）"
+            except Exception as exc:
+                failure = f"构建失败: {exc}"
+
+            if not failure:
+                try:
+                    shutil.copy2(source, _binary_path)
+                except Exception as exc:
+                    failure = f"刷新副本失败: {exc}"
+
+            started = start_watch()
+            if not started:
+                client.send_message(
+                    msg.reply_with(ds("更新后 watch 启动失败，请用 /monitor 检查二进制路径"))
+                )
+                return
+
+            if failure:
+                client.send_message(
+                    msg.reply_with(
+                        ds(f"{failure}\n\n已用旧副本恢复监测（EXE版本: {binary_version()}）")
+                    )
+                )
+                return
+
+            generation = _watch_generation
+            started_at = time.monotonic()
+            if wait_cycle_result(generation, CYCLE_WAIT_SECS):
+                report = cycle_report(time.monotonic() - started_at)
+            else:
+                report = ds("watch 已重启，但没在限定时间内等到本轮检查结果")
+            client.send_message(
+                msg.reply_with(f"{ds(f'更新完成（EXE版本: {binary_version()}）')}\n\n{report}")
+            )
+        finally:
+            _update_in_progress = False
+
+    threading.Thread(target=update, daemon=True).start()
 
 
 def cmd_status_page(msg: "IcaNewMessage", client: "IcaClient") -> None:
@@ -1499,6 +1635,7 @@ def cmd_help(msg: "IcaNewMessage", client: "IcaClient") -> None:
             "/monitor         - 查看状态\n"
             "/monitor check   - 重启 watch 并立即检查，回报本轮结果（无变化则回“无事发生”）\n"
             "/monitor sp      - 现场查询服务状态页（故障/恢复事件，不发通知）\n"
+            "/monitor update  - 管理员构建 release、刷新运行副本并重启 watch\n"
             "/monitor last    - 汇总 Chat、Platform、API Docs 最近修改\n"
             "/monitor last <chat|platform|docs> - 查看指定目标最近修改\n"
             "/monitor fp      - 查看最近 5 次指纹历史" + chr(10) + "/monitor fp <N>  - 查看最近 N 次指纹历史（1-20）" + chr(10) +
