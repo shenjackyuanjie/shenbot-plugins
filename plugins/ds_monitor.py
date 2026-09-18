@@ -11,6 +11,13 @@ watch 里还多了 `status` 目标：盯 DeepSeek 服务状态页（status.deeps
 （ds-monitor 0.2.8 起输出），再回报各目标状态；本轮没有变化时回报“无事发生”。
 `/monitor sp` 用一次只跑 status 的 `check` 现场查询状态页（不发通知，不影响 watch）。
 
+整轮（含分析、通知）结束时 watch 还会输出 `=== 本轮完成 changes=… analyzed=… ===`
+（ds-monitor 0.5.0 起）。这一行排在分析之后，代表本轮的分析正文与图片都已落盘；
+`publish = true` 时插件用它触发看板自动发布：跑 `deploy.ps1` 导出并部署 site/，
+成功与失败都通过 noticer 通知到房间。一轮只会出现一次这个标记，所以一轮里多个目标
+同时变化也只发布一次；发布期间又攒下的变化，会在这次发布结束后补一次。
+`/monitor deploy` 可以手动发布一次（管理员）。
+
 配置 (config/ds_monitor.toml):
 
 ```toml
@@ -18,6 +25,8 @@ watch 里还多了 `status` 目标：盯 DeepSeek 服务状态页（status.deeps
 binary = "D:\\githubs\\deepseek\\web_craw\\target\\release\\ds-monitor-copy.exe"
 config = "D:\\githubs\\deepseek\\web_craw\\config.toml"
 interval = 600
+# 本轮有变化时自动导出并部署看板（Cloudflare Pages），默认关闭
+publish = false
 ```
 
 `binary` 指向 release 产物的**副本**：长跑的 watch 会锁住自己那个可执行文件，把构建
@@ -37,6 +46,8 @@ import shutil
 import subprocess
 import threading
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -52,7 +63,7 @@ ANALYZE_MODEL = "V41F"
 PLUGIN_MANIFEST = PluginManifest(
     plugin_id="ds_monitor",
     name="DeepSeek 网页更新监测",
-    version="0.4.1",
+    version="0.5.0",
     description=(
         f"定期检查 DeepSeek Chat、Platform 和 API Docs 变更，DeepSeek {ANALYZE_MODEL} 分析后推送通知；"
         "同时盯服务状态页的故障 / 恢复事件"
@@ -63,6 +74,7 @@ PLUGIN_MANIFEST = PluginManifest(
             binary="D:\\githubs\\deepseek\\web_craw\\target\\release\\ds-monitor-copy.exe",
             config="D:\\githubs\\deepseek\\web_craw\\config.toml",
             interval=600,
+            publish=False,
         ),
     },
 )
@@ -106,6 +118,20 @@ _last_status_page_cmd_at: float = 0.0
 _last_update_cmd_at: float = 0.0
 # 更新期间禁止再次触发：构建 + 换文件 + 重启 watch 不能并发
 _update_in_progress: bool = False
+_last_publish_cmd_at: float = 0.0
+# 看板自动发布总闸（config/ds_monitor.toml 的 publish），默认关闭
+_publish_enabled: bool = False
+# 发布期间禁止并发触发：构建 + 导出 + 上传不能两路一起跑
+_publish_in_progress: bool = False
+# 发布进行中又攒下的待发布（新一轮有变化、或上一次没成功），本次结束后补一次
+_publish_pending: bool = False
+# 连续失败次数：连着失败到上限就停止自动重试，改由人工 /monitor deploy
+_publish_failures: int = 0
+_last_publish_at: float = 0.0
+_last_publish_ok: bool | None = None
+# 最近一轮（watch 的完成标记）的变化数与分析数，供 /monitor 与发布文案使用
+_last_cycle_changes: int = 0
+_last_cycle_analyzed: int = 0
 
 COMMAND_COOLDOWN_SECS = 60.0
 
@@ -113,10 +139,19 @@ COMMAND_COOLDOWN_SECS = 60.0
 SOURCE_BINARY_NAME = "ds-monitor.exe"
 # `cargo build --release` 的最长等待时间（秒）：冷编译可能几分钟
 BUILD_TIMEOUT_SECS = 900.0
+# 看板部署脚本（导出 site/ 并上传 Cloudflare Pages），在 web_craw 仓库根目录
+DEPLOY_SCRIPT_NAME = "deploy.ps1"
+# 一次发布（构建 + 导出 + 上传）的最长等待时间（秒）
+PUBLISH_TIMEOUT_SECS = 1800.0
+# 连着失败这么多次就停止自动重试，改成等人工 /monitor deploy
+PUBLISH_MAX_FAILURES = 3
 
 # ds-monitor 在检查阶段结束时输出的机器可读标记
 # 形如：=== 本轮检查结果 changes=0 notices=0 errors=0 chat=nochange ... ===
 CYCLE_RESULT_MARKER = "本轮检查结果"
+# ds-monitor 整轮（含分析、通知）结束时输出的标记，作为看板自动发布的触发信号
+# 形如：=== 本轮完成 changes=1 analyzed=1 ===
+CYCLE_DONE_MARKER = "本轮完成"
 # 等待本轮检查结果的最长时间（秒）：抓取 + 指纹探测通常远快于此
 CYCLE_WAIT_SECS = 300.0
 
@@ -191,14 +226,24 @@ def notify_error(msg: str, room_id: int | None = None) -> None:
         log(f"错误通知发送异常: {type(exc).__name__}")
 
 
+def _as_bool(value: Any) -> bool:
+    """把配置里可能是 bool 或字符串的值读成开关。"""
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def load_config() -> None:
     global _binary_path, _config_path, _check_interval, _target_configs
-    global _fingerprint_history_path, _status_config
+    global _fingerprint_history_path, _status_config, _publish_enabled
 
     cfg = PLUGIN_MANIFEST.config_unchecked("ds_monitor")
 
     raw_bin = cfg.get_value("binary")
     _binary_path = str(raw_bin) if raw_bin else ""
+
+    # 看板自动发布默认关闭：这是"对外发布"的动作，要人显式开闸
+    _publish_enabled = _as_bool(cfg.get_value("publish"))
 
     raw_cfg = cfg.get_value("config")
     cfg_str = str(raw_cfg) if raw_cfg else ""
@@ -557,6 +602,10 @@ def handle_output_line(line: str, generation: int) -> None:
         # 记录本轮检查结果；继续走下面的汇总逻辑，让 "===" 正常结束变更摘要
         record_cycle_result(payload, generation)
 
+    if payload.startswith("===") and CYCLE_DONE_MARKER in payload:
+        # 整轮（含分析、通知）结束：按本轮变化触发看板自动发布
+        record_cycle_done(payload)
+
     if target_key == "status" and handle_status_output_line(payload, now):
         return
 
@@ -709,6 +758,34 @@ def record_cycle_result(line: str, generation: int) -> None:
     _cycle_counts = counts
     _cycle_result_generation = generation
     _cycle_event.set()
+
+
+def _count_field(fields: dict[str, str], key: str) -> int:
+    raw = fields.get(key, "")
+    return int(raw) if raw.lstrip("-").isdigit() else 0
+
+
+def record_cycle_done(line: str) -> None:
+    """解析 `=== 本轮完成 changes=… analyzed=… ===`，并按本轮变化触发看板发布。
+
+    这一行由 ds-monitor 在整轮（含分析、通知）结束后打印，所以到这里时本轮的分析正文
+    与图片都已经落盘；一轮只有一行，多个目标同时变化也只发布一次。
+    """
+    global _last_cycle_changes, _last_cycle_analyzed
+
+    fields: dict[str, str] = {}
+    for token in line.split():
+        key, sep, value = token.partition("=")
+        if not sep or not key:
+            continue
+        fields[key] = value
+
+    changes = _count_field(fields, "changes")
+    _last_cycle_changes = changes
+    _last_cycle_analyzed = _count_field(fields, "analyzed")
+
+    if _publish_enabled:
+        maybe_publish(changes)
 
 
 def wait_cycle_result(generation: int, timeout: float) -> bool:
@@ -1251,6 +1328,8 @@ def on_ica_message(msg: "IcaNewMessage", client: "IcaClient") -> None:
         cmd_check(msg, client)
     elif content == "/monitor update":
         cmd_update(msg, client)
+    elif content == "/monitor deploy":
+        cmd_deploy(msg, client)
     elif content == "/monitor sp":
         cmd_status_page(msg, client)
     elif content == "/monitor fp":
@@ -1283,6 +1362,24 @@ def cmd_status(msg: "IcaNewMessage", client: "IcaClient") -> None:
         f"状态: {'✅ 运行中' if _enabled and _watch_process is not None and _watch_process.poll() is None else '⏸ 已暂停'}",
         f"检查间隔: {_check_interval}s",
     ]
+    if _publish_enabled:
+        if _publish_in_progress:
+            publish_state = "⏳ 正在发布"
+        elif _publish_pending:
+            publish_state = "🕓 待发布（下一轮补）"
+        elif _last_publish_ok is None:
+            publish_state = "等待本轮变化"
+        elif _last_publish_ok:
+            publish_state = "✅ 上次成功"
+        else:
+            publish_state = f"❌ 上次失败（连续 {_publish_failures} 次）"
+        publish_line = f"看板自动发布: {publish_state}"
+        if _last_publish_at:
+            at = datetime.fromtimestamp(_last_publish_at, timezone.utc)
+            publish_line += f" · {at.strftime('%Y-%m-%d %H:%M:%S')} UTC"
+        lines.append(publish_line)
+    else:
+        lines.append("看板自动发布: ⏸ 未开启（publish = false；/monitor deploy 可手动发布）")
     if _watch_process is not None and _watch_process.poll() is None:
         lines.append(f"watch pid: {_watch_process.pid}")
     if _cycle_statuses:
@@ -1375,6 +1472,243 @@ def cmd_check(msg: "IcaNewMessage", client: "IcaClient") -> None:
     threading.Thread(target=restart, daemon=True).start()
 
 
+# --- 看板自动发布 ---------------------------------------------------------
+
+
+def noticer_rooms(cfg: dict[str, Any]) -> list[str]:
+    """noticer 目标房间：主房间在前，再补 rooms 里的广播房间，去重且丢掉空白。
+
+    与 ds-monitor 的 `NoticerConfig::broadcast_rooms` 同一套语义，免得同类通知在两边
+    发到不同房间。
+    """
+    names: list[str] = []
+    primary = str(cfg.get("room") or "").strip()
+    if primary:
+        names.append(primary)
+    extra = cfg.get("rooms") or []
+    if isinstance(extra, str):
+        extra = [extra]
+    for item in extra:
+        name = str(item).strip()
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+def noticer_post(text: str) -> bool:
+    """把一条通知发到 [noticer] 的房间；失败只记日志，不抛异常。
+
+    Token 只进请求头，不写日志、不进正文。
+    """
+    cfg = load_rust_config().get("noticer") or {}
+    url = str(cfg.get("url") or "").strip()
+    rooms = noticer_rooms(cfg)
+    if not url or not rooms:
+        log("未配置 noticer 的房间或 URL，跳过发布通知")
+        return False
+
+    token = str(cfg.get("token") or "")
+    sent = False
+    for room in rooms:
+        headers = {"Content-Type": "application/json; charset=utf-8"}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        request = urllib.request.Request(
+            url,
+            data=json.dumps({"room": room, "message": text}).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                if 200 <= response.status < 300:
+                    sent = True
+                else:
+                    log(f"发布通知到 {room} 失败: HTTP {response.status}")
+        except Exception as exc:
+            log(f"发布通知到 {room} 失败: {type(exc).__name__}: {exc}")
+    return sent
+
+
+def site_stats(root: str) -> tuple[int, float]:
+    """site/ 的文件数与体积（MiB），用于发布回报。"""
+    count = 0
+    total = 0
+    for dirpath, _dirnames, filenames in os.walk(os.path.join(root, "site")):
+        for name in filenames:
+            try:
+                total += os.path.getsize(os.path.join(dirpath, name))
+            except OSError:
+                continue
+            count += 1
+    return count, total / (1024 * 1024)
+
+
+def publish_url(output: str) -> str:
+    """从 deploy.ps1 的输出里取生产域名（脚本最后一行会打印）。"""
+    marker = "生产域名："
+    index = output.rfind(marker)
+    if index < 0:
+        return ""
+    return output[index + len(marker) :].strip().split(" ")[0]
+
+
+def plan_publish(changes: int, pending: bool, in_progress: bool) -> str:
+    """发布判据，纯函数（便于本地直接验算）：skip / queue / publish 三选一。
+
+    - 正在发布时只登记待发布：构建 + 导出 + 上传不能两路一起跑；
+    - 上一次没成功（pending）时，即使本轮没有变化也要补一次，免得看板一直落后。
+    """
+    if not (changes > 0 or pending):
+        return "skip"
+    return "queue" if in_progress else "publish"
+
+
+def maybe_publish(changes: int) -> None:
+    """按本轮变化决定要不要发起一次发布。"""
+    global _publish_pending
+
+    action = plan_publish(changes, _publish_pending, _publish_in_progress)
+    if action == "skip":
+        return
+    if action == "queue":
+        _publish_pending = True
+        log(f"本轮有 {changes} 处变化，但发布已在进行中，登记为待发布")
+        return
+
+    _publish_pending = False
+    threading.Thread(target=publish_once, args=(True,), daemon=True).start()
+
+
+def publish_once(notify_room: bool) -> str:
+    """导出并部署一次看板（跑 web_craw/deploy.ps1），返回给用户看的结论。
+
+    构建、导出、上传都在脚本里完成，这里只负责跑它、判断结果、按需通知，以及把发布
+    期间又攒下的变化补一次。`notify_room` 为真时结论发到 noticer 房间（自动发布走这条
+    路）；手动 `/monitor deploy` 传假，由命令自己回复，免得同一条消息发两遍。
+    """
+    global _publish_in_progress, _publish_pending, _publish_failures
+    global _last_publish_at, _last_publish_ok
+
+    report = ""
+    follow_up = False
+
+    if _update_in_progress:
+        # 二进制正在被构建/替换，这时跑导出等于和 update 抢 target 目录
+        _publish_pending = True
+        return ds("正在更新监测二进制，看板发布挪到下一轮补上")
+
+    root = repo_root()
+    script = os.path.join(root, DEPLOY_SCRIPT_NAME)
+    if not os.path.isfile(script):
+        _last_publish_ok = False
+        report = ds(f"看板发布失败：找不到部署脚本 {script}")
+        if notify_room:
+            noticer_post(report)
+        return report
+
+    log(f"开始发布看板: {script}")
+    _publish_in_progress = True
+    started = time.monotonic()
+    ok = False
+    try:
+        try:
+            result = subprocess.run(
+                ["pwsh", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=PUBLISH_TIMEOUT_SECS,
+            )
+            output = (result.stdout or "") + (result.stderr or "")
+            ok = result.returncode == 0 and "Deployment complete!" in output
+            if ok:
+                count, size = site_stats(root)
+                url = publish_url(output)
+                scope = ""
+                if _last_cycle_changes:
+                    scope = (
+                        f"（最近一轮 {_last_cycle_changes} 处变化，"
+                        f"分析 {_last_cycle_analyzed} 份）"
+                    )
+                lines = [f"✅ 看板已更新{scope}"]
+                if url:
+                    lines.append(url)
+                lines.append(
+                    f"site/ 共 {count} 个文件、{size:.1f} MiB，"
+                    f"用时 {time.monotonic() - started:.0f}s"
+                )
+                report = ds("\n".join(lines))
+            else:
+                tail = output.strip()[-500:]
+                report = ds(f"❌ 看板发布失败（exit {result.returncode}）:\n{tail}")
+        except subprocess.TimeoutExpired:
+            report = ds(f"❌ 看板发布超时（{int(PUBLISH_TIMEOUT_SECS)}s），本次放弃")
+        except Exception as exc:
+            report = ds(f"❌ 看板发布失败: {type(exc).__name__}: {exc}")
+    finally:
+        _publish_in_progress = False
+        _last_publish_at = time.monotonic()
+        _last_publish_ok = ok
+
+        if ok:
+            _publish_failures = 0
+            # 发布期间又攒下的变化：刚跑完，紧接着补一次
+            follow_up = _publish_pending
+            _publish_pending = False
+        else:
+            _publish_failures += 1
+            if _publish_failures >= PUBLISH_MAX_FAILURES:
+                _publish_pending = False
+                report += (
+                    f"\n（已连续失败 {_publish_failures} 次，暂停自动重试；"
+                    "修好后用 /monitor deploy 手动发布）"
+                )
+            else:
+                _publish_pending = True
+
+        if notify_room:
+            noticer_post(report)
+
+    if follow_up:
+        threading.Thread(target=publish_once, args=(True,), daemon=True).start()
+    return report
+
+
+def cmd_deploy(msg: "IcaNewMessage", client: "IcaClient") -> None:
+    """`/monitor deploy`：立刻导出并部署一次看板（管理员 + 冷却）。
+
+    自动发布没开、或自动发布失败要救急时用它；导出与部署都在 deploy.ps1 里完成，
+    结果直接回在这条命令下。
+    """
+    global _last_publish_cmd_at
+
+    if not is_admin(msg, client):
+        client.send_message(msg.reply_with(ds("只有管理员才能手动发布看板")))
+        return
+
+    if _publish_in_progress:
+        client.send_message(msg.reply_with(ds("已有一次发布在进行中，等它跑完再用")))
+        return
+
+    if cooling_down(_last_publish_cmd_at):
+        remain = int(COMMAND_COOLDOWN_SECS - (time.monotonic() - _last_publish_cmd_at)) + 1
+        client.send_message(msg.reply_with(ds(f"命令冷却中，请 {remain} 秒后再试")))
+        return
+
+    _last_publish_cmd_at = time.monotonic()
+    client.send_message(
+        msg.reply_with(ds("正在导出并部署看板（构建 + 导出 + 上传，通常 1-3 分钟）"))
+    )
+
+    def deploy() -> None:
+        client.send_message(msg.reply_with(publish_once(False)))
+
+    threading.Thread(target=deploy, daemon=True).start()
+
+
 def cmd_update(msg: "IcaNewMessage", client: "IcaClient") -> None:
     """`/monitor update`：构建 release、刷新运行副本、重启 watch。
 
@@ -1390,6 +1724,13 @@ def cmd_update(msg: "IcaNewMessage", client: "IcaClient") -> None:
 
     if _update_in_progress:
         client.send_message(msg.reply_with(ds("已有一次更新在进行中，请稍候")))
+        return
+
+    if _publish_in_progress:
+        # 发布正在跑 deploy.ps1（内含 cargo build --release），这时换二进制会互相抢锁
+        client.send_message(
+            msg.reply_with(ds("正在发布看板，等它跑完再更新（/monitor 可看状态）"))
+        )
         return
 
     if cooling_down(_last_update_cmd_at):
@@ -1664,6 +2005,7 @@ def cmd_help(msg: "IcaNewMessage", client: "IcaClient") -> None:
             "/monitor check   - 重启 watch 并立即检查，回报本轮结果（无变化则回“无事发生”）\n"
             "/monitor sp      - 现场查询服务状态页（故障/恢复事件，不发通知）\n"
             "/monitor update  - 管理员构建 release、刷新运行副本并重启 watch\n"
+            "/monitor deploy  - 管理员立即导出并部署看板（Cloudflare Pages）\n"
             "/monitor last    - 汇总 Chat、Platform、API Docs 最近修改\n"
             "/monitor last <chat|platform|docs> - 查看指定目标最近修改\n"
             "/monitor fp      - 查看最近 5 次指纹历史" + chr(10) + "/monitor fp <N>  - 查看最近 N 次指纹历史（1-20）" + chr(10) +
