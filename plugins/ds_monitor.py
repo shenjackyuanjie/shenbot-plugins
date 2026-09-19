@@ -12,7 +12,7 @@ watch 里还多了 `status` 目标：盯 DeepSeek 服务状态页（status.deeps
 `/monitor sp` 用一次只跑 status 的 `check` 现场查询状态页（不发通知，不影响 watch）。
 
 整轮（含分析、通知）结束时 watch 还会输出 `=== 本轮完成 changes=… analyzed=… ===`
-（ds-monitor 0.5.0 起）。这一行排在分析之后，代表本轮的分析正文与图片都已落盘；
+（ds-monitor 0.4.1 起）。这一行排在分析之后，代表本轮的分析正文与图片都已落盘；
 `publish = true` 时插件用它触发看板自动发布：跑 `deploy.ps1` 导出并部署 site/，
 成功与失败都通过 noticer 通知到房间。一轮只会出现一次这个标记，所以一轮里多个目标
 同时变化也只发布一次；发布期间又攒下的变化，会在这次发布结束后补一次。
