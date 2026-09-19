@@ -11,7 +11,7 @@ watch 里还多了 `status` 目标：盯 DeepSeek 服务状态页（status.deeps
 （ds-monitor 0.2.8 起输出），再回报各目标状态；本轮没有变化时回报“无事发生”。
 `/monitor sp` 用一次只跑 status 的 `check` 现场查询状态页（不发通知，不影响 watch）。
 
-整轮（含分析、通知）结束时 watch 还会输出 `=== 本轮完成 changes=… analyzed=… ===`
+整轮（含分析、通知）结束时 watch 还会输出 `=== 本轮完成 changes=… fingerprint=… analyzed=… ===`
 （ds-monitor 0.4.1 起）。这一行排在分析之后，代表本轮的分析正文与图片都已落盘；
 `publish = true` 时插件用它触发看板自动发布：跑 `deploy.ps1` 导出并部署 site/，
 成功与失败都通过 noticer 通知到房间。一轮只会出现一次这个标记，所以一轮里多个目标
@@ -63,7 +63,7 @@ ANALYZE_MODEL = "V41F"
 PLUGIN_MANIFEST = PluginManifest(
     plugin_id="ds_monitor",
     name="DeepSeek 网页更新监测",
-    version="0.5.0",
+    version="0.5.1",
     description=(
         f"定期检查 DeepSeek Chat、Platform 和 API Docs 变更，DeepSeek {ANALYZE_MODEL} 分析后推送通知；"
         "同时盯服务状态页的故障 / 恢复事件"
@@ -129,7 +129,7 @@ _publish_pending: bool = False
 _publish_failures: int = 0
 _last_publish_at: float = 0.0
 _last_publish_ok: bool | None = None
-# 最近一轮（watch 的完成标记）的变化数与分析数，供 /monitor 与发布文案使用
+# 最近一轮（watch 的完成标记）"看板内容变化数"（网页/文档 + 指纹）与分析数，供 /monitor 与发布文案用
 _last_cycle_changes: int = 0
 _last_cycle_analyzed: int = 0
 
@@ -150,7 +150,7 @@ PUBLISH_MAX_FAILURES = 3
 # 形如：=== 本轮检查结果 changes=0 notices=0 errors=0 chat=nochange ... ===
 CYCLE_RESULT_MARKER = "本轮检查结果"
 # ds-monitor 整轮（含分析、通知）结束时输出的标记，作为看板自动发布的触发信号
-# 形如：=== 本轮完成 changes=1 analyzed=1 ===
+# 形如：=== 本轮完成 changes=1 fingerprint=0 analyzed=1 ===
 CYCLE_DONE_MARKER = "本轮完成"
 # 等待本轮检查结果的最长时间（秒）：抓取 + 指纹探测通常远快于此
 CYCLE_WAIT_SECS = 300.0
@@ -766,10 +766,13 @@ def _count_field(fields: dict[str, str], key: str) -> int:
 
 
 def record_cycle_done(line: str) -> None:
-    """解析 `=== 本轮完成 changes=… analyzed=… ===`，并按本轮变化触发看板发布。
+    """解析 `=== 本轮完成 changes=… fingerprint=… analyzed=… ===`，并按本轮变化触发看板发布。
 
     这一行由 ds-monitor 在整轮（含分析、通知）结束后打印，所以到这里时本轮的分析正文
     与图片都已经落盘；一轮只有一行，多个目标同时变化也只发布一次。
+
+    判据是"看板内容变了多少"：网页/文档变化（`changes`）加指纹变化（`fingerprint`）。
+    看板的 Fingerprints 页展示指纹历史，所以只有指纹变化时同样要重新导出。
     """
     global _last_cycle_changes, _last_cycle_analyzed
 
@@ -780,7 +783,7 @@ def record_cycle_done(line: str) -> None:
             continue
         fields[key] = value
 
-    changes = _count_field(fields, "changes")
+    changes = _count_field(fields, "changes") + _count_field(fields, "fingerprint")
     _last_cycle_changes = changes
     _last_cycle_analyzed = _count_field(fields, "analyzed")
 
