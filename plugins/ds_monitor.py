@@ -63,7 +63,7 @@ ANALYZE_MODEL = "V41F"
 PLUGIN_MANIFEST = PluginManifest(
     plugin_id="ds_monitor",
     name="DeepSeek 网页更新监测",
-    version="0.5.1",
+    version="0.5.2",
     description=(
         f"定期检查 DeepSeek Chat、Platform 和 API Docs 变更，DeepSeek {ANALYZE_MODEL} 分析后推送通知；"
         "同时盯服务状态页的故障 / 恢复事件"
@@ -1932,10 +1932,6 @@ def cmd_render_last(
             client.send_message(msg.reply_with(ds(f"未知或未启用监测目标: {target_key}（可选 chat、platform、docs）")))
             return
 
-    if not is_admin(msg, client):
-        client.send_message(msg.reply_with("只有管理员才能触发最近分析的主题图片渲染"))
-        return
-
     if cooling_down(_last_render_cmd_at):
         return
 
@@ -1964,13 +1960,18 @@ def cmd_render_last(
 def cmd_enable(msg: "IcaNewMessage", client: "IcaClient", on: bool) -> None:
     """`/monitor on|off`。
 
+    `off` 只有管理员能做：停掉监测会让所有人收不到推送。`on` 谁都可以（发现监测停了，
+    顺手开回来是好事；已经在跑时只回一句状态，不重启——重启会打断正在跑的那一轮）。
+
     开启时和 `/monitor check` 一样回报本轮检查结果：watch 一起来就会跑一轮，等它的
-    `=== 本轮检查结果 ... ===` 比让用户再发一次 check 省事。已在运行时只报状态，
-    不重复启动（重复 on 拿不到新的代次，等结果会一直等到下一轮 interval）。
+    `=== 本轮检查结果 ... ===` 比让用户再发一次 check 省事。
     """
     global _enabled
 
     if not on:
+        if not is_admin(msg, client):
+            client.send_message(msg.reply_with(ds("只有管理员才能暂停监测")))
+            return
         _enabled = False
         stop_watch()
         client.send_message(msg.reply_with(ds("监测已暂停")))
@@ -2012,9 +2013,9 @@ def cmd_help(msg: "IcaNewMessage", client: "IcaClient") -> None:
             "/monitor last    - 汇总 Chat、Platform、API Docs 最近修改\n"
             "/monitor last <chat|platform|docs> - 查看指定目标最近修改\n"
             "/monitor fp      - 查看最近 5 次指纹历史" + chr(10) + "/monitor fp <N>  - 查看最近 N 次指纹历史（1-20）" + chr(10) +
-            "/monitor render last [chat|platform|docs] - 管理员发送最近分析四种主题图片\n"
+            "/monitor render last [chat|platform|docs] - 发送最近分析四种主题图片\n"
             "/monitor analyze last <chat|platform|docs> - 管理员重新分析指定目标（无限时长）\n"
-            "/monitor on/off  - 开关（on 开启后会回报本轮检查结果）\n"
+            "/monitor on/off  - 开关（on 谁都可以，会回报本轮检查结果；off 需管理员）\n"
             "/monitor help    - 帮助"
         )
     )
