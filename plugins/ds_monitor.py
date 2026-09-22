@@ -157,6 +157,7 @@ CYCLE_WAIT_SECS = 300.0
 
 CYCLE_TARGET_LABELS = {
     "chat": "Chat",
+    "harness": "Harness",
     "platform": "Platform",
     "docs": "API Docs",
     "fingerprint": "系统指纹",
@@ -172,7 +173,7 @@ CYCLE_STATUS_LABELS = {
 }
 # 检查失败时要写进 headline 的目标：状态页失败意味着"看不见服务状态"，不能只报无事发生。
 # 指纹刻意不算在内：没配 API key 时它每轮都会失败，不该污染"无事发生"。
-CYCLE_ERROR_KEYS = ("chat", "platform", "docs", "status")
+CYCLE_ERROR_KEYS = ("chat", "harness", "platform", "docs", "status")
 
 _cycle_event = threading.Event()
 _cycle_result_generation: int = -1
@@ -304,11 +305,18 @@ def load_rust_config() -> dict[str, Any]:
 
 
 def load_target_configs() -> dict[str, MonitorTarget]:
-    """读取 ds-monitor 的三类监测目标，缺省值与 Rust 配置保持一致。"""
+    """读取 ds-monitor 的四类监测目标，缺省值与 Rust 配置保持一致。"""
     raw = load_rust_config()
 
     sections = {
         "chat": ("Chat", raw.get("target", {}), True, "https://chat.deepseek.com/", "output/chat"),
+        "harness": (
+            "Harness",
+            raw.get("harness", {}),
+            True,
+            "https://www.deepseek.com/harness/",
+            "output/harness",
+        ),
         "platform": (
             "Platform",
             raw.get("platform", {}),
@@ -526,6 +534,7 @@ def run_last_render(target: str | None, room_id: int | None = None) -> str:
 STATUS_ONLY_FLAGS = (
     "--no-chat",
     "--no-official",
+    "--no-harness",
     "--no-platform",
     "--no-docs",
     "--no-fingerprint",
@@ -1066,7 +1075,7 @@ def latest_change_report(target_key: str | None = None) -> str:
     if target_key is not None:
         target = targets.get(target_key)
         if target is None:
-            return ds(f"未知监测目标: {target_key}（可选 chat、platform、docs）")
+            return ds(f"未知监测目标: {target_key}（可选 chat、harness、platform、docs）")
         if not target.enabled:
             return ds(f"{target.label} 监测未启用")
         reports = [
@@ -1076,7 +1085,7 @@ def latest_change_report(target_key: str | None = None) -> str:
         ]
     else:
         reports = []
-        for key in ("chat", "platform", "docs"):
+        for key in ("chat", "harness", "platform", "docs"):
             target = targets.get(key)
             if target is not None and target.enabled:
                 reports.append(
@@ -1393,7 +1402,7 @@ def cmd_status(msg: "IcaNewMessage", client: "IcaClient") -> None:
         if failed:
             last_cycle += f"（失败 {failed} 项）"
         lines.append(last_cycle)
-    for key in ("chat", "platform", "docs"):
+    for key in ("chat", "harness", "platform", "docs"):
         target = _target_configs.get(key)
         if target is None:
             continue
@@ -1879,7 +1888,7 @@ def cmd_last_analyze(
 
     target = _target_configs.get(target_key)
     if target is None or not target.enabled:
-        client.send_message(msg.reply_with(ds(f"未知或未启用监测目标: {target_key}（可选 chat、platform、docs）")))
+        client.send_message(msg.reply_with(ds(f"未知或未启用监测目标: {target_key}（可选 chat、harness、platform、docs）")))
         return
 
     report = latest_change_report(target_key)
@@ -1929,7 +1938,7 @@ def cmd_render_last(
     if target_key is not None:
         target = _target_configs.get(target_key)
         if target is None or not target.enabled:
-            client.send_message(msg.reply_with(ds(f"未知或未启用监测目标: {target_key}（可选 chat、platform、docs）")))
+            client.send_message(msg.reply_with(ds(f"未知或未启用监测目标: {target_key}（可选 chat、harness、platform、docs）")))
             return
 
     if cooling_down(_last_render_cmd_at):
@@ -2010,11 +2019,11 @@ def cmd_help(msg: "IcaNewMessage", client: "IcaClient") -> None:
             "/monitor sp      - 现场查询服务状态页（故障/恢复事件，不发通知）\n"
             "/monitor update  - 管理员构建 release、刷新运行副本并重启 watch\n"
             "/monitor deploy  - 管理员立即导出并部署看板（Cloudflare Pages）\n"
-            "/monitor last    - 汇总 Chat、Platform、API Docs 最近修改\n"
-            "/monitor last <chat|platform|docs> - 查看指定目标最近修改\n"
+            "/monitor last    - 汇总 Chat、Harness、Platform、API Docs 最近修改\n"
+            "/monitor last <chat|harness|platform|docs> - 查看指定目标最近修改\n"
             "/monitor fp      - 查看最近 5 次指纹历史" + chr(10) + "/monitor fp <N>  - 查看最近 N 次指纹历史（1-20）" + chr(10) +
-            "/monitor render last [chat|platform|docs] - 发送最近分析四种主题图片\n"
-            "/monitor analyze last <chat|platform|docs> - 管理员重新分析指定目标（无限时长）\n"
+            "/monitor render last [chat|harness|platform|docs] - 发送最近分析四种主题图片\n"
+            "/monitor analyze last <chat|harness|platform|docs> - 管理员重新分析指定目标（无限时长）\n"
             "/monitor on/off  - 开关（on 谁都可以，会回报本轮检查结果；off 需管理员）\n"
             "/monitor help    - 帮助"
         )
