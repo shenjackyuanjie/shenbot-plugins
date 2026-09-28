@@ -16,7 +16,7 @@ watch 里还多了 `status` 目标：盯 DeepSeek 服务状态页（status.deeps
 `publish = true` 时插件用它触发看板自动发布：跑 `deploy.ps1` 导出并部署 site/，
 成功与失败都通过 noticer 通知到房间。一轮只会出现一次这个标记，所以一轮里多个目标
 同时变化也只发布一次；发布期间又攒下的变化，会在这次发布结束后补一次。
-`/monitor deploy` 可以手动发布一次（管理员）。
+`/monitor deploy` 可以手动发布一次（管理员）；有新增归档记录时回复对应深链接，否则回复主站。
 
 配置 (config/ds_monitor.toml):
 
@@ -48,9 +48,10 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
+from urllib.parse import quote
 
 if TYPE_CHECKING:
     from ica_typing import IcaNewMessage, IcaClient
@@ -63,7 +64,7 @@ ANALYZE_MODEL = "V41F"
 PLUGIN_MANIFEST = PluginManifest(
     plugin_id="ds_monitor",
     name="DeepSeek 网页更新监测",
-    version="0.5.2",
+    version="0.5.3",
     description=(
         f"定期检查 DeepSeek Chat、Platform 和 API Docs 变更，DeepSeek {ANALYZE_MODEL} 分析后推送通知；"
         "同时盯服务状态页的故障 / 恢复事件"
@@ -141,6 +142,8 @@ SOURCE_BINARY_NAME = "ds-monitor.exe"
 BUILD_TIMEOUT_SECS = 900.0
 # 看板部署脚本（导出 site/ 并上传 Cloudflare Pages），在 web_craw 仓库根目录
 DEPLOY_SCRIPT_NAME = "deploy.ps1"
+# Archive 的公开入口；具体记录使用前端支持的目录 + hash 深链接。
+ARCHIVE_SITE_URL = "https://deepseek-monitor-archive.pages.dev"
 # 一次发布（构建 + 导出 + 上传）的最长等待时间（秒）
 PUBLISH_TIMEOUT_SECS = 1800.0
 # 连着失败这么多次就停止自动重试，改成等人工 /monitor deploy
@@ -1565,6 +1568,56 @@ def publish_url(output: str) -> str:
     return output[index + len(marker) :].strip().split(" ")[0]
 
 
+def archive_entries(root: str) -> list[tuple[str, str]] | None:
+    """读取当前公开索引中的记录标识；索引不存在或损坏时返回 None。
+
+    返回顺序沿用导出器顺序。部署前后都成功读取时才能判定新增记录，避免首次部署把全部
+    历史条目误报成新页面。
+    """
+    path = os.path.join(root, "site", "data", "site.json")
+    try:
+        with open(path, encoding="utf-8") as file:
+            data = json.load(file)
+    except (OSError, ValueError, TypeError):
+        return None
+
+    entries: list[tuple[str, str]] = []
+    targets = data.get("targets")
+    if isinstance(targets, dict):
+        for target, items in targets.items():
+            if not isinstance(target, str) or not isinstance(items, list):
+                continue
+            for item in items:
+                entry_id = item.get("id") if isinstance(item, dict) else None
+                if isinstance(entry_id, str) and entry_id:
+                    entries.append((target, entry_id))
+
+    fingerprints = data.get("fingerprints")
+    if isinstance(fingerprints, list):
+        for item in fingerprints:
+            entry_id = item.get("checked_at") if isinstance(item, dict) else None
+            if isinstance(entry_id, str) and entry_id:
+                entries.append(("fingerprints", entry_id))
+    return entries
+
+
+def new_archive_urls(
+    before: list[tuple[str, str]] | None,
+    after: list[tuple[str, str]] | None,
+    base_url: str,
+) -> list[str]:
+    """生成部署中新出现记录的公开深链接；无法可靠比较时不返回链接。"""
+    if before is None or after is None:
+        return []
+    old = set(before)
+    root = base_url.rstrip("/")
+    return [
+        f"{root}/{quote(target, safe='')}/#/{quote(target, safe='')}/{quote(entry_id, safe='')}"
+        for target, entry_id in after
+        if (target, entry_id) not in old
+    ]
+
+
 def plan_publish(changes: int, pending: bool, in_progress: bool) -> str:
     """发布判据，纯函数（便于本地直接验算）：skip / queue / publish 三选一。
 
@@ -1620,6 +1673,7 @@ def publish_once(notify_room: bool) -> str:
         return report
 
     log(f"开始发布看板: {script}")
+    entries_before = archive_entries(root)
     _publish_in_progress = True
     started = time.monotonic()
     ok = False
@@ -1638,7 +1692,8 @@ def publish_once(notify_room: bool) -> str:
             ok = result.returncode == 0 and "Deployment complete!" in output
             if ok:
                 count, size = site_stats(root)
-                url = publish_url(output)
+                url = publish_url(output) or ARCHIVE_SITE_URL
+                fresh_urls = new_archive_urls(entries_before, archive_entries(root), url)
                 scope = ""
                 if _last_cycle_changes:
                     scope = (
@@ -1646,7 +1701,10 @@ def publish_once(notify_room: bool) -> str:
                         f"分析 {_last_cycle_analyzed} 份）"
                     )
                 lines = [f"✅ 看板已更新{scope}"]
-                if url:
+                if fresh_urls:
+                    lines.append("新页面：")
+                    lines.extend(fresh_urls)
+                else:
                     lines.append(url)
                 lines.append(
                     f"site/ 共 {count} 个文件、{size:.1f} MiB，"
