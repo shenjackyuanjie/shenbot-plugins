@@ -66,7 +66,7 @@ PLUGIN_MANIFEST = PluginManifest(
     name="DeepSeek 网页更新监测",
     version="0.5.4",
     description=(
-        f"定期检查 DeepSeek Chat、Platform 和 API Docs 变更，DeepSeek {ANALYZE_MODEL} 分析后推送通知；"
+        f"定期检查 DeepSeek Chat、官网、Harness、Platform 和 API Docs 变更，DeepSeek {ANALYZE_MODEL} 分析后推送通知；"
         "同时盯服务状态页的故障 / 恢复事件"
     ),
     authors=["shenjack"],
@@ -2090,7 +2090,7 @@ def cmd_help(msg: "IcaNewMessage", client: "IcaClient") -> None:
             "/monitor sp      - 现场查询服务状态页（故障/恢复事件，不发通知）\n"
             "/monitor update  - 管理员构建 release、刷新运行副本并重启 watch\n"
             "/monitor deploy  - 管理员立即导出并部署看板（Cloudflare Pages）\n"
-            "/monitor last    - 汇总 Chat、Harness、Platform、API Docs 最近修改\n"
+            "/monitor last    - 汇总 Chat、官网、Harness、Platform、API Docs 最近修改\n"
             f"/monitor last <{TARGET_HELP}> - 查看指定目标最近修改\n"
             "/monitor fp      - 查看最近 5 次指纹历史" + chr(10) + "/monitor fp <N>  - 查看最近 N 次指纹历史（1-20）" + chr(10) +
             f"/monitor render last [{TARGET_HELP}] - 发送最近分析四种主题图片\n"
