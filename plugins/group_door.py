@@ -349,6 +349,8 @@ def on_ica_join_request(event: IcaJoinRequest, client: IcaClient) -> None:
         return
     if event.sub_type != "add":
         return
+    if event.group_id is None:
+        return
 
     receive_room_id = normalize_group_room_id(event.group_id)
     send_room_ids = REQUEST_FORWARDS.get(receive_room_id, [])

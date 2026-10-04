@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 __version__: str = "0.9.3"
 _version_: str = __version__
 
-_ica_version_: str = "2.0.4"
+_ica_version_: str = "2.0.5"
 _tailchat_version_: str = "2.0.0"
 
 

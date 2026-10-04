@@ -202,6 +202,14 @@ class IcaSendMessage:
     def add_img(self, file: bytes, file_type: str):
         """追加一张图片/媒体；多次调用可构造多图消息。"""
 
+    def set_audio(self, file: bytes, file_type: str) -> None:
+        """替换为语音媒体并关闭贴纸标记；MIME 必须为 audio/*，转码由 Bridge 处理。"""
+        ...
+
+    def set_audio_fid(self, fid: str, file_type: str) -> None:
+        """复用协议侧语音资源，不重新上传或编码；失败时抛出 RuntimeError。"""
+        ...
+
     def remove_reply(self) -> IcaSendMessage:
         """删除回复"""
         ...
@@ -293,6 +301,20 @@ class IcaClient:
     """
     Icalingua 的客户端
     """
+
+    def report_read(self, message_id: IcaType.MessageId) -> None:
+        """主动上报 QQ 已读，不清除 Bridge 会话未读数；失败时抛出 RuntimeError。"""
+        ...
+
+    def handle_request(
+        self, request_type: str, flag: str, accept: bool = True
+    ) -> None:
+        """处理 friend/group 申请；成功仅表示请求已发送，不代表 QQ 已执行。"""
+        ...
+
+    def get_nt_pic_url_by_file_id(self, file_id: str, app_id: str = "") -> str:
+        """请求 QQ NT 图片新地址；12 秒 ACK 超时或无效地址会抛出 RuntimeError。"""
+        ...
 
     def send_room_sign_in(self, room_id: IcaType.RoomId) -> bool:
         """向某个群发送签到
@@ -425,7 +447,7 @@ class IcaClient:
 
 class IcaJoinRequest:
     """
-    Icalingua 接收到入群请求
+    Icalingua 接收到好友申请、入群申请或群邀请；统一使用 on_ica_join_request hook。
     """
 
     @property
@@ -434,8 +456,8 @@ class IcaJoinRequest:
         ...
 
     @property
-    def group_id(self) -> IcaType.RoomId:
-        """群号"""
+    def group_id(self) -> IcaType.RoomId | None:
+        """正群号；好友申请或缺失群号时为 None，使用前先判断 request_type。"""
         ...
 
     @property
@@ -482,6 +504,18 @@ class IcaJoinRequest:
     def flag(self) -> str:
         """用于处理请求的 flag"""
         ...
+
+    @property
+    def source(self) -> str:
+        """申请来源，缺失时为空字符串。"""
+        ...
+
+    @property
+    def self_id(self) -> IcaType.UserId | None: ...
+    @property
+    def age(self) -> int | None: ...
+    @property
+    def sex(self) -> str | None: ...
 
 
 class TailchatReciveMessage:
