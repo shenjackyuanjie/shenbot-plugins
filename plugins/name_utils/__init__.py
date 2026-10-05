@@ -183,7 +183,7 @@ class Player:
             )
         return True
 
-    def display(self) -> str:
+    def display(self, sort_skills: bool = True) -> str:
         cache = io.StringIO()
         cache.write(f"{self.name}@{self.team}|")
         full = sum(self.name_prop[0:7]) + round(self.name_prop[7] / 3)
@@ -194,15 +194,16 @@ class Player:
             )
         )
         cache.write("\n")
+        skill_slots = (
+            sorted(enumerate(self.skl_freq), key=lambda x: x[1], reverse=True)
+            if sort_skills
+            else enumerate(self.skl_freq[:16])
+        )
         cache.write(
             "|".join(
-                [
-                    f"{sklname[self.skl_id[index]]}:{self.skl_freq[index]}"
-                    for index, value in sorted(
-                        enumerate(self.skl_freq), key=lambda x: x[1], reverse=True
-                    )
-                    if value > 0
-                ]
+                f"{sklname[self.skl_id[index]]}:{self.skl_freq[index]}"
+                for index, value in skill_slots
+                if value > 0
             )
         )
         return cache.getvalue()
