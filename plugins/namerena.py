@@ -819,7 +819,12 @@ def cmd_pair_rating(
     _, teammate_name, head = PAIR_COMMANDS[command]
     teammate_file = _find_tswn_teammate_file(teammate_name)
     if teammate_file is None:
-        client.send_message(msg.reply_with(f"找不到队友评文件: {teammate_name}"))
+        client.send_message(
+            msg.reply_with(
+                f"找不到队友评文件: {teammate_name}\n"
+                "请在 namer 配置里把 tswn_assets_path 指到 tswn-openbox 的资产目录"
+            )
+        )
         return
 
     def calculate() -> None:
