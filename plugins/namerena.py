@@ -65,10 +65,10 @@ PAIR_COMMANDS = {
     f"{CMD_PREFIX}-fsp": ("人海评", "teammate_pj.toml", 4),
 }
 CONVERT_CMD = f"{CMD_PREFIX}-peek"
-CONVERT_RAW_CMD = f"{CMD_PREFIX}_peeks"
+CONVERT_RAW_CMD = f"{CMD_PREFIX}-peeks"
 BASE_CMD = f"{CMD_PREFIX}-base"
 TEAM_CMD = f"{CMD_PREFIX}-team"
-TEAM_RAW_CMD = f"{CMD_PREFIX}_teams"
+TEAM_RAW_CMD = f"{CMD_PREFIX}-teams"
 FIGHT_CMD = f"{CMD_PREFIX}-fight"
 HELP_CMD = f"{CMD_PREFIX}-help"
 
@@ -1465,14 +1465,15 @@ def dispatch_msg(msg: ReciveMessage, client: IcaClient | TailchatClient) -> None
     elif next((command for command in PAIR_COMMANDS if msg.content.startswith(command)), None) is not None:
         command = next(command for command in PAIR_COMMANDS if msg.content.startswith(command))
         cmd_pair_rating(msg, client, command)
+    elif msg.content.startswith(CONVERT_RAW_CMD):
+        # 长命令放前面，避免被 /namer-peek 的前缀匹配抢走
+        convert_name(msg, client, sort_skills=False)
     elif msg.content.startswith(CONVERT_CMD):
         convert_name(msg, client)
-    elif msg.content.startswith(CONVERT_RAW_CMD):
-        convert_name(msg, client, sort_skills=False)
-    elif msg.content.startswith(TEAM_CMD):
-        convert_team(msg, client)
     elif msg.content.startswith(TEAM_RAW_CMD):
         convert_team(msg, client, sort_skills=False)
+    elif msg.content.startswith(TEAM_CMD):
+        convert_team(msg, client)
     elif msg.content.startswith(BASE_CMD):
         convert_base(msg, client)
     elif msg.content.startswith(EVAL_PP_CMD):
@@ -1487,8 +1488,8 @@ def dispatch_msg(msg: ReciveMessage, client: IcaClient | TailchatClient) -> None
         score_all(msg, client)
     elif msg.content.startswith(EVAL_SIMPLE_CMD):
         # 放在最后, 避免覆盖 前面的命令
-        # 同时过滤掉别的 /namer-xxxxx
-        if not msg.content.startswith(f"{EVAL_SIMPLE_CMD}-"):
+        # 同时过滤掉别的 /namer-xxxxx / /namer_xxxxx
+        if not msg.content.startswith(f"{EVAL_SIMPLE_CMD}-") and not msg.content.startswith(f"{EVAL_SIMPLE_CMD}_"):
             eval_fight(msg, client)
 
 

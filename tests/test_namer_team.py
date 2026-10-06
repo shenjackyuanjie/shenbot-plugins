@@ -48,11 +48,11 @@ class NamerTeamTests(unittest.TestCase):
         player = namerena.name_utils.Player()
         self.assertTrue(player.load(FIRST))
         self.assertEqual(
-            run_command(f"/namer_peeks\n{FIRST}"),
+            run_command(f"/namer-peeks\n{FIRST}"),
             player.display(sort_skills=False) + f"\n版本:{namerena.VERSION}",
         )
 
-        team_output = run_command(f"/namer_teams\n{FIRST}\n{SECOND}")
+        team_output = run_command(f"/namer-teams\n{FIRST}\n{SECOND}")
         self.assertLess(team_output.index("魅惑:4"), team_output.index("伤害反弹:10"))
 
     def test_different_teams_receive_no_bonus(self):
@@ -99,6 +99,63 @@ class NamerTeamTests(unittest.TestCase):
     def test_pair_rating_command_mapping(self):
         self.assertEqual(namerena.PAIR_COMMANDS["/namer-cp"], ("刺评", "teammate_fz.toml", 4))
         self.assertEqual(namerena.PAIR_COMMANDS["/namer-fsp"], ("人海评", "teammate_pj.toml", 4))
+
+    def test_new_commands_use_hyphen_separator(self):
+        for command in (
+            namerena.CQP_CMD,
+            namerena.CONVERT_CMD,
+            namerena.CONVERT_RAW_CMD,
+            namerena.BASE_CMD,
+            namerena.TEAM_CMD,
+            namerena.TEAM_RAW_CMD,
+        ):
+            with self.subTest(command=command):
+                self.assertTrue(command.startswith(f"{namerena.CMD_PREFIX}-"))
+                self.assertNotIn("_", command[len(namerena.CMD_PREFIX) :])
+
+    def test_raw_and_sorted_commands_route_separately(self):
+        routed = {}
+
+        def make(name):
+            def handler(msg, client, *args, **kwargs):
+                routed[name] = kwargs.get("sort_skills", True)
+                client.send_message("out")
+
+            return handler
+
+        msg = Mock(content="", is_reply=False, is_from_self=False)
+        msg.reply_with.side_effect = lambda text: text
+        client = Mock()
+        with patch.object(namerena, "convert_name", make("convert_name")), patch.object(
+            namerena, "convert_team", make("convert_team")
+        ):
+            for content, expected in (
+                (f"{namerena.CONVERT_CMD}\nname", ("convert_name", True)),
+                (f"{namerena.CONVERT_RAW_CMD}\nname", ("convert_name", False)),
+                (f"{namerena.TEAM_CMD}\nname", ("convert_team", True)),
+                (f"{namerena.TEAM_RAW_CMD}\nname", ("convert_team", False)),
+            ):
+                with self.subTest(content=content):
+                    routed.clear()
+                    msg.content = content
+                    namerena.dispatch_msg(msg, client)
+                    self.assertEqual(
+                        routed,
+                        {expected[0]: expected[1]},
+                        f"{content} 应路由到 {expected[0]}",
+                    )
+
+    def test_underscore_typo_is_not_treated_as_eval(self):
+        called = []
+        msg = Mock(content="", is_reply=False, is_from_self=False)
+        msg.reply_with.side_effect = lambda text: text
+        client = Mock()
+        with patch.object(namerena, "eval_fight", side_effect=lambda *a: called.append(1)):
+            for content in ("/namer_peak", "/namer_team", "/namer_peeks", "/namer_teams"):
+                with self.subTest(content=content):
+                    msg.content = content
+                    namerena.dispatch_msg(msg, client)
+        self.assertEqual(called, [], "下划线输入不应落入简化求值")
 
 
 
