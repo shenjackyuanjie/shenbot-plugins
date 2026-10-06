@@ -9,7 +9,7 @@ import traceback
 import subprocess
 
 from pathlib import Path
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING
 from shenbot_api import PluginManifest, ConfigStorage
 
 if str(Path(__file__).parent.absolute()) not in sys.path:
@@ -20,7 +20,7 @@ import sqrtools
 
 TELEMETRY = False
 try:
-    import psycopg
+    import psycopg  # noqa: F401 - 仅用于检测可选遥测依赖
 
     TELEMETRY = True
 except ImportError:
@@ -31,16 +31,11 @@ if TYPE_CHECKING:
         IcaNewMessage,
         IcaClient,
         ReciveMessage,
+        TailchatClient,
         TailchatReciveMessage,
     )
 
-else:
-    IcaNewMessage = TypeVar("NewMessage")
-    IcaClient = TypeVar("IcaClient")
-    ReciveMessage = TypeVar("ReciveMessage")
-    TailchatReciveMessage = TypeVar("TailchatReciveMessage")
-
-_version_ = "0.10.4"
+VERSION = "0.10.4"
 
 CMD_PREFIX = "/namer"
 
@@ -57,7 +52,7 @@ BASE_CMD = f"{CMD_PREFIX}-base"
 FIGHT_CMD = f"{CMD_PREFIX}-fight"
 HELP_CMD = f"{CMD_PREFIX}-help"
 
-HELP_MSG = f"""namerena-v[{_version_}]
+HELP_MSG = f"""namerena-v[{VERSION}]
 名字竞技场 一款不建议入坑的文字类游戏
 PF
 - {HELP_CMD} - 查看帮助
@@ -95,7 +90,7 @@ cfg = ConfigStorage(
 PLUGIN_MANIFEST = PluginManifest(
     plugin_id="namer",
     name="名竞小工具",
-    version=_version_,
+    version=VERSION,
     description="namerena 的一堆小工具",
     authors=["shenjack"],
     config={"main": cfg},
@@ -114,7 +109,7 @@ def out_msg(cost_time: float) -> str:
     runtime = get_js_runtime()
     use_bun = runtime == "bun"
     runtime_label = runtime or "no-runtime"
-    lines = [f"耗时: {cost_time:.3f}s", f"版本: {_version_}-{runtime_label}"]
+    lines = [f"耗时: {cost_time:.3f}s", f"版本: {VERSION}-{runtime_label}"]
 
     runtime_version = get_runtime_version()
     if runtime_version:
@@ -525,7 +520,7 @@ def run_tswn_compare(input_text: str) -> tuple[str, float] | None:
     return run_tswn_fight_compare(input_text)
 
 
-def convert_name(msg: ReciveMessage, client) -> None:
+def convert_name(msg: ReciveMessage, client: IcaClient | TailchatClient) -> None:
     # 也是多行
     if msg.content.find("\n") == -1:
         client.send_message(
@@ -550,11 +545,11 @@ def convert_name(msg: ReciveMessage, client) -> None:
             continue
         cache.write(player.display())
         cache.write("\n")
-    reply = msg.reply_with(f"{cache.getvalue()}版本:{_version_}")
+    reply = msg.reply_with(f"{cache.getvalue()}版本:{VERSION}")
     client.send_message(reply)
 
 
-def convert_base(msg: ReciveMessage, client) -> None:
+def convert_base(msg: ReciveMessage, client: IcaClient | TailchatClient) -> None:
     if int(sqrtools.SQRTOOLS_VERSION.split(".")[1]) < 3:
         client.send_message(msg.reply_with("错误: 内部依赖库版本错误\n"))
         return
@@ -665,7 +660,7 @@ def convert_base(msg: ReciveMessage, client) -> None:
                     cache.write(str(r[1] - 10 if r[1] > 10 else 0).zfill(2) + "\n")
     cache.write("\n")
     reply = msg.reply_with(
-        f"{cache.getvalue()}版本: {_version_} (sqrtools {sqrtools.SQRTOOLS_VERSION})"
+        f"{cache.getvalue()}版本: {VERSION} (sqrtools {sqrtools.SQRTOOLS_VERSION})"
     )
     client.send_message(reply)
 
@@ -705,7 +700,7 @@ def run_namerena(input_text: str, fight_mode: bool = False) -> tuple[str, float]
     return result.strip(), end_time - start_time
 
 
-def eval_fight(msg: ReciveMessage, client) -> None:
+def eval_fight(msg: ReciveMessage, client: IcaClient | TailchatClient) -> None:
     if msg.content.find("\n") == -1:
         # 在判断一下是不是 /xxx xxxx
         if msg.content.find(" ") != -1:
@@ -745,7 +740,7 @@ def eval_fight(msg: ReciveMessage, client) -> None:
     )
 
 
-def run_fights(msg: ReciveMessage, client) -> None:
+def run_fights(msg: ReciveMessage, client: IcaClient | TailchatClient) -> None:
     # 先解析出要运行的东西
     # 格式
     # aaaa+bbb+seed:123@!
@@ -850,7 +845,7 @@ def eval_score(msg: ReciveMessage, client, template: str) -> None:
     client.send_message(reply)
 
 
-def score_all(msg: ReciveMessage, client) -> None:
+def score_all(msg: ReciveMessage, client: IcaClient | TailchatClient) -> None:
     content = msg.content[len(EVAL_PP_CMD) :]
     # 去掉第一个 \n
     content = content[content.find("\n") + 1 :]
@@ -935,7 +930,7 @@ def score_all(msg: ReciveMessage, client) -> None:
     client.send_message(reply)
 
 
-def dispatch_msg(msg: ReciveMessage, client) -> None:
+def dispatch_msg(msg: ReciveMessage, client: IcaClient | TailchatClient) -> None:
     if msg.is_reply or msg.is_from_self:
         return
     if msg.content == HELP_CMD:
@@ -970,7 +965,9 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
     dispatch_msg(msg, client)  # type: ignore
 
 
-def on_tailchat_message(msg: TailchatReciveMessage, client) -> None:
+def on_tailchat_message(
+    msg: TailchatReciveMessage, client: TailchatClient
+) -> None:
     dispatch_msg(msg, client)  # type: ignore
 
 
