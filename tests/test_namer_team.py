@@ -273,6 +273,35 @@ class NamerTeamTests(unittest.TestCase):
         ):
             self.assertEqual(namerena._configured_asset_dirs(), [])
 
+    def test_bench_markers_are_stripped_for_tswn(self):
+        """namerena 的 !test! / ! 标记不能透给 tswn 的 bench 子命令。"""
+        for source, expected in (
+            ("!test!\na\nb", "a\nb"),
+            ("!test!\n\nmario", "mario"),
+            ("!test!\n!\n\nmario", "mario"),
+            ("\ufeff!test!\nmario", "mario"),
+            ("a\nb", "a\nb"),
+        ):
+            with self.subTest(source=source):
+                self.assertEqual(namerena._strip_bench_markers(source), expected)
+
+    def test_bench_compare_uses_bench_auto(self):
+        calls = []
+
+        def fake_run(input_text, *args):
+            calls.append((input_text, args))
+            return "胜率: 50.00%  (5000/10000)", 0.01
+
+        with patch.object(namerena, "run_tswn_cli", side_effect=fake_run):
+            result = namerena.run_tswn_bench_compare("!test!\n!a\n!b")
+
+        # 顶层 raw 已移除，必须走 bench auto
+        self.assertEqual(
+            calls[0][1], ("bench", "auto", "-n", str(namerena.TSWN_COMPARE_ROUNDS))
+        )
+        self.assertEqual(calls[0][0], "!a\n!b")
+        self.assertEqual(result[0], "胜率: 50.00%")
+
 
 
 if __name__ == "__main__":

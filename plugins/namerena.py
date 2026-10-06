@@ -535,8 +535,26 @@ def run_tswn_fight_compare(input_text: str) -> tuple[str, float] | None:
     return summarize_tswn_fight(result[0]), result[1]
 
 
+def _strip_bench_markers(input_text: str) -> str:
+    """把 namerena 的基准输入转成 tswn bench 能吃的纯队伍文本。
+
+    namerena 用 `!test!` 表示基准模式、单独一行的 `!` 表示 bang 口径；
+    tswn-cli 的 bench 子命令不认识这两个标记（0.7.0 起 `!test!` 也不再
+    自动切换基准路径），去掉后由 `bench auto` 按组数自行分流。
+    """
+    lines = [
+        raw_line
+        for raw_line in input_text.lstrip("\ufeff").splitlines()
+        if raw_line.strip() not in ("!test!", "!")
+    ]
+    return "\n".join(lines).strip("\n")
+
+
 def run_tswn_bench_compare(input_text: str) -> tuple[str, float] | None:
-    result = run_tswn_cli(input_text, "raw", "-n", str(TSWN_COMPARE_ROUNDS))
+    # 顶层 raw 已在 tswn-cli 0.7.0 移除，改用按组数分流的 bench auto
+    result = run_tswn_cli(
+        _strip_bench_markers(input_text), "bench", "auto", "-n", str(TSWN_COMPARE_ROUNDS)
+    )
     if result is None:
         return None
     return summarize_tswn_bench(result[0]), result[1]
