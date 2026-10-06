@@ -49,7 +49,7 @@ class Name:
         return True
     def calcprops(self,usebonus:bool)->None:
         propcnt=1
-        if usebonus==True:
+        if usebonus:
             r=self.namebonus[0:32]
         else:
             r=self.namebase[0:32]
@@ -89,7 +89,7 @@ class Name:
         j=0
         for i in range(64,128,4):
             q=min(self.namebase[i:i+4])
-            if usebonus==True:
+            if usebonus:
                 p=min(self.namebonus[i:i+4])
             else:
                 p=q
@@ -106,7 +106,7 @@ class Name:
             if last>=14:
                 sklflag[last-14]=False
             self.__sklfreq[last]*=2
-        if usebonus==True:
+        if usebonus:
             info=self.namebonus
         else:
             info=self.namebase
