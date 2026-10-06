@@ -184,6 +184,7 @@ except ImportError:
 # 默认值常量（集中管理，改一处即可）
 # ============================================================
 
+VERSION = "0.4.2"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 10020
 
@@ -195,7 +196,7 @@ DEFAULT_PORT = 10020
 PLUGIN_MANIFEST = PluginManifest(
     plugin_id="noticer",
     name="Noticer 本地提醒服务",
-    version="0.4.2",
+    version=VERSION,
     description="启动本地 HTTP 服务，接收外部请求并通过 bot 发送提醒/警告消息到指定群聊",
     authors=["shenjack"],
     config={
