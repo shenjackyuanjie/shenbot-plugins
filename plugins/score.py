@@ -5,7 +5,7 @@ import threading
 import time
 import urllib.request
 from pathlib import Path
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING
 
 from selenium import webdriver
 from selenium.common.exceptions import SessionNotCreatedException, TimeoutException
@@ -17,11 +17,9 @@ from shenbot_api import ConfigStorage, PluginManifest, python_config_path
 
 if TYPE_CHECKING:
     from ica_typing import IcaClient, IcaNewMessage
-else:
-    IcaClient = TypeVar("IcaClient")
-    IcaNewMessage = TypeVar("IcaNewMessage")
 
 
+VERSION = "0.3.2"
 USERNAME = ""
 PASSWORD = ""
 
@@ -38,13 +36,14 @@ config = ConfigStorage(username="", password="")
 PLUGIN_MANIFEST = PluginManifest(
     plugin_id="score",
     name="成绩查询",
-    version="0.3.1",
+    version=VERSION,
     description="查询教务系统最近一个学期的成绩",
     authors=["shenjack"],
     config={"main": config},
 )
 
 _query_lock = threading.Lock()
+_shutdown = threading.Event()
 
 
 def query_scores() -> str:
@@ -116,17 +115,21 @@ def query_scores() -> str:
     lines = [f"📊 {latest_scores[0]['XNXQDM_DISPLAY']}成绩"]
     for item in latest_scores:
         lines.append(
-            f"{item['KCM']}：{item['XSZCJ']}"
-            f"（{item['XF']}学分，绩点{item['JD']}）"
+            f"{item['KCM']}：{item['XSZCJ']}（{item['XF']}学分，绩点{item['JD']}）"
         )
     return "\n".join(lines)
 
 
 def on_load() -> None:
     global USERNAME, PASSWORD
+    _shutdown.clear()
     main_config = PLUGIN_MANIFEST.config_unchecked("main")
     USERNAME = str(main_config.get_value("username") or "")
     PASSWORD = str(main_config.get_value("password") or "")
+
+
+def on_unload() -> None:
+    _shutdown.set()
 
 
 def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
@@ -139,7 +142,9 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
         client.send_message(msg.reply_with("成绩正在查询，请稍候。"))
         return
 
-    client.send_message(msg.reply_with("正在查询成绩；如 Edge 出现安全验证，请手动完成。"))
+    client.send_message(
+        msg.reply_with("正在查询成绩；如 Edge 出现安全验证，请手动完成。")
+    )
 
     def run_query() -> None:
         with _query_lock:
@@ -148,6 +153,7 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
             except Exception as error:
                 message = str(error).strip() or type(error).__name__
                 result = f"成绩查询失败：{message}"
-            client.send_message(msg.reply_with(result))
+            if not _shutdown.is_set():
+                client.send_message(msg.reply_with(result))
 
     threading.Thread(target=run_query, daemon=True).start()
