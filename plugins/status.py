@@ -2,16 +2,11 @@ from __future__ import annotations
 
 import time
 
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ica_typing import IcaNewMessage, IcaClient
-    from ica_typing import TailchatReciveMessage, TailchatClient
-else:
-    IcaNewMessage = TypeVar("NewMessage")
-    IcaClient = TypeVar("IcaClient")
-    TailchatReciveMessage = TypeVar("TailchatReciveMessage")
-    TailchatClient = TypeVar("TailchatClient")
+    from ica_typing import IcaClient, IcaNewMessage
+    from ica_typing import TailchatClient, TailchatReciveMessage
 
 from shenbot_api import PluginManifest
 

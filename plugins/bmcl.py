@@ -11,7 +11,13 @@ from shenbot_api import ConfigStorage, PluginManifest
 # import PIL
 
 if TYPE_CHECKING:
-    from ica_typing import IcaClient, IcaNewMessage, TailchatClient
+    from ica_typing import (
+        IcaClient,
+        IcaNewMessage,
+        ReciveMessage,
+        TailchatClient,
+        TailchatReciveMessage,
+    )
 
 VERSION = "2.9.2-rs"
 CMD_PREFIX = "/bmcl"
@@ -85,7 +91,7 @@ def format_hit_count(count: int) -> str:
 
 
 def wrap_request(
-    url: str, msg: IcaNewMessage, client: IcaClient | TailchatClient
+    url: str, msg: ReciveMessage, client: IcaClient | TailchatClient
 ) -> Optional[dict]:
     try:
         if COOKIE is None:
@@ -113,7 +119,7 @@ def wrap_request(
     return response.json()
 
 
-def bmcl_dashboard(msg: IcaNewMessage, client: IcaClient | TailchatClient) -> None:
+def bmcl_dashboard(msg: ReciveMessage, client: IcaClient | TailchatClient) -> None:
     req_time = time.time()
     # 记录请求时间
     data = wrap_request(
@@ -226,7 +232,9 @@ def display_rank_full(ranks: list, req_time) -> str:
     return cache.getvalue()
 
 
-def bmcl_rank_general(msg, client):
+def bmcl_rank_general(
+    msg: ReciveMessage, client: IcaClient | TailchatClient
+) -> None:
     req_time = time.time()
     # 记录请求时间
     rank_data = wrap_request(
@@ -257,7 +265,7 @@ MAX_DISPLAY = 25
 
 
 def bmcl_rank(
-    msg: IcaNewMessage, client: IcaClient | TailchatClient, name: str
+    msg: ReciveMessage, client: IcaClient | TailchatClient, name: str
 ) -> None:
     req_time = time.time()
     # 记录请求时间
@@ -333,7 +341,7 @@ HELP_MSG = f"""{CMD_PREFIX} -> dashboard
 
 
 def ensure_backend_version(
-    msg: IcaNewMessage, client: IcaClient | TailchatClient
+    msg: ReciveMessage, client: IcaClient | TailchatClient
 ) -> bool:
     global backend_version
     if backend_version != "unknown":
@@ -349,7 +357,7 @@ def ensure_backend_version(
 
 
 def handle_bmcl_message(
-    msg: IcaNewMessage, client: IcaClient | TailchatClient
+    msg: ReciveMessage, client: IcaClient | TailchatClient
 ) -> None:
     content = msg.content.strip()
     if "\n" in content:
@@ -397,7 +405,9 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
     handle_bmcl_message(msg, client)
 
 
-def on_tailchat_message(msg, client: TailchatClient) -> None:
+def on_tailchat_message(
+    msg: TailchatReciveMessage, client: TailchatClient
+) -> None:
     if msg.is_reply:
         return
     handle_bmcl_message(msg, client)
