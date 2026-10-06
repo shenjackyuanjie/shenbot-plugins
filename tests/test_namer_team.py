@@ -97,8 +97,21 @@ class NamerTeamTests(unittest.TestCase):
             self.assertEqual(output.splitlines()[1].split(None, 1)[1], "mario+luigi")
 
     def test_pair_rating_command_mapping(self):
-        self.assertEqual(namerena.PAIR_COMMANDS["/namer-cp"], ("刺评", "teammate_fz.toml", 4))
-        self.assertEqual(namerena.PAIR_COMMANDS["/namer-fsp"], ("人海评", "teammate_pj.toml", 4))
+        # 5 个命令与上游 settings.toml 的 5 个队友预设一一对应
+        self.assertEqual(
+            namerena.PAIR_COMMANDS,
+            {
+                "/namer-cp": ("刺评", "teammate_fz.toml", 4),
+                "/namer-fp": ("辅评", "teammate_bc.toml", 4),
+                "/namer-wcp": ("无刺评", "teammate_wc.toml", 4),
+                "/namer-fsp": ("分身评", "teammate_pj.toml", 4),
+                "/namer-pjp": ("配件评", "teammate_fs.toml", 4),
+            },
+        )
+
+    def test_pair_rating_mapping_has_no_duplicate_targets(self):
+        targets = list(namerena.PAIR_COMMANDS.values())
+        self.assertEqual(len(targets), len(set(targets)), "队友预设不应重复映射")
 
     def test_new_commands_use_hyphen_separator(self):
         for command in (
@@ -207,6 +220,51 @@ class NamerTeamTests(unittest.TestCase):
                     msg.content = content
                     namerena.dispatch_msg(msg, client)
         self.assertEqual(called, [], "下划线输入不应落入简化求值")
+
+    def test_configured_asset_path_is_searched_first(self):
+        configured = Path("D:/custom/openbox-assets")
+        expected = {
+            "D:/custom/openbox-assets/targets/target1.txt",
+            "D:/custom/openbox-assets/targets/target2.txt",
+        }
+
+        with patch.object(namerena, "TSWN_ASSETS_PATH", str(configured)), patch.object(
+            namerena, "resolve_tswn_runner", return_value=None
+        ), patch.object(
+            Path, "is_file", lambda self: str(self).replace("\\", "/") in expected
+        ), patch.object(
+            Path, "resolve", lambda self: self
+        ):
+            dirs = namerena._iter_tswn_asset_dirs()
+            self.assertEqual(dirs[0], configured, "配置项必须排在候选最前")
+            self.assertEqual(
+                namerena._find_tswn_openbox_assets(),
+                (
+                    Path("D:/custom/openbox-assets/targets/target1.txt"),
+                    Path("D:/custom/openbox-assets/targets/target2.txt"),
+                ),
+            )
+
+    def test_configured_asset_path_accepts_repo_root(self):
+        # 允许填仓库根目录，会自动补 crates/<pkg>/assets
+        with patch.object(
+            namerena, "TSWN_ASSETS_PATH", "D:/repos/tswn-core"
+        ), patch.object(namerena, "resolve_tswn_runner", return_value=None), patch.object(
+            Path, "resolve", lambda self: self
+        ):
+            dirs = namerena._iter_tswn_asset_dirs()
+            self.assertIn(
+                Path("D:/repos/tswn-core/crates/tswn_openbox_backend/assets"), dirs
+            )
+            self.assertIn(
+                Path("D:/repos/tswn-core/crates/tswn_openbox/assets"), dirs
+            )
+
+    def test_blank_asset_path_does_not_inject_candidates(self):
+        with patch.object(namerena, "TSWN_ASSETS_PATH", "  "), patch.object(
+            namerena, "resolve_tswn_runner", return_value=None
+        ):
+            self.assertEqual(namerena._configured_asset_dirs(), [])
 
 
 

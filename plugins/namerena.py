@@ -60,9 +60,8 @@ PAIR_COMMANDS = {
     f"{CMD_PREFIX}-cp": ("刺评", "teammate_fz.toml", 4),
     f"{CMD_PREFIX}-fp": ("辅评", "teammate_bc.toml", 4),
     f"{CMD_PREFIX}-wcp": ("无刺评", "teammate_wc.toml", 4),
-    f"{CMD_PREFIX}-rhp": ("人海评", "teammate_pj.toml", 4),
+    f"{CMD_PREFIX}-fsp": ("分身评", "teammate_pj.toml", 4),
     f"{CMD_PREFIX}-pjp": ("配件评", "teammate_fs.toml", 4),
-    f"{CMD_PREFIX}-fsp": ("人海评", "teammate_pj.toml", 4),
 }
 CONVERT_CMD = f"{CMD_PREFIX}-peek"
 CONVERT_RAW_CMD = f"{CMD_PREFIX}-peeks"
@@ -83,7 +82,7 @@ PF
 - {EVAL_PF_CMD} - 一下子全评
     - 一行一个名字/+连接的多个名字
 - {CQP_CMD} - 使用 tswn 计算 100% CQP, 一行一组，双人组用 + 连接
-- /namer-cp /namer-fp /namer-wcp /namer-rhp /namer-pjp /namer-fsp - Openbox 队友评测
+- /namer-cp /namer-fp /namer-wcp /namer-fsp /namer-pjp - Openbox 队友评测
 - {CONVERT_CMD} - 查看一个名字的属性, 每一行一个名字
 - {CONVERT_RAW_CMD} - 查看一个名字的属性, 技能按原始顺序输出
 - {BASE_CMD} - base 工具, 只支持单个名字 (避免刷屏)
@@ -110,6 +109,9 @@ cfg = ConfigStorage(
     use_tswn_compare=True,
     # tswn-cli 路径, 支持直接填 exe / 仓库根目录 / crates/tswn_core
     tswn_cli_path="",
+    # tswn-openbox 资产目录 (含 targets/ 与 teammates/ 的那一层),
+    # 留空则自动在 tswn-cli 附近与仓库相对位置查找
+    tswn_assets_path="",
 )
 
 PLUGIN_MANIFEST = PluginManifest(
@@ -124,6 +126,7 @@ PLUGIN_MANIFEST = PluginManifest(
 USE_BUN = False
 USE_TSWN_COMPARE = True
 TSWN_CLI_PATH = ""
+TSWN_ASSETS_PATH = ""
 TSWN_RUNNER: tuple[list[str], str | None] | None = None
 TSWN_RUNNER_FAILED = False
 TSWN_COMPARE_ROUNDS = 10000
@@ -586,19 +589,55 @@ def _iter_tswn_repo_bases() -> list[Path]:
     return bases
 
 
-def _find_tswn_openbox_assets() -> tuple[Path, Path] | None:
-    """Locate tswn-openbox's standard single/double CQP target lists."""
+def _configured_asset_dirs() -> list[Path]:
+    """tswn_assets_path 指定的候选资产目录。
+
+    允许填资产目录本身（含 targets/ 与 teammates/ 的那一层），
+    也允许填仓库根目录，两种写法都能命中。
+    """
+    raw = TSWN_ASSETS_PATH.strip()
+    if not raw:
+        return []
+    base = Path(raw).expanduser()
+    return [
+        base,
+        base / "assets",
+        base / "crates" / "tswn_openbox" / "assets",
+        base / "crates" / "tswn_openbox_backend" / "assets",
+    ]
+
+
+def _iter_tswn_asset_dirs() -> list[Path]:
+    """按优先级返回候选资产目录：显式配置的最优先，其次自动探测。"""
+    seen: set[Path] = set()
+    dirs: list[Path] = []
+
+    def add(path: Path) -> None:
+        resolved = path.resolve()
+        if resolved not in seen:
+            seen.add(resolved)
+            dirs.append(resolved)
+
+    for configured in _configured_asset_dirs():
+        add(configured)
     for base in _iter_tswn_repo_bases():
         for package in ("tswn_openbox", "tswn_openbox_backend"):
-            assets = base / "crates" / package / "assets" / "targets"
-            new_target1 = assets / "newTarget1.toml"
-            new_target2 = assets / "newTarget2.toml"
-            if new_target1.is_file() and new_target2.is_file():
-                return new_target1, new_target2
-            target1 = assets / "target1.txt"
-            target2 = assets / "target2.txt"
-            if target1.is_file() and target2.is_file():
-                return target1, target2
+            add(base / "crates" / package / "assets")
+    return dirs
+
+
+def _find_tswn_openbox_assets() -> tuple[Path, Path] | None:
+    """Locate tswn-openbox's standard single/double CQP target lists."""
+    for assets in _iter_tswn_asset_dirs():
+        targets = assets / "targets"
+        new_target1 = targets / "newTarget1.toml"
+        new_target2 = targets / "newTarget2.toml"
+        if new_target1.is_file() and new_target2.is_file():
+            return new_target1, new_target2
+        target1 = targets / "target1.txt"
+        target2 = targets / "target2.txt"
+        if target1.is_file() and target2.is_file():
+            return target1, target2
     return None
 
 
@@ -611,8 +650,7 @@ def _find_tswn_teammate_file(filename: str) -> Path | None:
 
 
 def _find_tswn_backend_assets() -> Path | None:
-    for base in _iter_tswn_repo_bases():
-        assets = base / "crates" / "tswn_openbox_backend" / "assets"
+    for assets in _iter_tswn_asset_dirs():
         if (assets / "settings.toml").is_file():
             return assets
     return None
@@ -684,10 +722,13 @@ def run_tswn_pair_scores(players: list[str], teammate_file: Path, head: int) -> 
     """Calculate latest Openbox weighted pair scores with DIY-frozen targets."""
     assets = _find_tswn_backend_assets()
     if assets is None:
-        raise RuntimeError("未找到最新 tswn-openbox_backend 资源")
+        raise RuntimeError(
+            "未找到最新 tswn-openbox_backend 资源；"
+            "请在 namer 配置里把 tswn_assets_path 指到 tswn-openbox 的资产目录"
+        )
     target2 = assets / "targets" / "newTarget2.toml"
     if not target2.is_file():
-        raise RuntimeError("未找到最新 newTarget2.toml")
+        raise RuntimeError(f"未找到最新 newTarget2.toml（已在 {assets}）")
 
     runner = resolve_tswn_runner()
     if runner is None:
@@ -816,7 +857,10 @@ def run_tswn_cqp(raw_groups: list[str]) -> str:
     """Run 100% CQP for mixed one-player/two-player input groups."""
     assets = _find_tswn_openbox_assets()
     if assets is None:
-        raise RuntimeError("未找到 tswn-openbox 的 target1.txt/target2.txt")
+        raise RuntimeError(
+            "未找到 tswn-openbox 的 target1.txt/target2.txt；"
+            "请在 namer 配置里把 tswn_assets_path 指到 tswn-openbox 的资产目录"
+        )
     target1, target2 = assets
     indexed: dict[int, list[tuple[int, str]]] = {1: [], 2: []}
     for index, group in enumerate(raw_groups):
@@ -1500,6 +1544,7 @@ def on_load() -> None:
         USE_BUN, \
         USE_TSWN_COMPARE, \
         TSWN_CLI_PATH, \
+        TSWN_ASSETS_PATH, \
         TSWN_RUNNER, \
         TSWN_RUNNER_FAILED, \
         VERSION_CACHE
@@ -1509,6 +1554,7 @@ def on_load() -> None:
     use_tswn_compare = main_cfg.get_value("use_tswn_compare")
     USE_TSWN_COMPARE = True if use_tswn_compare is None else bool(use_tswn_compare)
     TSWN_CLI_PATH = str(main_cfg.get_value("tswn_cli_path") or "")
+    TSWN_ASSETS_PATH = str(main_cfg.get_value("tswn_assets_path") or "")
     TSWN_RUNNER = None
     TSWN_RUNNER_FAILED = False
     VERSION_CACHE = {}
