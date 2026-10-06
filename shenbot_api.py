@@ -2,10 +2,7 @@ from __future__ import annotations
 
 import datetime
 
-from typing import Callable, Union, TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from ica_typing import IcaSendMessage
+from typing import Callable, Union
 
 __version__: str = "0.9.3"
 _version_: str = __version__
@@ -49,13 +46,15 @@ class ConfigStorage:
 
     def have_value(self, layer1: str, layer2: str | None = None) -> bool: ...
 
-    def get_value(self, layer1: str, layer2: str | None = None) -> value_type: ...
+    def get_value(
+        self, layer1: str, layer2: str | None = None
+    ) -> value_type | None: ...
 
     def get_default_toml(self) -> str: ...
 
     def get_current_toml(self) -> str: ...
 
-    def read_toml_str(self, value: str) -> str: ...
+    def read_toml_str(self, value: str) -> None: ...
 
 
 class PluginManifest:
@@ -106,7 +105,9 @@ class PluginManifest:
 
 
 class Scheduler:
-    def __init__(self, func: Callable, schdule_time: datetime.timedelta) -> None:
+    def __init__(
+        self, func: Callable[[], None], schdule_time: datetime.timedelta
+    ) -> None:
         """
         创建一个计划任务
 
@@ -117,13 +118,6 @@ class Scheduler:
         """
         ...
 
-    def start(self):
-        """开始任务"""
-
-
-class CommandHelper:
-    """
-    用来帮助注册+处理消息
-    """
-
-    def __init__(self): ...
+    def start(self) -> None:
+        """从受 PluginHost 管理的 hook 或生命周期函数启动任务。"""
+        ...

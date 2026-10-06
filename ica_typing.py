@@ -2,7 +2,7 @@ from __future__ import annotations
 
 # Python 兼容版本 3.8+
 
-from typing import Callable
+from typing import Callable, Union
 from datetime import datetime
 
 """
@@ -648,24 +648,24 @@ class TailchatClient:
         于 1.2.6 添加"""
         ...
 
-    def reload_plugin_status(self) -> bool:
-        """重载插件状态"""
+    def sync_status_from_file(self) -> None:
+        """从状态文件同步插件启用状态。"""
         ...
 
     def reload_plugin(self, plugin_name: str) -> bool:
         """重载插件"""
         ...
 
-    def set_plugin_status(self, plugin_name: str, status: bool):
+    def set_plugin_status(self, plugin_name: str, status: bool) -> None:
         """设置插件状态"""
         ...
 
-    def get_plugin_status(self, plugin_name: str) -> bool:
+    def get_plugin_status(self, plugin_name: str) -> bool | None:
         """获取插件状态"""
         ...
 
-    def sync_status_to_config(self) -> None:
-        """将插件状态同步到配置文件"""
+    def sync_status_to_file(self) -> None:
+        """将插件状态同步到配置文件。"""
         ...
 
     def debug(self, message: str) -> None:
@@ -678,52 +678,15 @@ class TailchatClient:
         """向日志中输出警告信息"""
 
 
-class ReciveMessage(TailchatReciveMessage, IcaNewMessage):
-    """
-    继承了两边的消息
-    只是用来类型标记, 不能实例化
-    """
-
-    def reply_with(self, message: str) -> IcaReplyMessage | TailchatSendingMessage:  # type: ignore
-        ...
+# 保留历史拼写；这是两个后端消息类型的联合，而不是可实例化的运行时类型。
+ReciveMessage = Union[IcaNewMessage, TailchatReciveMessage]
 
 
-on_load = Callable[[IcaClient], None]
-# def on_load(client: IcaClient) -> None:
-#     ...
-
-on_ica_message = Callable[[IcaNewMessage, IcaClient], None]
-# def on_message(msg: NewMessage, client: IcaClient) -> None:
-#     ...
-
-on_ica_delete_message = Callable[[IcaType.MessageId, IcaClient], None]
-# def on_delete_message(msg_id: MessageId, client: IcaClient) -> None:
-#     ...
-
-on_tailchat_message = Callable[[TailchatClient, TailchatReciveMessage], None]
-# def on_tailchat_message(client: TailchatClient, msg: TailchatReciveMessage) -> None:
-#     ...
-
-on_config = Callable[[bytes], None]
-# 输入为配置文件的(字节)内容
-# 需要自行处理文件解析
-
-require_config = Callable[[None], tuple[str, bytes | str]]
-# file_name, default_data
-# 返回配置文件的内容(字节)
-
+# PluginHost 在加载或重载时快照以下 hook；运行中重新绑定函数需再次重载插件。
 on_load = Callable[[], None]
-# 插件加载完成后调用, 仅在插件加载时调用一次
-# added: bot 0.9.0
-
 on_unload = Callable[[], None]
-# 插件卸载之前调用, 仅在插件卸载时调用一次
-# added: bot 0.9.0
-
-on_reload = Callable[[], None]
-# 插件重载时调用, 仅在插件重载时调用一次
-# added: bot 0.9.0
-
-CONFIG_DATA: str | bytes
-# 配置文件的内容 (类型根据 require_config 返回值而定)
-# 无论有没有配置文件, 都会有一个默认的配置文件内容
+on_ica_message = Callable[[IcaNewMessage, IcaClient], None]
+on_ica_system_message = Callable[[IcaNewMessage, IcaClient], None]
+on_ica_delete_message = Callable[[IcaType.MessageId, IcaClient], None]
+on_ica_join_request = Callable[[IcaJoinRequest, IcaClient], None]
+on_tailchat_message = Callable[[TailchatReciveMessage, TailchatClient], None]
