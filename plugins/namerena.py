@@ -552,43 +552,53 @@ def run_tswn_compare(input_text: str) -> tuple[str, float] | None:
     return run_tswn_fight_compare(input_text)
 
 
-def _find_tswn_openbox_assets() -> tuple[Path, Path] | None:
-    """Locate tswn-openbox's standard single/double CQP target lists."""
+def _tswn_asset_roots() -> list[Path]:
+    """收集可能包含 tswn 仓库的根目录，按优先级排列。
+
+    先看已解析的 tswn-cli：它的 cwd 和二进制所在目录的每一级祖先。
+    再退回插件文件往上数第 4/3/2 层，覆盖把 tswn 检出放在工作区
+    或工作区同级目录的本地布局。
+    """
     candidates: list[Path] = []
     runner = resolve_tswn_runner()
     if runner is not None:
         command, cwd = runner
         if cwd:
             candidates.append(Path(cwd))
-        if command:
-            try:
-                candidates.extend(Path(command[0]).resolve().parents)
-            except OSError:
-                pass
+        candidates.extend(Path(command[0]).resolve().parents)
     candidates.extend(
-        [
-            Path(__file__).resolve().parents[3],
-            Path(__file__).resolve().parents[2],
-            Path(__file__).resolve().parents[1],
-        ]
+        Path(__file__).resolve().parents[index] for index in (3, 2, 1)
     )
+    return candidates
+
+
+def _iter_tswn_repo_bases() -> list[Path]:
+    """把候选根展开成实际要探测的 tswn 仓库目录，并去重。"""
     seen: set[Path] = set()
-    for root in candidates:
+    bases: list[Path] = []
+    for root in _tswn_asset_roots():
         for base in (root, root / "tswn-new", root / "tswn-core"):
-            base = base.resolve()
-            if base in seen:
+            resolved = base.resolve()
+            if resolved in seen:
                 continue
-            seen.add(base)
-            for package in ("tswn_openbox", "tswn_openbox_backend"):
-                assets = base / "crates" / package / "assets"
-                new_target1 = assets / "targets" / "newTarget1.toml"
-                new_target2 = assets / "targets" / "newTarget2.toml"
-                if new_target1.is_file() and new_target2.is_file():
-                    return new_target1, new_target2
-                target1 = assets / "targets" / "target1.txt"
-                target2 = assets / "targets" / "target2.txt"
-                if target1.is_file() and target2.is_file():
-                    return target1, target2
+            seen.add(resolved)
+            bases.append(resolved)
+    return bases
+
+
+def _find_tswn_openbox_assets() -> tuple[Path, Path] | None:
+    """Locate tswn-openbox's standard single/double CQP target lists."""
+    for base in _iter_tswn_repo_bases():
+        for package in ("tswn_openbox", "tswn_openbox_backend"):
+            assets = base / "crates" / package / "assets" / "targets"
+            new_target1 = assets / "newTarget1.toml"
+            new_target2 = assets / "newTarget2.toml"
+            if new_target1.is_file() and new_target2.is_file():
+                return new_target1, new_target2
+            target1 = assets / "target1.txt"
+            target2 = assets / "target2.txt"
+            if target1.is_file() and target2.is_file():
+                return target1, target2
     return None
 
 
@@ -601,28 +611,10 @@ def _find_tswn_teammate_file(filename: str) -> Path | None:
 
 
 def _find_tswn_backend_assets() -> Path | None:
-    runner = resolve_tswn_runner()
-    candidates: list[Path] = []
-    if runner is not None:
-        command, cwd = runner
-        if cwd:
-            candidates.append(Path(cwd))
-        if command:
-            try:
-                candidates.extend(Path(command[0]).resolve().parents)
-            except OSError:
-                pass
-    candidates.extend([Path(__file__).resolve().parents[2], Path(__file__).resolve().parents[1]])
-    seen: set[Path] = set()
-    for root in candidates:
-        for base in (root, root / "tswn-new", root / "tswn-core"):
-            base = base.resolve()
-            if base in seen:
-                continue
-            seen.add(base)
-            assets = base / "crates" / "tswn_openbox_backend" / "assets"
-            if (assets / "settings.toml").is_file():
-                return assets
+    for base in _iter_tswn_repo_bases():
+        assets = base / "crates" / "tswn_openbox_backend" / "assets"
+        if (assets / "settings.toml").is_file():
+            return assets
     return None
 
 
@@ -798,7 +790,7 @@ def _run_tswn_cqp_file(player_file: Path, target_file: Path, target_factored: bo
                 str(player_file),
                 *( ["--target-factored"] if target_factored else [] ),
                 "-n",
-                "10000",
+                str(TSWN_COMPARE_ROUNDS),
                 "--keep-rq",
                 "-o",
                 str(output_file),

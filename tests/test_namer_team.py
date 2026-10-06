@@ -113,6 +113,57 @@ class NamerTeamTests(unittest.TestCase):
                 self.assertTrue(command.startswith(f"{namerena.CMD_PREFIX}-"))
                 self.assertNotIn("_", command[len(namerena.CMD_PREFIX) :])
 
+    def test_openbox_asset_search_shares_candidate_roots(self):
+        """openbox 与 backend 的资源定位必须走同一套候选根。"""
+        found = {
+            "D:/repos/tswn-openbox/crates/tswn_openbox/assets/targets/target1.txt",
+            "D:/repos/tswn-openbox/crates/tswn_openbox/assets/targets/target2.txt",
+            "D:/repos/tswn-openbox/crates/tswn_openbox_backend/assets/settings.toml",
+        }
+        runner = (["D:/repos/tswn-openbox/target/release/tswn-cli.exe"], None)
+
+        with patch.object(namerena, "resolve_tswn_runner", return_value=runner), patch.object(
+            Path, "is_file", lambda self: str(self).replace("\\", "/") in found
+        ), patch.object(Path, "resolve", lambda self: self):
+            roots = namerena._tswn_asset_roots()
+            self.assertIn(Path("D:/repos/tswn-openbox"), roots)
+
+            bases = namerena._iter_tswn_repo_bases()
+            self.assertIn(Path("D:/repos/tswn-openbox").resolve(), bases)
+            self.assertIn(Path("D:/repos/tswn-openbox/tswn-new").resolve(), bases)
+            self.assertEqual(bases, namerena._iter_tswn_repo_bases(), "候选应可重复且稳定")
+
+            # 两个查找函数吃同一份候选，找到的资产目录一致
+            self.assertEqual(
+                namerena._find_tswn_openbox_assets(),
+                (
+                    Path(
+                        "D:/repos/tswn-openbox/crates/tswn_openbox/assets/targets/target1.txt"
+                    ),
+                    Path(
+                        "D:/repos/tswn-openbox/crates/tswn_openbox/assets/targets/target2.txt"
+                    ),
+                ),
+            )
+            self.assertEqual(
+                namerena._find_tswn_backend_assets(),
+                Path("D:/repos/tswn-openbox/crates/tswn_openbox_backend/assets"),
+            )
+
+    def test_asset_search_returns_none_when_nothing_found(self):
+        with patch.object(
+            namerena, "resolve_tswn_runner", return_value=None
+        ), patch.object(
+            namerena, "__file__", "D:/nothing/ica-plugin/plugins/namerena.py"
+        ), patch.object(
+            Path, "is_file", lambda self: False
+        ), patch.object(
+            Path, "resolve", lambda self: self
+        ):
+            self.assertIsNone(namerena._find_tswn_openbox_assets())
+            self.assertIsNone(namerena._find_tswn_backend_assets())
+            self.assertIsNone(namerena._find_tswn_teammate_file("teammate_fz.toml"))
+
     def test_raw_and_sorted_commands_route_separately(self):
         routed = {}
 
