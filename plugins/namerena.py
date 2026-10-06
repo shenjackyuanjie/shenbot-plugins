@@ -602,13 +602,16 @@ def _configured_asset_dirs() -> list[Path]:
     return [
         base,
         base / "assets",
-        base / "crates" / "tswn_openbox" / "assets",
         base / "crates" / "tswn_openbox_backend" / "assets",
     ]
 
 
 def _iter_tswn_asset_dirs() -> list[Path]:
-    """按优先级返回候选资产目录：显式配置的最优先，其次自动探测。"""
+    """按优先级返回候选资产目录：显式配置的最优先，其次自动探测。
+
+    资产固定位于 ``crates/tswn_openbox_backend/assets``；``tswn_openbox``
+    只有 GUI 的 ``setting/`` 目录，没有 ``assets/``，不作为候选。
+    """
     seen: set[Path] = set()
     dirs: list[Path] = []
 
@@ -621,8 +624,7 @@ def _iter_tswn_asset_dirs() -> list[Path]:
     for configured in _configured_asset_dirs():
         add(configured)
     for base in _iter_tswn_repo_bases():
-        for package in ("tswn_openbox", "tswn_openbox_backend"):
-            add(base / "crates" / package / "assets")
+        add(base / "crates" / "tswn_openbox_backend" / "assets")
     return dirs
 
 

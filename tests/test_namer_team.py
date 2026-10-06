@@ -129,8 +129,8 @@ class NamerTeamTests(unittest.TestCase):
     def test_openbox_asset_search_shares_candidate_roots(self):
         """openbox 与 backend 的资源定位必须走同一套候选根。"""
         found = {
-            "D:/repos/tswn-openbox/crates/tswn_openbox/assets/targets/target1.txt",
-            "D:/repos/tswn-openbox/crates/tswn_openbox/assets/targets/target2.txt",
+            "D:/repos/tswn-openbox/crates/tswn_openbox_backend/assets/targets/target1.txt",
+            "D:/repos/tswn-openbox/crates/tswn_openbox_backend/assets/targets/target2.txt",
             "D:/repos/tswn-openbox/crates/tswn_openbox_backend/assets/settings.toml",
         }
         runner = (["D:/repos/tswn-openbox/target/release/tswn-cli.exe"], None)
@@ -151,10 +151,10 @@ class NamerTeamTests(unittest.TestCase):
                 namerena._find_tswn_openbox_assets(),
                 (
                     Path(
-                        "D:/repos/tswn-openbox/crates/tswn_openbox/assets/targets/target1.txt"
+                        "D:/repos/tswn-openbox/crates/tswn_openbox_backend/assets/targets/target1.txt"
                     ),
                     Path(
-                        "D:/repos/tswn-openbox/crates/tswn_openbox/assets/targets/target2.txt"
+                        "D:/repos/tswn-openbox/crates/tswn_openbox_backend/assets/targets/target2.txt"
                     ),
                 ),
             )
@@ -162,6 +162,16 @@ class NamerTeamTests(unittest.TestCase):
                 namerena._find_tswn_backend_assets(),
                 Path("D:/repos/tswn-openbox/crates/tswn_openbox_backend/assets"),
             )
+
+    def test_asset_candidates_skip_nonexistent_openbox_crate(self):
+        """tswn_openbox 没有 assets/，不应出现在候选里。"""
+        with patch.object(namerena, "TSWN_ASSETS_PATH", ""), patch.object(
+            namerena, "resolve_tswn_runner", return_value=None
+        ), patch.object(Path, "resolve", lambda self: self):
+            for path in namerena._iter_tswn_asset_dirs():
+                self.assertNotIn("tswn_openbox", path.parts, path)
+            dirs = namerena._configured_asset_dirs()
+            self.assertEqual(dirs, [])
 
     def test_asset_search_returns_none_when_nothing_found(self):
         with patch.object(
@@ -246,7 +256,7 @@ class NamerTeamTests(unittest.TestCase):
             )
 
     def test_configured_asset_path_accepts_repo_root(self):
-        # 允许填仓库根目录，会自动补 crates/<pkg>/assets
+        # 允许填仓库根目录，会自动补 crates/tswn_openbox_backend/assets
         with patch.object(
             namerena, "TSWN_ASSETS_PATH", "D:/repos/tswn-core"
         ), patch.object(namerena, "resolve_tswn_runner", return_value=None), patch.object(
@@ -255,9 +265,6 @@ class NamerTeamTests(unittest.TestCase):
             dirs = namerena._iter_tswn_asset_dirs()
             self.assertIn(
                 Path("D:/repos/tswn-core/crates/tswn_openbox_backend/assets"), dirs
-            )
-            self.assertIn(
-                Path("D:/repos/tswn-core/crates/tswn_openbox/assets"), dirs
             )
 
     def test_blank_asset_path_does_not_inject_candidates(self):
