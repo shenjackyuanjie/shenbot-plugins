@@ -59,12 +59,13 @@ if TYPE_CHECKING:
 from shenbot_api import PluginManifest, ConfigStorage
 
 # 分析所用模型名，统一从这里取，避免各处文案写成不同版本
+VERSION = "0.5.4"
 ANALYZE_MODEL = "V41F"
 
 PLUGIN_MANIFEST = PluginManifest(
     plugin_id="ds_monitor",
     name="DeepSeek 网页更新监测",
-    version="0.5.4",
+    version=VERSION,
     description=(
         f"定期检查 DeepSeek Chat、官网、Harness、Platform 和 API Docs 变更，DeepSeek {ANALYZE_MODEL} 分析后推送通知；"
         "同时盯服务状态页的故障 / 恢复事件"
@@ -97,7 +98,7 @@ _last_change_times: dict[str, datetime] = {}
 _last_change_summaries: dict[str, str] = {}
 _active_output_target: str | None = None
 
-_client: "IcaClient | None" = None
+_client: IcaClient | None = None
 _watch_process: subprocess.Popen[str] | None = None
 _watch_thread: threading.Thread | None = None
 _watch_lock = threading.Lock()
@@ -969,7 +970,7 @@ def cooling_down(last_at: float) -> bool:
     return time.monotonic() - last_at < COMMAND_COOLDOWN_SECS
 
 
-def is_admin(msg: "IcaNewMessage", client: "IcaClient") -> bool:
+def is_admin(msg: IcaNewMessage, client: IcaClient) -> bool:
     return msg.sender_id in client.status.admins
 
 
@@ -1310,11 +1311,8 @@ def do_check(room_id: int | None = None) -> None:
 
 
 def on_load() -> None:
-    # 宿主会在每条消息前按文件哈希热重载插件，并且把模块代码执行进**同一个模块对象**。
-    # 如果扫描恰好撞上"文件正在被编辑"的瞬间（先出现调用、后出现定义），
-    # 模块能编译通过但初始化会抛 NameError，插件就被留在 Disabled 状态，
-    # 之后既 enable 不了也 reload 不了（reload 要求插件处于启用状态），只能重启 bot。
-    # 这里兜住初始化异常：最坏情况是带默认值启用 + 日志报错，下一次热重载就能自愈。
+    # PluginHost 会先构造候选代并执行 on_load；候选失败时保留旧代。
+    # 本地配置错误属于可降级问题，继续使用内置默认值，避免首次加载时禁用插件。
     try:
         load_config()
     except Exception as exc:
@@ -1336,7 +1334,7 @@ def on_unload() -> None:
     log("卸载")
 
 
-def on_ica_message(msg: "IcaNewMessage", client: "IcaClient") -> None:
+def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
     global _client
 
     if _client is None or _client.client_id != client.client_id:
@@ -1382,7 +1380,7 @@ def on_ica_message(msg: "IcaNewMessage", client: "IcaClient") -> None:
         cmd_help(msg, client)
 
 
-def cmd_status(msg: "IcaNewMessage", client: "IcaClient") -> None:
+def cmd_status(msg: IcaNewMessage, client: IcaClient) -> None:
     lines = [
         "🔍 DS 监测：DeepSeek 网页监测",
         f"插件版本: {PLUGIN_MANIFEST.version}",
@@ -1460,7 +1458,7 @@ def cmd_status(msg: "IcaNewMessage", client: "IcaClient") -> None:
     client.send_message(msg.reply_with("\n".join(lines)))
 
 
-def cmd_check(msg: "IcaNewMessage", client: "IcaClient") -> None:
+def cmd_check(msg: IcaNewMessage, client: IcaClient) -> None:
     global _enabled, _last_restart_cmd_at
 
     if cooling_down(_last_restart_cmd_at):
@@ -1760,7 +1758,7 @@ def publish_once(notify_room: bool) -> str:
     return report
 
 
-def cmd_deploy(msg: "IcaNewMessage", client: "IcaClient") -> None:
+def cmd_deploy(msg: IcaNewMessage, client: IcaClient) -> None:
     """`/monitor deploy`：立刻导出并部署一次看板（管理员 + 冷却）。
 
     自动发布没开、或自动发布失败要救急时用它；导出与部署都在 deploy.ps1 里完成，
@@ -1792,7 +1790,7 @@ def cmd_deploy(msg: "IcaNewMessage", client: "IcaClient") -> None:
     threading.Thread(target=deploy, daemon=True).start()
 
 
-def cmd_update(msg: "IcaNewMessage", client: "IcaClient") -> None:
+def cmd_update(msg: IcaNewMessage, client: IcaClient) -> None:
     """`/monitor update`：构建 release、刷新运行副本、重启 watch。
 
     watch 锁住的是副本，所以这里可以放心停掉它再覆盖构建产物：
@@ -1903,7 +1901,7 @@ def cmd_update(msg: "IcaNewMessage", client: "IcaClient") -> None:
     threading.Thread(target=update, daemon=True).start()
 
 
-def cmd_status_page(msg: "IcaNewMessage", client: "IcaClient") -> None:
+def cmd_status_page(msg: IcaNewMessage, client: IcaClient) -> None:
     """`/monitor sp`：现场查询服务状态页，不重启 watch、不发通知。"""
     global _last_status_page_cmd_at
 
@@ -1923,7 +1921,7 @@ def cmd_status_page(msg: "IcaNewMessage", client: "IcaClient") -> None:
 
 
 def cmd_fingerprint(
-    msg: "IcaNewMessage", client: "IcaClient", raw_limit: str | None = None
+    msg: IcaNewMessage, client: IcaClient, raw_limit: str | None = None
 ) -> None:
     if raw_limit is None:
         limit = 5
@@ -1941,7 +1939,7 @@ def cmd_fingerprint(
 
 
 def cmd_last(
-    msg: "IcaNewMessage", client: "IcaClient", target_key: str | None = None
+    msg: IcaNewMessage, client: IcaClient, target_key: str | None = None
 ) -> None:
     global _last_recent_cmd_at
 
@@ -1953,7 +1951,7 @@ def cmd_last(
 
 
 def cmd_last_analyze(
-    msg: "IcaNewMessage", client: "IcaClient", target_key: str
+    msg: IcaNewMessage, client: IcaClient, target_key: str
 ) -> None:
     global _last_analyze_cmd_at
 
@@ -2002,7 +2000,7 @@ def cmd_last_analyze(
 
 
 def cmd_render_last(
-    msg: "IcaNewMessage", client: "IcaClient", target_key: str | None = None
+    msg: IcaNewMessage, client: IcaClient, target_key: str | None = None
 ) -> None:
     global _last_render_cmd_at
 
@@ -2037,7 +2035,7 @@ def cmd_render_last(
     threading.Thread(target=render_last, daemon=True).start()
 
 
-def cmd_enable(msg: "IcaNewMessage", client: "IcaClient", on: bool) -> None:
+def cmd_enable(msg: IcaNewMessage, client: IcaClient, on: bool) -> None:
     """`/monitor on|off`。
 
     `off` 只有管理员能做：停掉监测会让所有人收不到推送。`on` 谁都可以（发现监测停了，
@@ -2081,7 +2079,7 @@ def cmd_enable(msg: "IcaNewMessage", client: "IcaClient", on: bool) -> None:
     threading.Thread(target=enable, daemon=True).start()
 
 
-def cmd_help(msg: "IcaNewMessage", client: "IcaClient") -> None:
+def cmd_help(msg: IcaNewMessage, client: IcaClient) -> None:
     client.send_message(
         msg.reply_with(
             "🔍 DS 监测：DeepSeek 网页监测\n"
