@@ -7,7 +7,7 @@
 ## 范围和结果语义
 
 本轮对齐以 Icalingua++ 独立 **Socket.IO + oicq Bridge** 的事件注册、类型和实际实现为准，
-当前参考 Bridge 的 `protocolVersion` 为 `2.26.7`，本指南对应 Bot **0.9.5** / ICA API **2.0.6**。
+当前参考 Bridge 的 `protocolVersion` 为 `2.26.7`，本指南对应 Bot **0.9.6** / ICA API **2.0.6**。
 Bot 发布版本、Python ICA API、Bridge 服务版本和 `protocolVersion` 分别管理；版本变更见
 [更新日志](../CHANGELOG.md)。本文不扩展 Milky、OneBot 或 Tailchat 的兼容行为，
 也不将 native 的窗口、截图、录音、拖拽、消息菜单等桌面 UI 搬到插件宿主。
