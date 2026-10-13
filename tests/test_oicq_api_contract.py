@@ -139,7 +139,7 @@ class OicqApiContractTests(unittest.TestCase):
             if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
         }
         # 宿主发布版本与两个后端 API 分别管理，旧 _version_ 别名继续指向宿主版本。
-        self.assertEqual(ast.literal_eval(versions["__version__"]), "0.9.4")
+        self.assertEqual(ast.literal_eval(versions["__version__"]), "0.9.5")
         self.assertEqual(ast.unparse(versions["_version_"]), "__version__")
         self.assertEqual(ast.literal_eval(versions["_ica_version_"]), "2.0.6")
         self.assertEqual(ast.literal_eval(versions["_tailchat_version_"]), "2.0.0")

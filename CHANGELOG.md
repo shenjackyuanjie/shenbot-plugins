@@ -2,6 +2,13 @@
 
 宿主版本对应 [shenbot_api.py](shenbot_api.py) 的 `__version__`；ICA/Tailchat API 与各插件的 `VERSION` 分别管理。
 
+## shenbot 0.9.5 / ICA API 2.0.6
+
+- 宿主声明由 **0.9.4 → 0.9.5**，ICA API 仍为 **2.0.6**，Tailchat API 仍为 **2.0.0**；方法、hook 和插件版本保持不变。
+- 同步 Bot 接收兼容说明：历史/引用文件可没有下载 URL，附件 `url` 规范化为空字符串，仍保留 `fid` 与大小；坏可选字段或引用不会连带丢失合法正文。
+- `raw_data` 保留完整输入，结构化 getter 返回可用的规范化值；未知接收 @ 标记和无效原时间返回 `None`。关键消息身份、来源房间和更新补丁继续严格校验。
+- 无效 Bridge 事件首次警告，同类重复事件每 30 秒最多一次聚合提示，不原样记录消息内容；同步版本契约与 API 指南。
+
 ## shenbot 0.9.4 / ICA API 2.0.6
 
 ### 版本与 API

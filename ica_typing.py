@@ -311,7 +311,7 @@ class IcaNewMessage:
 
     @property
     def files(self) -> list[dict]:
-        """2.0.6：附件结构列表，保留 type/url/fid/size 等 Bridge 字段。"""
+        """2.0.6：合法附件结构列表；未解析 URL 的历史/引用附件仍保留 fid，url 为空字符串。"""
         ...
 
     @property
@@ -321,7 +321,7 @@ class IcaNewMessage:
 
     @property
     def at(self) -> bool | Literal["all"] | None:
-        """2.0.6：接收消息的提及标记；True 为提及本账号，'all' 为全体成员。"""
+        """2.0.6：接收提及标记；True 为提及本账号，'all' 为全体成员，未知标记为 None。"""
         ...
 
     @property
@@ -331,12 +331,12 @@ class IcaNewMessage:
 
     @property
     def time(self) -> int | None:
-        """2.0.6：原消息包含 time 时返回规范化毫秒时间戳，缺失时为 None。"""
+        """2.0.6：有效原时间返回规范化毫秒时间戳，缺失或无效时为 None，0 为有效时间。"""
         ...
 
     @property
     def raw_data(self) -> dict:
-        """2.0.6：完整规范化 Bridge 消息对象，区别于原协议链 raw_msg。"""
+        """2.0.6：完整 Bridge 输入，包含降级字段原值；区别于当前 to_dict() 快照及协议链 raw_msg。"""
         ...
 
     @property

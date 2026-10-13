@@ -7,7 +7,7 @@
 ## 范围和结果语义
 
 本轮对齐以 Icalingua++ 独立 **Socket.IO + oicq Bridge** 的事件注册、类型和实际实现为准，
-当前参考 Bridge 的 `protocolVersion` 为 `2.26.7`，本指南对应 Bot **0.9.4** / ICA API **2.0.6**。
+当前参考 Bridge 的 `protocolVersion` 为 `2.26.7`，本指南对应 Bot **0.9.5** / ICA API **2.0.6**。
 Bot 发布版本、Python ICA API、Bridge 服务版本和 `protocolVersion` 分别管理；版本变更见
 [更新日志](../CHANGELOG.md)。本文不扩展 Milky、OneBot 或 Tailchat 的兼容行为，
 也不将 native 的窗口、截图、录音、拖拽、消息菜单等桌面 UI 搬到插件宿主。
@@ -54,15 +54,20 @@ QQ 已读，所以 `/bot-history` 不是“完全没有副作用的数据库只�
 | `files` | `list[dict]`，附件的 `type/url/fid/size` 及其他 Bridge 字段 |
 | `file` | `dict | None`，可选单附件；多附件优先使用 `files` |
 | `at` | `bool | Literal["all"] | None`；`True` 表示提及当前账号，`"all"` 表示全体成员，不是 QQ 号列表 |
-| `time` | `int | None`，有原消息时间时规范化为毫秒，缺失时为 `None`；`0` 是有效时间 |
+| `time` | `int | None`，有有效原消息时间时规范化为毫秒，缺失或无效时为 `None`；`0` 是有效时间 |
 | `code` | JSON，常见为 `str | None`；不要假定所有 code 都是转发资源 ID |
 | `reply` | `dict | None`，结构化 `replyMessage` 快照，可能包含附件 |
 | `deleted/hide/reveal/markdown` | `bool`，消息状态或呈现标记 |
 | `button_rows` | `list`，Bridge 按钮结构 |
 | `recall_info` | `str | None`，撤回附加信息，保留本体结构 |
-| `raw_data` / `to_dict()` | 完整规范化 Bridge 消息 `dict`，适合持久化/业务转换；不是原始协议链 |
+| `raw_data` / `to_dict()` | 前者保留收到的完整 Bridge 输入及降级字段原值，后者输出当前模型的规范化 `dict`；均不是原始协议链 |
 | `raw_msg` | JSON 或 `None`，消息携带的原协议链；规范化消息可能没有该链 |
 | `to_forward_node()` | `dict`，构造成本体 `FakeMessage`；优先原链，否则按可用正文/图片/语音 fid 重建 |
+
+Bot 0.9.5 接收侧参考 native 的逐字段容错：历史/引用附件没有 `url` 时使用空字符串，仍保留
+`fid`、大小及扩展信息；坏附件只跳过该项，坏可选元数据或引用不阻断合法正文。未知 @ 标记
+返回 `None`，不冒充全体提及。消息 ID、来源房间和显式错误的正文/昵称仍校验，更新补丁保持
+严格、原子应用。无效事件首次警告，同类重复事件后续每 30 秒最多一次，并汇总拒收数量。
 
 媒体 URL、cookies、原始消息及回复正文可能含敏感数据。根据任务需要消费相应字段，不将整个
 `raw_data` 或 ACK 原样输出到日志/聊天。`to_forward_node()` 对普通附件仅保留说明，不冒造

@@ -8,9 +8,9 @@
 - `plugins/*.py_disable`：明确停用的插件源码；不会被 Bot 扫描。
 - `plugins/<name>/`：插件共用的辅助包或资源，不作为独立插件加载。
 
-## shenbot 0.9.4 / Socket.IO + oicq API 2.0.6
+## shenbot 0.9.5 / Socket.IO + oicq API 2.0.6
 
-宿主声明同步到 **0.9.4**，ICA API 为 **2.0.6**，Tailchat API 保持 **2.0.0**。
+宿主声明同步到 **0.9.5**，ICA API 为 **2.0.6**，Tailchat API 保持 **2.0.0**。
 版本和插件变更见 [更新日志](CHANGELOG.md)。
 
 本轮以 Icalingua++ 实际 **Socket.IO + oicq Bridge** 对齐 Bot 可消费的数据与操作 API，

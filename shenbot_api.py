@@ -4,7 +4,7 @@ import datetime
 
 from typing import Callable, Union
 
-__version__: str = "0.9.4"
+__version__: str = "0.9.5"
 _version_: str = __version__
 
 _ica_version_: str = "2.0.6"
