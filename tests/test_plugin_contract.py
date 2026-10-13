@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import ast
+import re
 import unittest
 from pathlib import Path
-
 
 ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_DIR = ROOT / "plugins"
@@ -14,6 +14,8 @@ SUPPORTED_HOOKS = {
     "on_ica_system_message": ("IcaNewMessage", "IcaClient"),
     "on_ica_delete_message": ("IcaType.MessageId", "IcaClient"),
     "on_ica_join_request": ("IcaJoinRequest", "IcaClient"),
+    "on_ica_message_updated": ("IcaClient", "int", "str", "dict"),
+    "on_ica_bridge_event": ("IcaClient", "str", "list[JSON]"),
     "on_tailchat_message": ("TailchatReciveMessage", "TailchatClient"),
 }
 
@@ -30,10 +32,23 @@ def assigned_value(tree: ast.Module, name: str) -> ast.expr | None:
                 for target in node.targets
             ):
                 return node.value
-        elif isinstance(node, ast.AnnAssign):
-            if isinstance(node.target, ast.Name) and node.target.id == name:
-                return node.value
+        elif (
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.target.id == name
+        ):
+            return node.value
     return None
+
+
+def declared_distribution_names(requirements: str) -> set[str]:
+    """依赖覆盖检查使用包名，不把版本、extras、marker 当作包名的一部分。"""
+    names: set[str] = set()
+    for line in requirements.splitlines():
+        match = re.match(r"[A-Za-z0-9][A-Za-z0-9._-]*", line.strip())
+        if match:
+            names.add(re.sub(r"[-_.]+", "-", match.group(0)).lower())
+    return names
 
 
 def keyword_value(call: ast.Call, name: str) -> ast.expr | None:
@@ -161,13 +176,9 @@ class PluginContractTests(unittest.TestCase):
             "selenium": "selenium",
             "tomli": "tomli",
         }
-        declared = {
-            line.strip().lower()
-            for line in (ROOT / "requirements.txt")
-            .read_text(encoding="utf-8")
-            .splitlines()
-            if line.strip() and not line.lstrip().startswith("#")
-        }
+        declared = declared_distribution_names(
+            (ROOT / "requirements.txt").read_text(encoding="utf-8")
+        )
         sources = [*PLUGIN_DIR.rglob("*.py"), *PLUGIN_DIR.glob("*.py_disable")]
         imported: set[str] = set()
         for path in sources:
@@ -182,6 +193,19 @@ class PluginContractTests(unittest.TestCase):
             if module in imported
         }
         self.assertEqual(required - declared, set())
+
+    def test_dependency_coverage_accepts_versioned_extras_and_named_urls(self) -> None:
+        declarations = """
+        # 依赖升级后仍应匹配插件 import，不要求整行等于包名。
+        Pillow>=11.0,<13
+        psycopg[binary]==3.2.6 ; python_version >= "3.8"
+        demo_pkg @ https://example.invalid/demo.whl
+        -r optional-requirements.txt
+        """
+        self.assertEqual(
+            declared_distribution_names(declarations),
+            {"pillow", "psycopg", "demo-pkg"},
+        )
 
     def test_disabled_plugins_use_explicit_suffix_and_still_parse(self) -> None:
         self.assertEqual(list(PLUGIN_DIR.glob("*.pyi")), [])
