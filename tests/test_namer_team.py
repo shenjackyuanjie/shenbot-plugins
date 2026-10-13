@@ -81,17 +81,23 @@ class NamerTeamTests(unittest.TestCase):
             1: ["12.345 mario"],
             2: ["67.890 mario+luigi"],
         }
-        # 目标列表来自 tswn-openbox 仓库，mock 掉以免依赖本地检出
+        # 只验证单/双人分组路由；资源定位、DIY 转换和计算均 mock，不执行外部 tswn。
         target1 = Path("target1.txt")
         target2 = Path("target2.txt")
 
+        def fake_convert(input_file, output_file):
+            output_file.write_text(input_file.read_text(encoding="utf-8"), encoding="utf-8")
+
         def fake_run(player_file, target_file, target_factored=False):
             text = player_file.read_text(encoding="utf-8").strip()
-            return fake_results[2 if "mario+luigi" in text else 1]
+            count = 2 if "mario+luigi" in text else 1
+            self.assertEqual(target_file, target2 if count == 2 else target1)
+            self.assertFalse(target_factored)
+            return fake_results[count]
 
         with patch.object(namerena, "_run_tswn_cqp_file", side_effect=fake_run), patch.object(
             namerena, "_find_tswn_openbox_assets", return_value=(target1, target2)
-        ):
+        ), patch.object(namerena, "_run_tswn_to_diy_file", side_effect=fake_convert):
             output = namerena.run_tswn_cqp(["mario", "mario+luigi"])
             self.assertEqual(output.splitlines()[0], "12.345 mario")
             self.assertEqual(output.splitlines()[1].split(None, 1)[1], "mario+luigi")
