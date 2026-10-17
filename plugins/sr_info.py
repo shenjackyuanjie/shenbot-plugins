@@ -41,7 +41,7 @@ SHIP_URL_PREFIX = "http://jundroo.com/ViewShip.html?id="
 API_URL: str
 
 cfg = ConfigStorage(
-    api_url="http://192.168.3.46:5110",
+    api_url="http://192.168.3.52:10002",
 )
 
 PLUGIN_MANIFEST = PluginManifest(
