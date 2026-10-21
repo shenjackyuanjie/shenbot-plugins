@@ -8,6 +8,15 @@
 - Bot 恢复原有 `new_msg`、`set_messages` 和 `messageSuccess` 彩色终端输出；正常业务显示与无效事件的聚合警告分开，接收容错、缓存和插件事件投递保持。
 - 同步版本契约与指南；`messageSuccess` 仍是广播提示，不作为单次发送的确定成功回执。
 
+### 名竞小工具 0.11.0
+
+- 新增 `/namer-todiy`：把名字导出成 `+ol:{...}` 覆盖格式，与 Openbox 的 `to-diy` 面板同一套实现，一行对应一组。
+- 组内多个号改用 `++` 分隔输出：`+ol:{...}` 的技能强化值本身带 `+`，而单 `+` 拼接的无队伍双号会被 tswn 当成「一个号 + 武器」，回读后只剩一个号。输入侧同理，`mario+luigi` 需写成 `mario++luigi`。
+- 同一个组里的同队号先算组队加成再冻结进导出，数字与 `/namer-team` 逐项一致；分成两行输入则不成组、不互相加成。
+- 转换复用 `tswn-cli to-diy -f … -o …` 的文件模式（stdout 带 CLI banner，只有 `-o` 写出的文件是纯结果），缺少 `tswn-cli` 时提示配置 `tswn_cli_path`；行数不一致会直接报错而不是静默错位。
+- 新增 [namer 命令说明](docs/namer-commands.md)：命令表、外部依赖与配置项、`/namer-todiy` 的导出格式与回读约定。
+- 新增 [test_namer_todiy.py](tests/test_namer_todiy.py)：离线用例覆盖分隔符、技能值里的 `+`、行数校验与错误分支；装有 `tswn-cli` 时额外校验真实导出、`++` 往返、组队加成与 `/namer-team` 一致性。
+
 ## shenbot 0.9.5 / ICA API 2.0.6
 
 - 宿主声明由 **0.9.4 → 0.9.5**，ICA API 仍为 **2.0.6**，Tailchat API 仍为 **2.0.0**；方法、hook 和插件版本保持不变。

@@ -43,7 +43,7 @@ if TYPE_CHECKING:
         TailchatReciveMessage,
     )
 
-VERSION = "0.10.4"
+VERSION = "0.11.0"
 
 CMD_PREFIX = "/namer"
 
@@ -66,6 +66,7 @@ PAIR_COMMANDS = {
 CONVERT_CMD = f"{CMD_PREFIX}-peek"
 CONVERT_RAW_CMD = f"{CMD_PREFIX}-peeks"
 BASE_CMD = f"{CMD_PREFIX}-base"
+TODIY_CMD = f"{CMD_PREFIX}-todiy"
 TEAM_CMD = f"{CMD_PREFIX}-team"
 TEAM_RAW_CMD = f"{CMD_PREFIX}-teams"
 FIGHT_CMD = f"{CMD_PREFIX}-fight"
@@ -85,6 +86,7 @@ PF
 - /namer-cp /namer-fp /namer-wcp /namer-fsp /namer-pjp - Openbox 队友评测
 - {CONVERT_CMD} - 查看一个名字的属性, 每一行一个名字
 - {CONVERT_RAW_CMD} - 查看一个名字的属性, 技能按原始顺序输出
+- {TODIY_CMD} - 把名字导出成 +ol 覆盖格式 (对齐 Openbox 的 to-diy), 每行一个名字, 组内多个号用 ++ 连接
 - {BASE_CMD} - base 工具, 只支持单个名字 (避免刷屏)
 - {TEAM_CMD} - 查看同队加成后的属性和熟练度, 每行一个名字
 - {TEAM_RAW_CMD} - 查看同队加成后的属性和熟练度, 技能按原始顺序输出
@@ -676,6 +678,27 @@ def _find_tswn_backend_assets() -> Path | None:
     return None
 
 
+def _split_ol_group(line: str) -> list[str]:
+    """把一个组的导出文本切成组内每个号。
+
+    只能按 `+ol:` 标记扫描：技能强化值里带 `+`（例如 `"17+5"`），直接按 `+`
+    切会把 JSON 拆坏。组内分隔符可能是 `+` 也可能是 `++`，都按分隔符跳过。
+    """
+    decoder = json.JSONDecoder()
+    values = []
+    cursor = 0
+    while cursor < len(line):
+        while cursor < len(line) and line[cursor] == "+":
+            cursor += 1
+        marker = line.find("+ol:", cursor)
+        if marker < 0:
+            raise RuntimeError("无法解析 tswn DIY 组输出")
+        _, json_end = decoder.raw_decode(line, marker + len("+ol:"))
+        values.append(line[cursor:json_end])
+        cursor = json_end
+    return values
+
+
 def _prepare_weighted_target_diy(source: Path, output: Path) -> None:
     data = tomllib.loads(source.read_text(encoding="utf-8"))
     targets = data.get("targets", [])
@@ -689,25 +712,7 @@ def _prepare_weighted_target_diy(source: Path, output: Path) -> None:
     if len(converted_groups) != len(raw_groups):
         raise RuntimeError("靶子 DIY 转换后的组数量不一致")
 
-    decoder = json.JSONDecoder()
-
-    def split_converted_group(line: str) -> list[str]:
-        values = []
-        cursor = 0
-        while cursor < len(line):
-            if line[cursor] == "+":
-                cursor += 1
-            marker = line.find("+ol:", cursor)
-            if marker < 0:
-                raise RuntimeError("无法解析 tswn DIY 组输出")
-            name = line[cursor:marker]
-            json_start = marker + len("+ol:")
-            _, json_end = decoder.raw_decode(line, json_start)
-            values.append(name + line[marker:json_end])
-            cursor = json_end
-        return values
-
-    converted = [split_converted_group(line) for line in converted_groups]
+    converted = [_split_ol_group(line) for line in converted_groups]
     lines = []
     for target, players in zip(targets, converted):
         factor = target.get("factor")
@@ -736,6 +741,33 @@ def _run_tswn_to_diy_file(input_file: Path, output_file: Path) -> None:
     if result.returncode != 0:
         details = (result.stderr or result.stdout).strip()
         raise RuntimeError(f"tswn DIY 转换失败（exit {result.returncode}）\n{details[-800:]}")
+
+
+def _run_tswn_to_diy_names(names: list[str]) -> list[str]:
+    """把名字按行交给 tswn-cli 的 to-diy，返回每行对应的 `+ol` 文本。
+
+    `to-diy` 的标准输出带 CLI banner，只有 `-o` 写出的文件是纯转换结果，
+    所以统一走文件模式；批次输出与输入行严格一一对应。
+
+    组内多个号之间改用 `++` 连接：`+ol:{...}` 里的技能强化值本身就带 `+`
+    （`"17+5"`），单 `+` 拼出来的双号没有 `@队伍` 时会被 tswn 当成“一个号 +
+    武器”，回读后两个号只剩一个。
+    """
+    with tempfile.TemporaryDirectory(prefix="namer_todiy_") as temp:
+        names_file = Path(temp) / "names.txt"
+        diy_file = Path(temp) / "diy.txt"
+        names_file.write_text("\n".join(names) + "\n", encoding="utf-8")
+        _run_tswn_to_diy_file(names_file, diy_file)
+        converted = [
+            line.strip()
+            for line in diy_file.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+    if len(converted) != len(names):
+        raise RuntimeError(
+            f"DIY 转换结果行数不一致（输入 {len(names)} 行, 输出 {len(converted)} 行）"
+        )
+    return ["++".join(_split_ol_group(line)) for line in converted]
 
 
 def run_tswn_pair_scores(players: list[str], teammate_file: Path, head: int) -> str:
@@ -1123,6 +1155,45 @@ def convert_team(
         for index, player in enumerate(players)
     )
     client.send_message(msg.reply_with(f"{output}\n版本: {VERSION}"))
+
+
+def cmd_to_diy(msg: ReciveMessage, client: IcaClient | TailchatClient) -> None:
+    """把名字导出成 `+ol` 覆盖格式, 对齐 Openbox 的 to-diy。"""
+    if "\n" not in msg.content:
+        client.send_message(
+            msg.reply_with(
+                f"请使用 {TODIY_CMD} 命令，然后换行输入名字，例如：\n"
+                f"{TODIY_CMD}\n名字A@队伍+名字B@队伍\n名字C\n"
+                "组内多个号两边都有 @队伍 时用 + 连接; 无队伍的组要用 ++, "
+                "否则会被当成一个号 + 武器\n"
+                "导出的组内分隔符统一是 ++ (同队加成已烘进导出)"
+            )
+        )
+        return
+
+    # 去掉 prefix 与第一个 \n, 其余按行取名字
+    names = msg.content[len(TODIY_CMD) :]
+    names = names[names.find("\n") + 1 :]
+    raw_names = [line.strip() for line in names.splitlines() if line.strip()]
+    if not raw_names:
+        client.send_message(msg.reply_with("请输入至少一个名字\n"))
+        return
+
+    if resolve_tswn_runner() is None:
+        client.send_message(
+            msg.reply_with(
+                "错误: 未找到 tswn-cli, 无法导出 +ol\n"
+                "请在 namer 配置里把 tswn_cli_path 指到 tswn-cli 的 exe 或仓库根目录"
+            )
+        )
+        return
+
+    try:
+        converted = _run_tswn_to_diy_names(raw_names)
+    except Exception as exc:
+        client.send_message(msg.reply_with(f"错误: DIY 转换失败\n{exc}"))
+        return
+    client.send_message(msg.reply_with("\n".join(converted)))
 
 
 def convert_base(msg: ReciveMessage, client: IcaClient | TailchatClient) -> None:
@@ -1537,6 +1608,8 @@ def dispatch_msg(msg: ReciveMessage, client: IcaClient | TailchatClient) -> None
         convert_team(msg, client)
     elif msg.content.startswith(BASE_CMD):
         convert_base(msg, client)
+    elif msg.content.startswith(TODIY_CMD):
+        cmd_to_diy(msg, client)
     elif msg.content.startswith(EVAL_PP_CMD):
         eval_score(msg, client, "!test!\n\n{test}")
     elif msg.content.startswith(EVAL_PD_CMD):

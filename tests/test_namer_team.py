@@ -127,6 +127,7 @@ class NamerTeamTests(unittest.TestCase):
             namerena.BASE_CMD,
             namerena.TEAM_CMD,
             namerena.TEAM_RAW_CMD,
+            namerena.TODIY_CMD,
         ):
             with self.subTest(command=command):
                 self.assertTrue(command.startswith(f"{namerena.CMD_PREFIX}-"))
