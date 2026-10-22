@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import random
+import threading
 import time
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -10,7 +11,7 @@ from shenbot_api import PluginManifest, Scheduler
 if TYPE_CHECKING:
     from ica_typing import IcaClient, IcaNewMessage
 
-VERSION = "0.3.2"
+VERSION = "0.3.3"
 CMD_PREFIX = "/bot-sign"
 HELP_CMD = f"{CMD_PREFIX} help"
 ALL_CMD = f"{CMD_PREFIX} all"
@@ -37,19 +38,28 @@ HELP_MSG = f"""bot sign v{VERSION} - 似乎有点用的自动签到
 
 """记录哪些群已经签过了"""
 SIGN_REC: dict[int, datetime] = {}
-"""记录明天计划啥时候签到"""
+"""记录当前有效的签到预约（包括今天和明天）"""
 SIGN_PLAN: dict[int, datetime] = {}
+_sign_tokens: dict[int, object] = {}
+_sign_lock = threading.RLock()
 
 SIGN_TIME = datetime.now()
 
 
 def reset_daily_state(now: datetime) -> None:
-    global SIGN_TIME, SIGN_REC, SIGN_PLAN
-    if now.date() == SIGN_TIME.date():
-        return
-    SIGN_TIME = now
-    SIGN_REC = SIGN_PLAN.copy()
-    SIGN_PLAN = {}
+    global SIGN_TIME
+    with _sign_lock:
+        if now.date() == SIGN_TIME.date():
+            return
+        SIGN_TIME = now
+        for room_id, signed_at in list(SIGN_REC.items()):
+            if signed_at.date() != now.date():
+                del SIGN_REC[room_id]
+        # 预约不等于已签到，跨日后仍保留其有效回调。
+        for room_id, planned_at in list(SIGN_PLAN.items()):
+            if planned_at.date() < now.date():
+                del SIGN_PLAN[room_id]
+                _sign_tokens.pop(room_id, None)
 
 
 def can_handle_message(msg: IcaNewMessage, client: IcaClient) -> bool:
@@ -77,10 +87,15 @@ def build_sign_plan(now: datetime, rooms: list[Any]) -> tuple[list[float], list[
 def send_room_signs(client: IcaClient, delays: list[float], rooms: list[Any]) -> list[str]:
     signed = []
     for delay, room in zip(delays, rooms):
-        client.send_room_sign_in(room.room_id)
-        signed.append(str(room.room_id))
+        with _sign_lock:
+            now = datetime.now()
+            if SIGN_REC.get(room.room_id, datetime.min).date() == now.date():
+                continue
+            if not client.send_room_sign_in(room.room_id):
+                continue
+            SIGN_REC[room.room_id] = now
+            signed.append(str(room.room_id))
         time.sleep(delay)
-        SIGN_REC[room.room_id] = datetime.now()
     return signed
 
 
@@ -133,60 +148,73 @@ def handle_sign_recent(
 
 
 def handle_sign_want(msg: IcaNewMessage, client: IcaClient) -> None:
-    msg_room_id = msg.room_id
+    room_id = msg.room_id
     try:
-        # 提取用户输入的时间（例如："12:34"）
-        time_str = msg.content.split()[2]
-        user_time = datetime.strptime(time_str, "%H:%M").time()
-        now = datetime.now()
+        parts = msg.content.split()
+        if len(parts) != 3 or parts[:2] != [CMD_PREFIX, "want"]:
+            raise ValueError("预约格式错误")
+        user_time = datetime.strptime(parts[2], "%H:%M").time()
+    except ValueError:
+        client.send_message(msg.reply_with(f"用法：{WANT_CMD} <HH:MM>，例如 13:00"))
+        return
 
-        # 创建目标时间（使用当前日期）
-        want_time = now.replace(
-            hour=user_time.hour,
-            minute=user_time.minute,
-            second=0,
-            microsecond=0,
-        )
-
-        # 如果当前时间已过目标时间，则计划到明天
-        if now >= want_time:
-            want_time += timedelta(days=1)
-            if msg_room_id in SIGN_PLAN:
-                if SIGN_PLAN[msg_room_id] >= want_time:
-                    SIGN_PLAN[msg_room_id] = want_time
-                    fmt_time = want_time.strftime("%m-%d %H:%M")
-                    client.send_message(msg.reply_with(f"将提前到 {fmt_time} 开始签到"))
-                else:
-                    fmt_time = SIGN_PLAN[msg_room_id].strftime("%H:%M")
-                    client.send_message(
-                        msg.reply_with(f"不是说在 {fmt_time} 签到吗, 怎么延后了")
-                    )
-                    return
-            else:
-                SIGN_PLAN[msg_room_id] = want_time
-                fmt_time = want_time.strftime("%m-%d %H:%M")
-                client.send_message(msg.reply_with(f"将在 {fmt_time} 开始签到"))
-        else:
-            if msg_room_id in SIGN_REC:
-                client.send_message(msg.reply_with("拜托, 签过了欸"))
+    now = datetime.now()
+    want_time = now.replace(
+        hour=user_time.hour, minute=user_time.minute, second=0, microsecond=0
+    )
+    if now >= want_time:
+        want_time += timedelta(days=1)
+    fmt_time = want_time.strftime("%m-%d %H:%M")
+    token = object()
+    with _sign_lock:
+        if SIGN_REC.get(room_id, datetime.min).date() == want_time.date():
+            client.send_message(msg.reply_with("拜托, 签过了欸"))
+            return
+        previous_time = SIGN_PLAN.get(room_id)
+        previous_token = _sign_tokens.get(room_id)
+        if previous_time is not None:
+            if previous_time == want_time:
+                client.send_message(msg.reply_with(f"已有 {fmt_time} 的签到预约，无需重复预约"))
                 return
+            if previous_time < want_time:
+                previous_text = previous_time.strftime("%m-%d %H:%M")
+                client.send_message(msg.reply_with(f"已有 {previous_text} 的签到预约，保留原计划"))
+                return
+        SIGN_PLAN[room_id] = want_time
+        _sign_tokens[room_id] = token
 
-            fmt_time = want_time.strftime("%m-%d %H:%M")
-            client.send_message(msg.reply_with(f"将在 {fmt_time} 开始签到"))
+    def callback() -> None:
+        with _sign_lock:
+            if _sign_tokens.get(room_id) is not token:
+                return
+            del _sign_tokens[room_id]
+            SIGN_PLAN.pop(room_id, None)
+            callback_now = datetime.now()
+            if callback_now.date() != want_time.date():
+                return
+            if SIGN_REC.get(room_id, datetime.min).date() == callback_now.date():
+                return
+            if not client.send_room_sign_in(room_id):
+                client.send_message(msg.reply_with("签到请求未受理，可重新预约"))
+                return
+            SIGN_REC[room_id] = callback_now
+        client.send_message(msg.reply_with("已提交当前群的签到请求"))
 
-        time_d = want_time - now
-
-        def callback() -> None:
-            client.send_room_sign_in(msg_room_id)
-            SIGN_REC[msg_room_id] = datetime.now()
-            client.send_message(msg.reply_with(f"已签到 {msg_room_id}"))
-
-        caller = Scheduler(callback, time_d)
-        caller.start()
-
-    except (IndexError, ValueError) as e:
-        # 处理输入格式错误
-        print(f"Invalid input: {e}")
+    try:
+        Scheduler(callback, want_time - now).start()
+    except Exception:
+        with _sign_lock:
+            if _sign_tokens.get(room_id) is token:
+                if previous_time is not None and previous_token is not None:
+                    SIGN_PLAN[room_id] = previous_time
+                    _sign_tokens[room_id] = previous_token
+                else:
+                    SIGN_PLAN.pop(room_id, None)
+                    _sign_tokens.pop(room_id, None)
+        client.send_message(msg.reply_with("创建签到预约失败，请稍后重试"))
+        return
+    action = "将提前到" if previous_time is not None else "将在"
+    client.send_message(msg.reply_with(f"{action} {fmt_time} 开始签到"))
 
 
 def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
