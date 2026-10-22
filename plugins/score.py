@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from ica_typing import IcaClient, IcaNewMessage
 
 
-VERSION = "0.3.2"
+VERSION = "0.3.3"
 USERNAME = ""
 PASSWORD = ""
 
@@ -138,16 +138,12 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
     if msg.sender_id not in client.status.admins:
         return
 
-    if _query_lock.locked():
+    if not _query_lock.acquire(blocking=False):
         client.send_message(msg.reply_with("成绩正在查询，请稍候。"))
         return
 
-    client.send_message(
-        msg.reply_with("正在查询成绩；如 Edge 出现安全验证，请手动完成。")
-    )
-
     def run_query() -> None:
-        with _query_lock:
+        try:
             try:
                 result = query_scores()
             except Exception as error:
@@ -155,5 +151,15 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
                 result = f"成绩查询失败：{message}"
             if not _shutdown.is_set():
                 client.send_message(msg.reply_with(result))
+        finally:
+            _query_lock.release()
 
-    threading.Thread(target=run_query, daemon=True).start()
+    try:
+        client.send_message(
+            msg.reply_with("正在查询成绩；如 Edge 出现安全验证，请手动完成。")
+        )
+        threading.Thread(target=run_query, daemon=True).start()
+    except Exception:
+        _query_lock.release()
+        client.warn("score：启动成绩查询失败")
+        client.send_message(msg.reply_with("启动成绩查询失败，请稍后重试。"))
