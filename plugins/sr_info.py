@@ -11,7 +11,7 @@ import requests
 if TYPE_CHECKING:
     from ica_typing import IcaNewMessage, IcaClient
 
-VERSION = "0.2.1"
+VERSION = "0.2.2"
 
 CMD_PREFIX = "/sr"
 HELP_CMD = f"{CMD_PREFIX} help"
@@ -99,10 +99,11 @@ def last_data(path: str) -> str:
 
 
 def get_ship_info(msg: IcaNewMessage, client: IcaClient):
-    if len(msg.content) <= len(INFO_CMD) + 1:
-        client.send_message(msg.reply_with("参数不足"))
+    parts = msg.content.split()
+    if len(parts) != 3 or parts[:2] != [CMD_PREFIX, "info"]:
+        client.send_message(msg.reply_with(f"用法：{INFO_CMD} <ID>，例如 /sr info 123456"))
         return
-    ship_id = msg.content[len(INFO_CMD) + 1 :]
+    ship_id = parts[2]
     if not ship_id.isdigit():
         client.send_message(msg.reply_with("ID 必须是数字"))
         return
