@@ -59,7 +59,7 @@ if TYPE_CHECKING:
 from shenbot_api import PluginManifest, ConfigStorage
 
 # 分析所用模型名，统一从这里取，避免各处文案写成不同版本
-VERSION = "0.5.4"
+VERSION = "0.5.5"
 ANALYZE_MODEL = "V41F"
 
 PLUGIN_MANIFEST = PluginManifest(
@@ -113,7 +113,6 @@ _last_status_snapshot: str = ""
 # watch 进程代次：重启后加一，用于丢弃旧进程残留的输出行
 _watch_generation: int = 0
 _last_restart_cmd_at: float = 0.0
-_last_recent_cmd_at: float = 0.0
 _last_analyze_cmd_at: float = 0.0
 _last_render_cmd_at: float = 0.0
 _last_status_page_cmd_at: float = 0.0
@@ -163,6 +162,7 @@ CYCLE_WAIT_SECS = 300.0
 WEB_TARGET_KEYS = ("chat", "official", "harness", "platform", "docs")
 TARGET_OPTIONS = "、".join(WEB_TARGET_KEYS)
 TARGET_HELP = "|".join(WEB_TARGET_KEYS)
+CHANGE_PAGE_SIZE = 8
 
 CYCLE_TARGET_LABELS = {
     "chat": "Chat",
@@ -993,10 +993,27 @@ def changed_files_from_diff(diff: str) -> list[str]:
         elif line.startswith("=== RESOURCE UNIFIED DIFF: "):
             name = line.removeprefix("=== RESOURCE UNIFIED DIFF: ").removesuffix(" ===")
             files.append(name)
-    return files[:8]
+    return files
 
 
-def latest_web_change_report(target: MonitorTarget) -> str:
+def change_page_lines(items: list[str], target_key: str, page: int) -> list[str]:
+    total = len(items)
+    pages = max(1, (total + CHANGE_PAGE_SIZE - 1) // CHANGE_PAGE_SIZE)
+    if not 1 <= page <= pages:
+        return [f"页码超出范围，共 {total} 项，可选页码 1-{pages}"]
+    start = (page - 1) * CHANGE_PAGE_SIZE
+    shown = items[start : start + CHANGE_PAGE_SIZE]
+    lines = [f"共 {total} 项，第 {page}/{pages} 页，显示 {len(shown)} 项"]
+    lines.extend(shown or ["暂无变更条目"])
+    remaining = total - start - len(shown)
+    if remaining:
+        lines.append(f"后续还有 {remaining} 项，下一页：/monitor last {target_key} {page + 1}")
+    if page > 1:
+        lines.append(f"上一页：/monitor last {target_key} {page - 1}")
+    return lines
+
+
+def latest_web_change_report(target: MonitorTarget, page: int = 1) -> str:
     if not os.path.isdir(target.output):
         return f"{target.label}: 还没有历史输出目录 ({target.output})"
 
@@ -1037,9 +1054,10 @@ def latest_web_change_report(target: MonitorTarget) -> str:
             f"SHA256: {str(metadata.get('sha256') or 'N/A')[:12]}",
             f"Diff: +{add}/-{delete} 行",
         ]
-        if changed_files:
-            lines.append("变更范围:")
-            lines.extend(f"  - {file}" for file in changed_files)
+        lines.append("变更范围:")
+        lines.extend(change_page_lines(
+            [f"  - {file}" for file in changed_files], target.key, page
+        ))
         if target.key in _last_change_summaries:
             lines.append(f"运行摘要:\n{_last_change_summaries[target.key]}")
         lines.append(f"目录: {name}")
@@ -1048,7 +1066,7 @@ def latest_web_change_report(target: MonitorTarget) -> str:
     return f"{target.label}: 还没有记录到带 diff 的历史网页修改"
 
 
-def latest_docs_change_report(target: MonitorTarget) -> str:
+def latest_docs_change_report(target: MonitorTarget, page: int = 1) -> str:
     changes_dir = os.path.join(target.output, "changes")
     try:
         names = sorted(os.listdir(changes_dir), reverse=True)
@@ -1078,16 +1096,19 @@ def latest_docs_change_report(target: MonitorTarget) -> str:
             f"时间: {manifest.get('timestamp', name)}",
             f"页面: {len(entries)}（新增 {counts['added']} · 更新 {counts['updated']} · 删除 {counts['removed']}）",
         ]
-        for entry in entries[:8]:
-            lines.append(
-                f"  - [{entry.get('kind', 'unknown')}] {entry.get('title') or entry.get('url', 'N/A')}"
-            )
+        items = [
+            f"  - [{entry.get('kind', 'unknown')}] {entry.get('title') or entry.get('url', 'N/A')}"
+            for entry in entries
+        ]
+        if len(entries) == 1 and entries[0].get("url"):
+            items[0] += f"\n链接: {entries[0]['url']}"
+        lines.extend(change_page_lines(items, target.key, page))
         lines.append(f"清单: {os.path.relpath(manifest_path, target.output)}")
         return "\n".join(lines)
     return f"{target.label}: 还没有历史变更 manifest"
 
 
-def latest_change_report(target_key: str | None = None) -> str:
+def latest_change_report(target_key: str | None = None, page: int = 1) -> str:
     targets = _target_configs
     if target_key is not None:
         target = targets.get(target_key)
@@ -1096,9 +1117,9 @@ def latest_change_report(target_key: str | None = None) -> str:
         if not target.enabled:
             return ds(f"{target.label} 监测未启用")
         reports = [
-            latest_docs_change_report(target)
+            latest_docs_change_report(target, page)
             if target.key == "docs"
-            else latest_web_change_report(target)
+            else latest_web_change_report(target, page)
         ]
     else:
         reports = []
@@ -1106,9 +1127,9 @@ def latest_change_report(target_key: str | None = None) -> str:
             target = targets.get(key)
             if target is not None and target.enabled:
                 reports.append(
-                    latest_docs_change_report(target)
+                    latest_docs_change_report(target, page)
                     if target.key == "docs"
-                    else latest_web_change_report(target)
+                    else latest_web_change_report(target, page)
                 )
     if not reports:
         return ds("没有启用任何监测目标")
@@ -1362,8 +1383,8 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
         cmd_fingerprint(msg, client)
     elif len(parts) == 3 and parts[:2] == ["/monitor", "fp"]:
         cmd_fingerprint(msg, client, parts[2])
-    elif len(parts) == 3 and parts[:2] == ["/monitor", "last"]:
-        cmd_last(msg, client, parts[2])
+    elif len(parts) in (3, 4) and parts[:2] == ["/monitor", "last"]:
+        cmd_last(msg, client, parts[2], parts[3] if len(parts) == 4 else None)
     elif content == "/monitor last":
         cmd_last(msg, client)
     elif len(parts) == 4 and parts[:3] == ["/monitor", "render", "last"]:
@@ -1939,15 +1960,20 @@ def cmd_fingerprint(
 
 
 def cmd_last(
-    msg: IcaNewMessage, client: IcaClient, target_key: str | None = None
+    msg: IcaNewMessage,
+    client: IcaClient,
+    target_key: str | None = None,
+    page_text: str | None = None,
 ) -> None:
-    global _last_recent_cmd_at
-
-    if cooling_down(_last_recent_cmd_at):
+    try:
+        page = int(page_text) if page_text is not None else 1
+        if page < 1:
+            raise ValueError("页码应为正整数")
+    except ValueError:
+        client.send_message(msg.reply_with(ds("页码必须是正整数，用法：/monitor last <目标> [页码]")))
         return
-
-    _last_recent_cmd_at = time.monotonic()
-    client.send_message(msg.reply_with(latest_change_report(target_key)))
+    # 仅读本地摘要，允许连续翻页；联网和重分析命令仍沿用各自冷却。
+    client.send_message(msg.reply_with(latest_change_report(target_key, page)))
 
 
 def cmd_last_analyze(
@@ -2089,7 +2115,7 @@ def cmd_help(msg: IcaNewMessage, client: IcaClient) -> None:
             "/monitor update  - 管理员构建 release、刷新运行副本并重启 watch\n"
             "/monitor deploy  - 管理员立即导出并部署看板（Cloudflare Pages）\n"
             "/monitor last    - 汇总 Chat、官网、Harness、Platform、API Docs 最近修改\n"
-            f"/monitor last <{TARGET_HELP}> - 查看指定目标最近修改\n"
+            f"/monitor last <{TARGET_HELP}> [页码] - 查看最近修改，每页 8 项\n"
             "/monitor fp      - 查看最近 5 次指纹历史" + chr(10) + "/monitor fp <N>  - 查看最近 N 次指纹历史（1-20）" + chr(10) +
             f"/monitor render last [{TARGET_HELP}] - 发送最近分析四种主题图片\n"
             f"/monitor analyze last <{TARGET_HELP}> - 管理员重新分析指定目标（无限时长）\n"
