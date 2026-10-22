@@ -19,7 +19,7 @@ if TYPE_CHECKING:
         TailchatReciveMessage,
     )
 
-VERSION = "2.9.2-rs"
+VERSION = "2.9.3-rs"
 CMD_PREFIX = "/bmcl"
 BRRS_CMD = "/brrs"
 RANK_CMD = f"{CMD_PREFIX} rank"
@@ -362,34 +362,33 @@ def handle_bmcl_message(
     content = msg.content.strip()
     if "\n" in content:
         return
-    if not (content.startswith(CMD_PREFIX) or content.startswith(BRRS_CMD)):
+    parts = content.split(maxsplit=1)
+    if not parts or parts[0] not in (CMD_PREFIX, BRRS_CMD):
         return
+    command = parts[0]
+    arguments = parts[1].strip() if len(parts) == 2 else ""
 
     try:
+        if command == CMD_PREFIX and not arguments:
+            # 面板自身获取并缓存版本，避免冷启动重复请求版本接口。
+            bmcl_dashboard(msg, client)
+            return
+        if command == BRRS_CMD:
+            name = arguments
+            show_rank = bool(name)
+        else:
+            rank_parts = arguments.split(maxsplit=1)
+            show_rank = bool(rank_parts) and rank_parts[0] == "rank"
+            name = rank_parts[1].strip() if show_rank and len(rank_parts) == 2 else ""
+        if not show_rank:
+            client.send_message(msg.reply_with(HELP_MSG))
+            return
         if not ensure_backend_version(msg, client):
             return
-
-        if content.startswith(CMD_PREFIX):
-            if content == CMD_PREFIX:
-                bmcl_dashboard(msg, client)
-            elif content == RANK_CMD:
-                bmcl_rank_general(msg, client)
-            elif content.startswith(RANK_CMD) and len(content) > len(RANK_CMD) + 1:
-                name = content[len(RANK_CMD) + 1 :]
-                bmcl_rank(msg, client, name)
-            else:
-                reply = msg.reply_with(HELP_MSG)
-                client.send_message(reply)  # pyright: ignore reportArgumentType
-        elif content.startswith(BRRS_CMD):
-            if content == BRRS_CMD:
-                reply = msg.reply_with(HELP_MSG)
-                client.send_message(reply)  # pyright: ignore reportArgumentType
-            else:
-                name = content.split(" ")
-                if len(name) > 1:
-                    bmcl_rank(msg, client, name[1])
-        # elif content == "/bm93":
-        #     bangbang_img(msg, client)
+        if name:
+            bmcl_rank(msg, client, name)
+        else:
+            bmcl_rank_general(msg, client)
     except Exception:  # noqa
         report_msg = f"bmcl插件发生错误,请呼叫shenjack\n{traceback.format_exc()}"
         client.warn(report_msg)
