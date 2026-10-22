@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from ica_typing import IcaClient, IcaNewMessage
 
 
-VERSION = "0.9.2"
+VERSION = "0.9.4"
 CMD_PREFIX = "/hm"
 REQUEST_TIMEOUT = 10
 USER_AGENT = f"shenbot_hm_market/{VERSION}"
@@ -549,6 +549,10 @@ def _format_search_result(response: dict[str, Any], keyword: str) -> str:
     if not _has_value(total):
         total = len(apps)
 
+    if len(apps) == 1 and _to_int(total) == 1 and isinstance(apps[0], dict):
+        # 搜索已返回完整应用数据，复用单应用摘要，无需再次请求刷新。
+        return format_data({"data": {"full_info": apps[0], "cached": True}})
+
     lines = [f"搜索“{keyword}”：共匹配 {format_number(total)} 项，显示前 {len(apps)} 项"]
     for index, raw_app in enumerate(apps, 1):
         app = raw_app if isinstance(raw_app, dict) else {}
@@ -572,6 +576,8 @@ def _format_search_result(response: dict[str, Any], keyword: str) -> str:
             metrics.append(f"评分 {rating}")
         if metrics:
             lines.append(" | ".join(metrics))
+    if (_to_int(total) or 0) > len(apps):
+        lines.append("还有更多匹配结果，请补充应用名、包名或开发者关键词缩小范围")
     return "\n".join(lines)
 
 
@@ -605,7 +611,7 @@ def query_search(
 
 
 def _resolve_pkg_name(identifier: str) -> str | None:
-    if not re.match(r"^C\d+", identifier, re.IGNORECASE):
+    if not re.fullmatch(r"C\d+", identifier, re.IGNORECASE):
         return identifier
     response = request_api(
         f"apps/app_id/{quote(identifier, safe='')}",
@@ -803,17 +809,21 @@ def query_top(msg: IcaNewMessage, client: IcaClient) -> None:
     all_response = request_api("apps/list/1", params=params)
     exclude_params = {**params, "exclude_huawei": "true"}
     non_huawei_response = request_api("apps/list/1", params=exclude_params)
-    if all_response is None or non_huawei_response is None:
-        _send_text(msg, client, "累计下载量排行查询失败，请稍后重试")
-        return
-    all_apps = _extract_list(all_response)
-    non_huawei_apps = _extract_list(non_huawei_response)
-    if not all_apps or not non_huawei_apps:
-        _send_text(msg, client, "累计下载量排行暂无数据")
-        return
-    lines = _format_top_group("全部应用下载量前 5", all_apps[:5])
-    lines.append("")
-    lines.extend(_format_top_group("排除华为应用下载量前 5", non_huawei_apps[:5]))
+    lines = []
+    for title, response in (
+        ("全部应用下载量前 5", all_response),
+        ("排除华为应用下载量前 5", non_huawei_response),
+    ):
+        if lines:
+            lines.append("")
+        if response is None:
+            lines.append(f"{title}：查询失败，请稍后重试")
+            continue
+        apps = _extract_list(response)
+        if not apps:
+            lines.append(f"{title}：暂无数据")
+            continue
+        lines.extend(_format_top_group(title, apps[:5]))
     _send_text(msg, client, "\n".join(lines))
 
 
@@ -856,22 +866,21 @@ def query_up(msg: IcaNewMessage, client: IcaClient) -> None:
             "listed_days": 30,
         },
     )
-    if daily_response is None or recent_response is None:
-        _send_text(msg, client, "近期下载增量排行查询失败，请稍后重试")
-        return
-    daily_apps = _extract_list(daily_response)
-    recent_apps = _extract_list(recent_response)
-    if not daily_apps or not recent_apps:
-        _send_text(msg, client, "近期下载增量排行暂无数据")
-        return
-    lines = _format_up_group("最近一天下载增量前 5", daily_apps[:5])
-    lines.append("")
-    lines.extend(
-        _format_up_group(
-            "近 30 天上架且排除华为应用的最近一天增量前 5",
-            recent_apps[:5],
-        )
-    )
+    lines = []
+    for title, response in (
+        ("最近一天下载增量前 5", daily_response),
+        ("近 30 天上架且排除华为应用的最近一天增量前 5", recent_response),
+    ):
+        if lines:
+            lines.append("")
+        if response is None:
+            lines.append(f"{title}：查询失败，请稍后重试")
+            continue
+        apps = _extract_list(response)
+        if not apps:
+            lines.append(f"{title}：暂无数据")
+            continue
+        lines.extend(_format_up_group(title, apps[:5]))
     _send_text(msg, client, "\n".join(lines))
 
 
@@ -1002,7 +1011,12 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
                 pkg_name = get_id_from_link(line)
                 if pkg_name:
                     print(f"获取到新的应用链接: {pkg_name}")
-                    query_pkg(msg, client, pkg_name, "pkg_name")
+                    method = (
+                        "app_id"
+                        if re.fullmatch(r"C\d+", pkg_name, re.IGNORECASE)
+                        else "pkg_name"
+                    )
+                    query_pkg(msg, client, pkg_name, method)
         return
 
     if content.startswith(SUBSTANCE_PREFIX):
