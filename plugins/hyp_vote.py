@@ -7,7 +7,7 @@ from shenbot_api import PluginManifest
 if TYPE_CHECKING:
     from ica_typing import IcaClient, IcaNewMessage
 
-VERSION = "1.2.1"
+VERSION = "1.2.2"
 CMD_PREFIX = "/hyp"
 
 PLUGIN_MANIFEST = PluginManifest(
@@ -80,17 +80,25 @@ def hypvote(msg: IcaNewMessage, client: IcaClient, args: list[str]) -> None:
                 if msg.sender_id in votes[hour]:
                     del votes[hour][msg.sender_id]
     elif command == "clear":
+        if msg.sender_id not in client.status.admins:
+            client.send_message(msg.reply_with("只有管理员可以清空投票"))
+            return
         VOTE[msg.room_id] = gen_room()
+        client.send_message(msg.reply_with("已清空当前房间的投票"))
     elif command == "view":
+        if len(args) == 1 or any(
+            not x.isdigit() or not 0 <= int(x) < 24 for x in args[1:]
+        ):
+            client.send_message(msg.reply_with("用法：/hyp view <小时...>，小时为 0-23"))
+            return
         replys = "\n".join(
-            f"{x}: {','.join(votes[int(x) % 24].values())}"
+            f"{x}: {','.join(votes[int(x)].values()) or '暂无投票'}"
             for x in args[1:]
-            if x.isdigit()
         )
         reply = msg.reply_with(replys)
         client.send_message(reply)
     elif command == "ls":
-        res = fmt_vote(msg.room_id)
+        res = fmt_vote(msg.room_id) or "暂无投票"
         reply = msg.reply_with(res)
         client.send_message(reply)
     elif command == "help":
