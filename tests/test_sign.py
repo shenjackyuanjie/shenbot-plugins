@@ -55,33 +55,16 @@ class SignReservationTests(unittest.TestCase):
         self.assertNotIn(-1, sign.SIGN_PLAN)
 
     def test_earlier_reservation_invalidates_old_callback(self) -> None:
-        for first, earlier in (("15:00", "14:00"), ("10:00", "09:00")):
-            with self.subTest(first=first):
-                sign.SIGN_REC.clear()
-                sign.SIGN_PLAN.clear()
-                sign._sign_tokens.clear()
-                self.tasks.clear()
-                self.client.reset_mock()
-                self.now = datetime(2026, 10, 23, 12)
-                self.reserve(first)
-                self.reserve(earlier)
-                self.assertEqual(len(self.tasks), 2)
-                target = sign.SIGN_PLAN[-1]
-                self.now = target
-                self.tasks[0].callback()
-                self.client.send_room_sign_in.assert_not_called()
-                self.assertEqual(sign.SIGN_PLAN[-1], target)
-                self.tasks[1].callback()
-                self.now = target + timedelta(hours=1)
-                self.tasks[0].callback()
-                self.client.send_room_sign_in.assert_called_once_with(-1)
-
-    def test_later_reservation_keeps_original_plan(self) -> None:
-        self.reserve("13:00")
+        self.reserve("15:00")
         self.reserve("14:00")
-        self.assertEqual(len(self.tasks), 1)
-        self.assertEqual(sign.SIGN_PLAN[-1].hour, 13)
-        self.assertIn("保留原计划", self.client.send_message.call_args.args[0])
+        self.assertEqual(len(self.tasks), 2)
+        self.now = sign.SIGN_PLAN[-1]
+        self.tasks[0].callback()
+        self.client.send_room_sign_in.assert_not_called()
+        self.tasks[1].callback()
+        self.now += timedelta(hours=1)
+        self.tasks[0].callback()
+        self.client.send_room_sign_in.assert_called_once_with(-1)
 
     def test_midnight_preserves_pending_plan_without_marking_signed(self) -> None:
         self.reserve("10:00")
@@ -103,16 +86,6 @@ class SignReservationTests(unittest.TestCase):
         self.tasks[0].callback()
         self.client.send_room_sign_in.assert_called_once_with(-1)
 
-    def test_rejected_sign_can_be_reserved_again(self) -> None:
-        self.reserve("13:00")
-        self.now = self.now.replace(hour=13)
-        self.client.send_room_sign_in.return_value = False
-        self.tasks[0].callback()
-        self.assertNotIn(-1, sign.SIGN_REC)
-        self.assertNotIn(-1, sign.SIGN_PLAN)
-        self.reserve("14:00")
-        self.assertEqual(len(self.tasks), 2)
-
     def test_failed_reschedule_restores_previous_callback(self) -> None:
         self.reserve("15:00")
         self.now = self.now.replace(hour=12, minute=1)
@@ -124,34 +97,12 @@ class SignReservationTests(unittest.TestCase):
         self.tasks[0].callback()
         self.client.send_room_sign_in.assert_called_once_with(-1)
 
-    def test_scheduler_start_failure_clears_reservation_for_retry(self) -> None:
-        failed_task = Mock()
-        failed_task.start.side_effect = RuntimeError("启动失败")
-        with patch.object(sign, "Scheduler", return_value=failed_task):
-            self.reserve("13:00")
-        self.assertNotIn(-1, sign.SIGN_PLAN)
-        self.assertNotIn(-1, sign._sign_tokens)
-        self.reserve("13:00")
-        self.assertEqual(len(self.tasks), 1)
-
     def test_delayed_callback_does_not_sign_on_wrong_day(self) -> None:
         self.reserve("13:00")
         self.now = datetime(2026, 10, 24, 13)
         self.tasks[0].callback()
         self.client.send_room_sign_in.assert_not_called()
         self.assertNotIn(-1, sign.SIGN_PLAN)
-
-    def test_invalid_reservation_returns_usage_without_scheduling(self) -> None:
-        for content in (
-            "/bot-sign want",
-            "/bot-sign want 25:00",
-            "/bot-sign want13:00",
-            "/bot-sign want 13:00 extra",
-        ):
-            self.message.content = content
-            sign.handle_sign_want(self.message, self.client)
-            self.assertIn("用法", self.client.send_message.call_args.args[0])
-        self.assertEqual(self.tasks, [])
 
 
 if __name__ == "__main__":

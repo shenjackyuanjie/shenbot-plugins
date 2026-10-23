@@ -1,219 +1,59 @@
+"""只检查会使插件无法被宿主发现或调用的入口错误。"""
+
 from __future__ import annotations
 
 import ast
-import re
 import unittest
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-PLUGIN_DIR = ROOT / "plugins"
-SUPPORTED_HOOKS = {
-    "on_load": (),
-    "on_unload": (),
-    "on_ica_message": ("IcaNewMessage", "IcaClient"),
-    "on_ica_system_message": ("IcaNewMessage", "IcaClient"),
-    "on_ica_delete_message": ("IcaType.MessageId", "IcaClient"),
-    "on_ica_join_request": ("IcaJoinRequest", "IcaClient"),
-    "on_ica_message_updated": ("IcaClient", "int", "str", "dict"),
-    "on_ica_bridge_event": ("IcaClient", "str", "list[JSON]"),
-    "on_tailchat_message": ("TailchatReciveMessage", "TailchatClient"),
+PLUGIN_DIR = Path(__file__).resolve().parents[1] / "plugins"
+HOOK_ARITY = {
+    "on_load": 0,
+    "on_unload": 0,
+    "on_ica_message": 2,
+    "on_ica_system_message": 2,
+    "on_ica_delete_message": 2,
+    "on_ica_join_request": 2,
+    "on_ica_message_updated": 4,
+    "on_ica_bridge_event": 3,
+    "on_tailchat_message": 2,
 }
 
 
-def parse_source(path: Path) -> ast.Module:
-    return ast.parse(path.read_text(encoding="utf-8-sig"), filename=str(path))
-
-
-def assigned_value(tree: ast.Module, name: str) -> ast.expr | None:
-    for node in tree.body:
-        if isinstance(node, ast.Assign):
-            if any(
-                isinstance(target, ast.Name) and target.id == name
-                for target in node.targets
-            ):
-                return node.value
-        elif (
-            isinstance(node, ast.AnnAssign)
-            and isinstance(node.target, ast.Name)
-            and node.target.id == name
-        ):
-            return node.value
-    return None
-
-
-def declared_distribution_names(requirements: str) -> set[str]:
-    """依赖覆盖检查使用包名，不把版本、extras、marker 当作包名的一部分。"""
-    names: set[str] = set()
-    for line in requirements.splitlines():
-        match = re.match(r"[A-Za-z0-9][A-Za-z0-9._-]*", line.strip())
-        if match:
-            names.add(re.sub(r"[-_.]+", "-", match.group(0)).lower())
-    return names
-
-
-def keyword_value(call: ast.Call, name: str) -> ast.expr | None:
-    return next((item.value for item in call.keywords if item.arg == name), None)
-
-
 class PluginContractTests(unittest.TestCase):
-    def active_plugins(self) -> list[Path]:
-        return sorted(PLUGIN_DIR.glob("*.py"))
-
-    def test_active_plugins_have_standard_manifest(self) -> None:
-        plugin_ids: dict[str, Path] = {}
-        for path in self.active_plugins():
+    def test_enabled_plugins_have_unique_manifests_and_callable_hooks(self):
+        identifiers = set()
+        for path in sorted(PLUGIN_DIR.glob("*.py")):
             with self.subTest(plugin=path.name):
-                tree = parse_source(path)
-                future_annotations = any(
-                    isinstance(node, ast.ImportFrom)
-                    and node.module == "__future__"
-                    and any(item.name == "annotations" for item in node.names)
+                tree = ast.parse(
+                    path.read_text(encoding="utf-8-sig"), filename=str(path)
+                )
+                manifests = [
+                    node.value
                     for node in tree.body
-                )
-                self.assertTrue(future_annotations, "必须启用延迟注解")
-
-                version = assigned_value(tree, "VERSION")
-                self.assertIsInstance(version, ast.Constant, "必须定义字符串 VERSION")
-                self.assertIsInstance(version.value, str)
-                self.assertTrue(version.value)
-
-                manifest = assigned_value(tree, "PLUGIN_MANIFEST")
-                self.assertIsInstance(manifest, ast.Call, "必须定义 PLUGIN_MANIFEST")
-                self.assertIsInstance(manifest.func, ast.Name)
-                self.assertEqual(manifest.func.id, "PluginManifest")
-
-                plugin_id = keyword_value(manifest, "plugin_id")
-                name = keyword_value(manifest, "name")
-                manifest_version = keyword_value(manifest, "version")
-                authors = keyword_value(manifest, "authors")
-                self.assertIsInstance(plugin_id, ast.Constant)
-                self.assertIsInstance(plugin_id.value, str)
-                self.assertTrue(plugin_id.value)
-                self.assertIsInstance(name, ast.Constant)
-                self.assertIsInstance(name.value, str)
-                self.assertTrue(name.value)
-                self.assertIsInstance(manifest_version, ast.Name)
-                self.assertEqual(manifest_version.id, "VERSION")
-                self.assertIsInstance(authors, (ast.List, ast.Tuple))
-                self.assertGreater(len(authors.elts), 0)
-
-                duplicate = plugin_ids.get(plugin_id.value)
-                self.assertIsNone(
-                    duplicate,
-                    f"plugin_id {plugin_id.value!r} 与 {duplicate} 重复",
-                )
-                plugin_ids[plugin_id.value] = path
-
-    def test_hooks_match_plugin_host_contract(self) -> None:
-        for path in self.active_plugins():
-            tree = parse_source(path)
-            for node in tree.body:
-                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    continue
-                if not node.name.startswith("on_"):
-                    continue
-                with self.subTest(plugin=path.name, hook=node.name):
-                    self.assertIn(node.name, SUPPORTED_HOOKS, "存在宿主不会调用的 hook")
-                    expected = SUPPORTED_HOOKS[node.name]
-                    self.assertEqual(len(node.args.args), len(expected))
-                    actual = tuple(
-                        ast.unparse(argument.annotation)
-                        if argument.annotation
-                        else None
-                        for argument in node.args.args
+                    if isinstance(node, ast.Assign)
+                    and any(
+                        isinstance(target, ast.Name) and target.id == "PLUGIN_MANIFEST"
+                        for target in node.targets
                     )
-                    self.assertEqual(actual, expected)
-                    self.assertIsNotNone(node.returns, "hook 必须标注 -> None")
-                    self.assertEqual(ast.unparse(node.returns), "None")
-
-    def test_ica_typing_is_only_imported_for_type_checking(self) -> None:
-        for path in self.active_plugins():
-            tree = parse_source(path)
-            with self.subTest(plugin=path.name):
-                direct_imports = [
-                    node
-                    for node in tree.body
-                    if isinstance(node, ast.ImportFrom) and node.module == "ica_typing"
                 ]
-                self.assertEqual(direct_imports, [], "不能在运行时导入 ica_typing")
+                self.assertEqual(len(manifests), 1, "宿主需要唯一的 PLUGIN_MANIFEST")
+                self.assertIsInstance(manifests[0], ast.Call)
+                identifier = next(
+                    item.value
+                    for item in manifests[0].keywords
+                    if item.arg == "plugin_id"
+                )
+                identifier = ast.literal_eval(identifier)
+                self.assertTrue(isinstance(identifier, str) and identifier)
+                self.assertNotIn(identifier, identifiers, "重复 ID 会使插件被跳过")
+                identifiers.add(identifier)
                 for node in tree.body:
-                    if (
-                        isinstance(node, ast.If)
-                        and isinstance(node.test, ast.Name)
-                        and node.test.id == "TYPE_CHECKING"
+                    if isinstance(node, ast.FunctionDef) and node.name.startswith(
+                        "on_"
                     ):
-                        self.assertEqual(
-                            node.orelse, [], "TYPE_CHECKING 不需要 TypeVar 回退"
-                        )
-
-    def test_plugins_with_raw_threads_have_unload_hook(self) -> None:
-        for path in self.active_plugins():
-            tree = parse_source(path)
-            uses_thread = any(
-                isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Attribute)
-                and isinstance(node.func.value, ast.Name)
-                and node.func.value.id == "threading"
-                and node.func.attr == "Thread"
-                for node in ast.walk(tree)
-            )
-            hooks = {
-                node.name
-                for node in tree.body
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-            }
-            with self.subTest(plugin=path.name):
-                if uses_thread:
-                    self.assertIn("on_unload", hooks)
-
-    def test_declared_dependencies_cover_plugin_imports(self) -> None:
-        import_to_distribution = {
-            "PIL": "pillow",
-            "psutil": "psutil",
-            "psycopg": "psycopg",
-            "pydantic": "pydantic",
-            "requests": "requests",
-            "selenium": "selenium",
-            "tomli": "tomli",
-        }
-        declared = declared_distribution_names(
-            (ROOT / "requirements.txt").read_text(encoding="utf-8")
-        )
-        sources = [*PLUGIN_DIR.rglob("*.py"), *PLUGIN_DIR.glob("*.py_disable")]
-        imported: set[str] = set()
-        for path in sources:
-            for node in ast.walk(parse_source(path)):
-                if isinstance(node, ast.Import):
-                    imported.update(item.name.split(".", 1)[0] for item in node.names)
-                elif isinstance(node, ast.ImportFrom) and node.module:
-                    imported.add(node.module.split(".", 1)[0])
-        required = {
-            distribution
-            for module, distribution in import_to_distribution.items()
-            if module in imported
-        }
-        self.assertEqual(required - declared, set())
-
-    def test_dependency_coverage_accepts_versioned_extras_and_named_urls(self) -> None:
-        declarations = """
-        # 依赖升级后仍应匹配插件 import，不要求整行等于包名。
-        Pillow>=11.0,<13
-        psycopg[binary]==3.2.6 ; python_version >= "3.8"
-        demo_pkg @ https://example.invalid/demo.whl
-        -r optional-requirements.txt
-        """
-        self.assertEqual(
-            declared_distribution_names(declarations),
-            {"pillow", "psycopg", "demo-pkg"},
-        )
-
-    def test_disabled_plugins_use_explicit_suffix_and_still_parse(self) -> None:
-        self.assertEqual(list(PLUGIN_DIR.glob("*.pyi")), [])
-        disabled = sorted(PLUGIN_DIR.glob("*.py_disable"))
-        self.assertGreater(len(disabled), 0)
-        for path in disabled:
-            with self.subTest(plugin=path.name):
-                parse_source(path)
+                        self.assertIn(node.name, HOOK_ARITY, "宿主不会调用未知 hook")
+                        self.assertEqual(len(node.args.args), HOOK_ARITY[node.name])
 
 
 if __name__ == "__main__":

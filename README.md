@@ -33,6 +33,9 @@
 
 ## 插件文档
 
+- Codex 订阅查询（[codex.py](plugins/codex.py)）：指定群 `/codex`，只读复用 DSH 当前账号，
+  显示套餐、剩余额度与重置时间；每十分钟轮询，剩余额度跨过 95%、90%、85% 等档位时自动提醒。
+  配置和 DSH 离线/重启行为见 [使用说明](docs/codex.md)。
 - DeepSeek 监测（[ds_monitor.py](plugins/ds_monitor.py)）：运行副本、命令、更新回滚与发布熔断见
   [监测插件维护说明](docs/ds-monitor.md)。
 - 名竞小工具（[namerena.py](plugins/namerena.py)）：命令表、依赖与配置项、`+ol` 导出格式见
@@ -113,4 +116,6 @@ uv run --no-project --python 3.12 -m unittest discover -s tests -v
 ruff check .
 ```
 
-仓库级契约测试会检查启用插件的 manifest、版本、hook 签名、类型导入和后台线程生命周期入口。
+测试遵循本仓库 [AGENTS.md 的最小必要原则](AGENTS.md#测试)：只保留关键业务流程、高风险边界和必要的缺陷回归。
+插件入口只做一项轻量检查，防止重复 ID、缺少 manifest 或 hook 参数不匹配导致插件无法被宿主调用；不再锁定版本常量、类型注解或提示文案。
+网络、进程和消息发送使用隔离替身；名竞仅保留一项可选的真实 CLI 互操作校验。不要为测试数量扩充输入排列或重复异常分支。

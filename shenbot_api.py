@@ -104,6 +104,63 @@ class PluginManifest:
     def config_unchecked(self, key: str) -> ConfigStorage: ...
 
 
+class IcaConnectionState:
+    """主连接和所属插件的最新快照，不携带聊天数据或可缓存的 client。"""
+
+    @property
+    def generation(self) -> int: ...
+
+    @property
+    def account(self) -> int | None: ...
+
+    @property
+    def ready(self) -> bool:
+        """认证平台账号已知、QQ 在线且插件当前代已提交。"""
+        ...
+
+    @property
+    def plugin_active(self) -> bool: ...
+
+
+class IcaConnectionWatch:
+    def wait_changed(self) -> IcaConnectionState | None:
+        """首次立即返回快照，后续阻塞等变化并释放 GIL；关闭/旧代退役返回 None。
+
+        同一订阅只允许一个等待者；宿主最多同时保留 64 个未关闭订阅。
+        不使用 Scheduler 或 HTTP 轮询，不保证重放中间每一个状态。
+        """
+        ...
+
+    def send_text(
+        self,
+        generation: int,
+        account: int,
+        room_id: int,
+        text: str,
+        timeout: float,
+    ) -> bool:
+        """在当前连接和插件代检查后发一次纯文本；timeout 为剩余预算，须在 (0, 5] 秒。
+
+        等额度和传输均计入同一个期限，受 PluginHost 在途限额和卸载排空监管。
+        true 仅表示 Socket.IO 受理，不返回 QQ 引用；异常按可能已外发处理，不盲重试。
+        不重试、不自动切换到新连接/新账号，不记录正文或平台原始错误。
+        """
+        ...
+
+    def close(self) -> None:
+        """幂等关闭；唤醒等待者、取消该订阅的在途发送并释放订阅额度。"""
+        ...
+
+
+def watch_ica_connection() -> IcaConnectionWatch:
+    """仅从受 PluginHost 管理的 hook/on_load/on_unload 创建，绑定插件代际。
+
+    on_load 可在尚未连接时创建订阅；候选代提交后会被事件唤醒，无需先收聊天。
+    使用方负责 on_unload 先 close，再 join 自己的线程，不留下脱管后台任务。
+    """
+    ...
+
+
 class Scheduler:
     def __init__(
         self, func: Callable[[], None], schdule_time: datetime.timedelta

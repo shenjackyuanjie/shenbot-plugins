@@ -43,7 +43,9 @@ class PublishFlowTests(unittest.TestCase):
         self.logs.start()
         self.addCleanup(self.logs.stop)
 
-    def test_reservation_coalesces_changes_and_notification_failure_never_redeploys(self):
+    def test_reservation_coalesces_changes_and_notification_failure_never_redeploys(
+        self,
+    ):
         workers = QueuedWorkers()
         result = Mock(returncode=0, stdout="Deployment complete!", stderr="")
         with (
@@ -105,7 +107,9 @@ class PublishFlowTests(unittest.TestCase):
             monitor.maybe_publish(0)
             self.assertFalse(workers.jobs)
             exists.return_value = True
-            deploy.return_value = Mock(returncode=0, stdout="Deployment complete!", stderr="")
+            deploy.return_value = Mock(
+                returncode=0, stdout="Deployment complete!", stderr=""
+            )
             monitor.cmd_deploy(msg, client)
             self.assertEqual(len(workers.jobs), 1)
             workers.run_next()
@@ -121,31 +125,22 @@ class PublishFlowTests(unittest.TestCase):
             deploy.assert_called_once()
             self.assertFalse(monitor._publish_in_progress)
 
-    def test_thread_and_reply_failures_release_reservations(self):
-        worker = Mock()
-        worker.start.side_effect = RuntimeError("线程无法启动")
-        with (
-            patch.object(monitor.threading, "Thread", return_value=worker),
-            patch.object(monitor, "is_admin", return_value=True),
-        ):
-            monitor.maybe_publish(1)
-            self.assertFalse(monitor._publish_in_progress)
-            self.assertTrue(monitor._publish_pending)
-            client = Mock()
-            client.send_message.side_effect = RuntimeError("回复失败")
-            monitor.cmd_deploy(Mock(), client)
-            self.assertFalse(monitor._publish_in_progress)
-            self.assertTrue(monitor._publish_pending)
-
 
 class NoticerAcknowledgementTests(unittest.TestCase):
     def test_business_failures_and_partial_broadcast_are_not_full_success(self):
         received = []
-        replies = [b'{"status":"error"}', b'{"status":"ok"}', b'not-json', b'{"status":"ok"}']
+        replies = [
+            b'{"status":"error"}',
+            b'{"status":"ok"}',
+            b"not-json",
+            b'{"status":"ok"}',
+        ]
 
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self):
-                payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                payload = json.loads(
+                    self.rfile.read(int(self.headers["Content-Length"]))
+                )
                 received.append((payload, self.headers.get("Authorization")))
                 body = replies.pop(0)
                 self.send_response(200)
@@ -159,10 +154,14 @@ class NoticerAcknowledgementTests(unittest.TestCase):
         server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
-        cfg = {"noticer": {
-            "url": f"http://127.0.0.1:{server.server_port}/v1/send",
-            "room": "primary", "rooms": ["extra", "primary"], "token": "test-only",
-        }}
+        cfg = {
+            "noticer": {
+                "url": f"http://127.0.0.1:{server.server_port}/v1/send",
+                "room": "primary",
+                "rooms": ["extra", "primary"],
+                "token": "test-only",
+            }
+        }
         try:
             with (
                 patch.object(monitor, "load_rust_config", return_value=cfg),
@@ -176,7 +175,10 @@ class NoticerAcknowledgementTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join(timeout=5)
-        self.assertEqual([item[0]["room"] for item in received], ["primary", "extra", "primary", "primary"])
+        self.assertEqual(
+            [item[0]["room"] for item in received],
+            ["primary", "extra", "primary", "primary"],
+        )
         self.assertTrue(all(item[1] == "Bearer test-only" for item in received))
         self.assertTrue(all("test-only" not in item[0]["message"] for item in received))
 

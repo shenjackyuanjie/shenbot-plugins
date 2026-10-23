@@ -41,26 +41,6 @@ class HypVoteTests(unittest.TestCase):
         self.assertEqual(hyp_vote.room_votes(-2)[12], {300: "其他用户"})
         self.assertIn("已清空", self.client.send_message.call_args.args[0])
 
-    def test_view_rejects_missing_or_invalid_hours(self) -> None:
-        self.run_command("/hyp vote 0")
-        for command in (
-            "/hyp view",
-            "/hyp view abc",
-            "/hyp view 24",
-            "/hyp view 0 24",
-            "/hyp view -1",
-        ):
-            with self.subTest(command=command):
-                self.run_command(command)
-                self.assertIn("用法", self.client.send_message.call_args.args[0])
-
-    def test_empty_votes_and_valid_view_have_explicit_feedback(self) -> None:
-        self.run_command("/hyp ls")
-        self.client.send_message.assert_called_with("暂无投票")
-        self.run_command("/hyp vote 23")
-        self.run_command("/hyp view 0 23")
-        self.client.send_message.assert_called_with("0: 暂无投票\n23: 测试用户")
-
 
 if __name__ == "__main__":
     unittest.main()

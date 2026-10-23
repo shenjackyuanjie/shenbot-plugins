@@ -3,6 +3,7 @@ pillow
 psutil
 psycopg
 pydantic
+pyyaml
 requests
 selenium
 tomli

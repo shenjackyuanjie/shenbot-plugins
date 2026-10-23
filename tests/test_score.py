@@ -4,7 +4,7 @@ import threading
 import time
 import unittest
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 from plugins import score
 
@@ -81,28 +81,6 @@ class ScoreReservationTests(unittest.TestCase):
         self.assertFalse(score._query_lock.locked())
         self.assertEqual(self.client.sent[-1], "查询结果")
 
-    def test_thread_start_failure_releases_slot_for_retry(self) -> None:
-        with patch.object(score.threading, "Thread") as thread:
-            thread.return_value.start.side_effect = RuntimeError("启动失败")
-            client = Mock(status=SimpleNamespace(admins=[1]))
-            score.on_ica_message(self.message, client)
-            self.assertFalse(score._query_lock.locked())
-            self.assertIn("启动成绩查询失败", client.send_message.call_args.args[0])
-            thread.return_value.start.side_effect = None
-            score.on_ica_message(self.message, client)
-            self.assertTrue(score._query_lock.locked())
-            with patch.object(score, "query_scores", return_value="重试结果"):
-                thread.call_args.kwargs["target"]()
-        self.assertFalse(score._query_lock.locked())
-
-    def test_initial_reply_failure_releases_slot_without_starting_thread(self) -> None:
-        client = Mock(status=SimpleNamespace(admins=[1]))
-        client.send_message.side_effect = [RuntimeError("发送失败"), True]
-        with patch.object(score.threading, "Thread") as thread:
-            score.on_ica_message(self.message, client)
-        thread.assert_not_called()
-        self.assertFalse(score._query_lock.locked())
-
     def test_query_failure_replies_and_releases_slot(self) -> None:
         with patch.object(score.threading, "Thread") as thread:
             score.on_ica_message(self.message, self.client)
@@ -112,16 +90,6 @@ class ScoreReservationTests(unittest.TestCase):
                 thread.call_args.kwargs["target"]()
         self.assertFalse(score._query_lock.locked())
         self.assertEqual(self.client.sent[-1], "成绩查询失败：模拟错误")
-
-    def test_result_send_failure_also_releases_slot(self) -> None:
-        client = Mock(status=SimpleNamespace(admins=[1]))
-        with patch.object(score.threading, "Thread") as thread:
-            score.on_ica_message(self.message, client)
-            client.send_message.side_effect = RuntimeError("发送失败")
-            with patch.object(score, "query_scores", return_value="查询结果"):
-                with self.assertRaises(RuntimeError):
-                    thread.call_args.kwargs["target"]()
-        self.assertFalse(score._query_lock.locked())
 
 
 if __name__ == "__main__":
