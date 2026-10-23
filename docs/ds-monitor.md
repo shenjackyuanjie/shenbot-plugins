@@ -63,9 +63,9 @@ sp 明确关闭五类网页/文档、指纹及 Release/tag/commit/npm/profile �
 
 ## 修改生效与离线验证
 
-修改源码不会自动刷新已加载插件。建议等已有 update/deploy 返回，先 `/monitor off`，
-再通过 ICA 管理机制重载 ds_monitor，最后 `/monitor update`，并用 `/monitor` 核对两侧版本。
-宿主可能先运行候选代 on_load 再卸载旧代，预先停 watch 可避免新旧代短暂共用状态文件。
+当前宿主支持按源码哈希扫描并重载插件；扫描时机由宿主决定，修改后先用 `/monitor` 核对插件与 EXE 版本。
+插件若仍是旧版，等已有 update/deploy 返回后通过 ICA 管理机制重载；EXE 若仍是旧版，再执行 `/monitor update`。
+当前宿主重载会先排空并调用旧代 on_unload，再加载新代；原始后台线程不属于宿主受管调度，重载前仍应等已有构建/部署结束。
 
 在插件仓库运行：
 
