@@ -11,6 +11,7 @@ HOOK_ARITY = {
     "on_load": 0,
     "on_unload": 0,
     "on_ica_message": 2,
+    "on_ica_message_candidate": 1,
     "on_ica_system_message": 2,
     "on_ica_delete_message": 2,
     "on_ica_join_request": 2,

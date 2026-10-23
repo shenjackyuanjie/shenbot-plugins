@@ -900,6 +900,10 @@ ReciveMessage = Union[IcaNewMessage, TailchatReciveMessage]
 on_load = Callable[[], None]
 on_unload = Callable[[], None]
 on_ica_message = Callable[[IcaNewMessage, IcaClient], None]
+# 传输候选在 sender/quote/self 通用处理前分派；只有实时 addMessage，不重放历史。
+# 参数是有界来源快照（版本、账号/连接代、房间、源 ID、sender、body、quote_id、时间及 unsupported），不含 client 或引用正文。
+# is_self 仅表示发送者等于账号，不证明是人类手工发送。
+on_ica_message_candidate = Callable[[dict], None]
 on_ica_system_message = Callable[[IcaNewMessage, IcaClient], None]
 on_ica_delete_message = Callable[[IcaType.MessageId, IcaClient], None]
 on_ica_join_request = Callable[[IcaJoinRequest, IcaClient], None]

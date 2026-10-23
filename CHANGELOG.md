@@ -2,6 +2,10 @@
 
 宿主版本对应 [shenbot_api.py](shenbot_api.py) 的 `__version__`；ICA/Tailchat API 与各插件的 `VERSION` 分别管理。
 
+## 2026-10-24 类型声明同步
+
+- [ica_typing.py](ica_typing.py) 补充宿主已有的 `on_ica_message_candidate` 单快照参数声明及来源边界说明；入口检查同步接受该回调。仅对齐已有接口，不新增消息发送或运行时行为。
+
 ## 2026-10-24 其他插件故障修复
 
 - [sign](plugins/sign.py) **0.3.3 → 0.3.4**：最近活跃群的筛选以本次操作时间计算，修复每日状态重置时间较早时，把超过半天/七天未活跃的群也纳入签到的问题。
