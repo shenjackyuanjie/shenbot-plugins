@@ -28,6 +28,33 @@ class BmclCommandTests(unittest.TestCase):
                     bmcl.on_ica_message(self.message, self.client)
                 query.assert_called_once_with(self.message, self.client, "Alpha Beta")
 
+    def test_empty_rank_with_successful_http_status_is_a_normal_result(self) -> None:
+        response = Mock(status_code=200, reason=None)
+        response.json.return_value = []
+        self.message.content = "/bmcl rank"
+        with (
+            patch.object(bmcl, "backend_version", "known"),
+            patch.object(bmcl.requests, "get", return_value=response),
+        ):
+            bmcl.on_ica_message(self.message, self.client)
+        self.client.send_message.assert_called_once()
+        self.assertIn("暂无节点", self.client.send_message.call_args.args[0])
+        self.client.send_and_warn.assert_not_called()
+
+    def test_failed_dashboard_stops_after_one_request_without_exposing_exception(
+        self,
+    ) -> None:
+        self.message.content = "/bmcl"
+        with patch.object(
+            bmcl.requests,
+            "get",
+            side_effect=bmcl.requests.ConnectionError("fixture-private-cookie"),
+        ) as request:
+            bmcl.on_ica_message(self.message, self.client)
+        self.assertNotIn("fixture-private-cookie", str(self.client.mock_calls))
+        request.assert_called_once()
+        self.client.send_and_warn.assert_called_once()
+
     def test_partial_prefix_does_not_trigger_request_or_reply(self) -> None:
         for command in ("/brrsXYZ Alpha", "/bmclXYZ"):
             self.message.content = command

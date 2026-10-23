@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from ica_typing import IcaClient, IcaNewMessage
 
 
-VERSION = "0.3.3"
+VERSION = "0.3.4"
 USERNAME = ""
 PASSWORD = ""
 
@@ -46,10 +46,14 @@ _query_lock = threading.Lock()
 _shutdown = threading.Event()
 
 
+class ScoreQueryError(RuntimeError):
+    """查询流程中可以安全展示给用户的固定提示。"""
+
+
 def query_scores() -> str:
     """登录教务系统，并通过成绩 API 获取最近学期的数据。"""
     if not USERNAME or not PASSWORD:
-        raise RuntimeError("请在 score 插件配置中填写 username 和 password")
+        raise ScoreQueryError("请在 score 插件配置中填写 username 和 password")
 
     profile_dir = (Path(python_config_path()) / "score-edge-profile").resolve()
     profile_dir.mkdir(parents=True, exist_ok=True)
@@ -72,7 +76,7 @@ def query_scores() -> str:
                     EC.presence_of_element_located((By.NAME, "username"))
                 )
             except TimeoutException as error:
-                raise RuntimeError("统一认证登录页加载超时") from error
+                raise ScoreQueryError("统一认证登录页加载超时") from error
 
             username_input.send_keys(USERNAME)
             driver.find_element(By.NAME, "passwordText").send_keys(PASSWORD)
@@ -85,7 +89,7 @@ def query_scores() -> str:
                     )
                 )
             except TimeoutException as error:
-                raise RuntimeError("登录超时，请在 Edge 中完成安全验证") from error
+                raise ScoreQueryError("登录超时，请在 Edge 中完成安全验证") from error
 
         cookie = "; ".join(
             f"{item['name']}={item['value']}" for item in driver.get_cookies()
@@ -121,8 +125,9 @@ def query_scores() -> str:
 
 
 def on_load() -> None:
-    global USERNAME, PASSWORD
-    _shutdown.clear()
+    global USERNAME, PASSWORD, _shutdown
+    _shutdown.set()
+    _shutdown = threading.Event()
     main_config = PLUGIN_MANIFEST.config_unchecked("main")
     USERNAME = str(main_config.get_value("username") or "")
     PASSWORD = str(main_config.get_value("password") or "")
@@ -142,14 +147,21 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
         client.send_message(msg.reply_with("成绩正在查询，请稍候。"))
         return
 
+    # 捕获当前启用周期，重新 on_load 不会复活旧任务的回包权限。
+    shutdown = _shutdown
+
     def run_query() -> None:
         try:
+            if shutdown.is_set():
+                return
             try:
                 result = query_scores()
+            except ScoreQueryError as error:
+                result = f"成绩查询失败：{error}"
             except Exception as error:
-                message = str(error).strip() or type(error).__name__
-                result = f"成绩查询失败：{message}"
-            if not _shutdown.is_set():
+                client.warn(f"score：查询失败（{type(error).__name__}）")
+                result = "成绩查询失败，请检查登录状态或网络后重试。"
+            if not shutdown.is_set():
                 client.send_message(msg.reply_with(result))
         finally:
             _query_lock.release()

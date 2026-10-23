@@ -11,7 +11,7 @@ from shenbot_api import PluginManifest, Scheduler
 if TYPE_CHECKING:
     from ica_typing import IcaClient, IcaNewMessage
 
-VERSION = "0.3.3"
+VERSION = "0.3.4"
 CMD_PREFIX = "/bot-sign"
 HELP_CMD = f"{CMD_PREFIX} help"
 ALL_CMD = f"{CMD_PREFIX} all"
@@ -70,7 +70,9 @@ def group_rooms(client: IcaClient) -> list[Any]:
     return [room for room in client.status.rooms if room.is_group()]
 
 
-def build_sign_plan(now: datetime, rooms: list[Any]) -> tuple[list[float], list[Any], float]:
+def build_sign_plan(
+    now: datetime, rooms: list[Any]
+) -> tuple[list[float], list[Any], float]:
     delays = [random.random() * 3 for _ in range(len(rooms))]
     use_time = 0.0
     sign_room = []
@@ -84,7 +86,9 @@ def build_sign_plan(now: datetime, rooms: list[Any]) -> tuple[list[float], list[
     return delays[: len(sign_room)], sign_room, use_time
 
 
-def send_room_signs(client: IcaClient, delays: list[float], rooms: list[Any]) -> list[str]:
+def send_room_signs(
+    client: IcaClient, delays: list[float], rooms: list[Any]
+) -> list[str]:
     signed = []
     for delay, room in zip(delays, rooms):
         with _sign_lock:
@@ -130,7 +134,7 @@ def handle_sign_recent(
         if room.room_id in SIGN_REC and SIGN_REC[room.room_id] < plan_time:
             # 他先签到的
             continue
-        if room.utime // 1000 < SIGN_TIME.timestamp() - active_seconds:
+        if room.utime // 1000 < now.timestamp() - active_seconds:
             continue
         active_rooms.append(room)
     delays = delays[: len(active_rooms)]
@@ -138,12 +142,16 @@ def handle_sign_recent(
     if len(active_rooms) == 0:
         return
 
-    reply = msg.reply_with(f"将要签到 {len(active_rooms)} 个 {label}的群\n需要 {use_time} 秒")
+    reply = msg.reply_with(
+        f"将要签到 {len(active_rooms)} 个 {label}的群\n需要 {use_time} 秒"
+    )
     client.send_message(reply)
 
     signed = send_room_signs(client, delays, active_rooms)
     cost_time = time.time() - start_time
-    reply = msg.reply_with(f"✅已签到 {len(signed)} 个 {label}的群\n耗时{cost_time:.2f}秒")
+    reply = msg.reply_with(
+        f"✅已签到 {len(signed)} 个 {label}的群\n耗时{cost_time:.2f}秒"
+    )
     client.send_message(reply)
 
 
@@ -174,11 +182,15 @@ def handle_sign_want(msg: IcaNewMessage, client: IcaClient) -> None:
         previous_token = _sign_tokens.get(room_id)
         if previous_time is not None:
             if previous_time == want_time:
-                client.send_message(msg.reply_with(f"已有 {fmt_time} 的签到预约，无需重复预约"))
+                client.send_message(
+                    msg.reply_with(f"已有 {fmt_time} 的签到预约，无需重复预约")
+                )
                 return
             if previous_time < want_time:
                 previous_text = previous_time.strftime("%m-%d %H:%M")
-                client.send_message(msg.reply_with(f"已有 {previous_text} 的签到预约，保留原计划"))
+                client.send_message(
+                    msg.reply_with(f"已有 {previous_text} 的签到预约，保留原计划")
+                )
                 return
         SIGN_PLAN[room_id] = want_time
         _sign_tokens[room_id] = token

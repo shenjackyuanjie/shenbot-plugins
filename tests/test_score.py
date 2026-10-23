@@ -22,10 +22,14 @@ class FakeClient:
     def __init__(self) -> None:
         self.status = SimpleNamespace(admins=[1])
         self.sent: list[str] = []
+        self.warnings: list[str] = []
 
     def send_message(self, message: str) -> bool:
         self.sent.append(message)
         return True
+
+    def warn(self, text: str) -> None:
+        self.warnings.append(text)
 
 
 class ScoreLifecycleTests(unittest.TestCase):
@@ -45,6 +49,11 @@ class ScoreLifecycleTests(unittest.TestCase):
             score.on_ica_message(message, client)
             self.assertTrue(query_started.wait(timeout=2.0))
             score.on_unload()
+            config = SimpleNamespace(get_value=lambda key: "")
+            with patch.object(
+                score.PLUGIN_MANIFEST, "config_unchecked", return_value=config
+            ):
+                score.on_load()
             finish_query.set()
             deadline = time.monotonic() + 2.0
             while score._query_lock.locked() and time.monotonic() < deadline:
@@ -85,11 +94,14 @@ class ScoreReservationTests(unittest.TestCase):
         with patch.object(score.threading, "Thread") as thread:
             score.on_ica_message(self.message, self.client)
             with patch.object(
-                score, "query_scores", side_effect=RuntimeError("模拟错误")
+                score, "query_scores", side_effect=RuntimeError("fixture-private-token")
             ):
                 thread.call_args.kwargs["target"]()
         self.assertFalse(score._query_lock.locked())
-        self.assertEqual(self.client.sent[-1], "成绩查询失败：模拟错误")
+        self.assertIn("成绩查询失败", self.client.sent[-1])
+        self.assertNotIn(
+            "fixture-private-token", str(self.client.sent + self.client.warnings)
+        )
 
 
 if __name__ == "__main__":

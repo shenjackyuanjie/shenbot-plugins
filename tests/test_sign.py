@@ -43,6 +43,25 @@ class SignReservationTests(unittest.TestCase):
         self.message.content = f"/bot-sign want {when}"
         sign.handle_sign_want(self.message, self.client)
 
+    def test_recent_signing_uses_current_time_not_daily_reset_time(self) -> None:
+        sign.SIGN_TIME = self.now.replace(hour=0)
+        recent = SimpleNamespace(
+            room_id=-101,
+            utime=int((self.now - timedelta(hours=1)).timestamp() * 1000),
+            is_group=lambda: True,
+        )
+        inactive = SimpleNamespace(
+            room_id=-102,
+            utime=int((self.now - timedelta(hours=13)).timestamp() * 1000),
+            is_group=lambda: True,
+        )
+        self.client.status.rooms = [inactive, recent]
+        with patch.object(sign, "send_room_signs", return_value=[]) as send:
+            sign.handle_sign_recent(
+                self.message, self.client, self.now, 12 * 3600, "活跃"
+            )
+        self.assertEqual([room.room_id for room in send.call_args.args[2]], [-101])
+
     def test_duplicate_today_reservation_schedules_only_once(self) -> None:
         self.reserve("13:00")
         self.reserve("13:00")
