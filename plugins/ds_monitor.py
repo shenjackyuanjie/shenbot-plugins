@@ -2,9 +2,9 @@
 ds_monitor.py - DeepSeek 网页更新监测插件
 
 启动 ds-monitor 二进制的 watch 模式监控 Chat、官网、Harness、Platform、API Docs 页面变更，
-检测到变化时由 ds-monitor 自动通过 noticer 发送 AI 分析结果。ds-monitor 0.3.0 起
-watch 里还多了 `status` 目标：盯 DeepSeek 服务状态页（status.deepseek.com）的事件，
-出现故障 / 状态推进 / 恢复时各推一条文字通知（状态只活在 watch 进程内存里，不落盘）。
+检测到变化时由 ds-monitor 自动通过 noticer 发送 AI 分析结果。配套 ds-monitor 0.5.0，
+服务状态页基线与待发通知由 Rust 持久保存；Release、tag、commit、npm 与 profile
+在独立快通道运行，不计入网页/文档周期状态字段。插件只负责进程管理、查询与看板发布。
 配置房间通知走 /v1/send；命令触发的动态 room_id 通知走受 Token 保护的 direct API。
 
 `/monitor check` 会重启 watch 并等待本轮的 `=== 本轮检查结果 ... ===` 标记
@@ -31,8 +31,9 @@ publish = false
 
 `binary` 指向 release 产物的**副本**：长跑的 watch 会锁住自己那个可执行文件，把构建
 产物 `target\\release\\ds-monitor.exe` 留给 cargo，`cargo build --release` 就不会因为
-监测在跑而失败。`/monitor update` 把这几步连起来：停 watch → 构建 → 刷新副本 →
-重启 watch（复制前必须先停 watch，Windows 不允许覆盖正在运行的 exe）。
+监测在跑而失败。`/monitor update` 先让旧 watch 继续运行并构建、暂存新副本，成功后才
+短暂停机原子替换；新进程启动失败会回滚旧副本。原先关闭的监测保持关闭，off/unload
+会撤销排队启动；只有确认旧进程退出才允许替换，Windows 不允许覆盖正在运行的 exe。
 
 `web_craw/config.toml` 保存 noticer strict/direct URL 与本地 Token；
 仓库只提交不含密钥的 `config.example.toml`。
@@ -44,6 +45,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 import urllib.error
@@ -58,8 +60,8 @@ if TYPE_CHECKING:
 
 from shenbot_api import PluginManifest, ConfigStorage
 
-# 分析所用模型名，统一从这里取，避免各处文案写成不同版本
-VERSION = "0.5.5"
+# 插件版本独立于 Rust 二进制版本；分析模型名集中供用户文案引用。
+VERSION = "0.5.6"
 ANALYZE_MODEL = "V41F"
 
 PLUGIN_MANIFEST = PluginManifest(
@@ -102,6 +104,13 @@ _client: IcaClient | None = None
 _watch_process: subprocess.Popen[str] | None = None
 _watch_thread: threading.Thread | None = None
 _watch_lock = threading.Lock()
+# 锁序：生命周期锁 → 句柄锁；操作锁只保护占位，绝不持它等待生命周期锁或外部进程。
+_lifecycle_lock = threading.RLock()
+_operation_lock = threading.RLock()
+# on/check/update 的排队任务携带意图代次；off/unload 递增它，使旧任务不能复活 watch。
+_lifecycle_generation: int = 0
+_unloading: bool = False
+_watch_exited_generation: int = -1
 _watch_stop_requested: bool = False
 _watch_summary_lines: list[str] | None = None
 # 正在收集的摘要在哪个目标名下（见 begin_summary/finish_summary）
@@ -181,12 +190,12 @@ CYCLE_STATUS_LABELS = {
     "error": "检查失败",
     "skipped": "本轮跳过",
 }
-# 检查失败时要写进 headline 的目标：状态页失败意味着"看不见服务状态"，不能只报无事发生。
-# 指纹刻意不算在内：没配 API key 时它每轮都会失败，不该污染"无事发生"。
+# 基础错误目标；cycle_report 另纳入指纹失败，如实反映检查结论，不把快目标合成周期字段。
 CYCLE_ERROR_KEYS = (*WEB_TARGET_KEYS, "status")
 
 _cycle_event = threading.Event()
 _cycle_result_generation: int = -1
+_cycle_done_pending_generation: int = -1
 _cycle_statuses: dict[str, str] = {}
 _cycle_counts: dict[str, int] = {}
 
@@ -274,9 +283,8 @@ def load_config() -> None:
 
 
 def work_dir() -> str:
-    # ds-monitor resolves relative paths in config.toml (output/settings)
-    # from its current working directory. Run it from the config directory so
-    # "output" and "claude-setting.json" point at web_craw/, not target/release/.
+    # Rust 按当前工作目录解析配置中的 output/settings 等相对路径，因此运行目录取配置目录；
+    # 构建仓库由 repo_root 单独定位，不能因配置外置而把运行目录改成 target/release。
     cwd = os.path.dirname(_config_path) if _config_path else ""
     if not cwd or not os.path.isdir(cwd):
         cwd = os.path.dirname(_binary_path) or "."
@@ -291,12 +299,34 @@ def source_binary_path() -> str:
 
 
 def repo_root() -> str:
-    """ds-monitor 仓库根目录（cargo 的工作目录）：优先取 config.toml 所在目录。"""
-    root = os.path.dirname(_config_path) if _config_path else ""
-    if root and os.path.isdir(root):
-        return root
-    # 退路：从 .../target/release/<exe> 上溯三级
-    return os.path.dirname(os.path.dirname(os.path.dirname(_binary_path or "")))
+    """定位构建仓库，不把外置配置的运行目录误当成 Cargo 工作目录。
+
+    配置目录有可解析的 package/workspace 清单时优先使用，否则从二进制目录向上查找。
+    不改变 work_dir 的配置相对路径规则；找不到清单就明确失败，不能回落到插件当前目录构建。
+    """
+    import tomllib
+
+    def has_manifest(directory: str) -> bool:
+        """仅认可可读取的 Cargo 包或工作区清单，错误不回显文件正文。"""
+        try:
+            with open(os.path.join(directory, "Cargo.toml"), "rb") as source:
+                manifest = tomllib.load(source)
+            return isinstance(manifest.get("package"), dict) or isinstance(manifest.get("workspace"), dict)
+        except (OSError, ValueError):
+            return False
+
+    config_dir = os.path.dirname(os.path.abspath(_config_path)) if _config_path else ""
+    if config_dir and has_manifest(config_dir):
+        return config_dir
+    directory = os.path.dirname(os.path.abspath(_binary_path)) if _binary_path else ""
+    while directory:
+        if has_manifest(directory):
+            return directory
+        parent = os.path.dirname(directory)
+        if parent == directory:
+            break
+        directory = parent
+    raise FileNotFoundError("找不到 ds-monitor 的有效 Cargo.toml 仓库目录")
 
 
 def load_rust_config() -> dict[str, Any]:
@@ -310,7 +340,7 @@ def load_rust_config() -> dict[str, Any]:
             raw = tomllib.load(f)
         return raw if isinstance(raw, dict) else {}
     except Exception as exc:
-        log(f"读取 ds-monitor 配置失败，使用默认值: {exc}")
+        log(f"读取 ds-monitor 配置失败（{type(exc).__name__}），显示层暂用默认值；启动前仍须校验")
         return {}
 
 
@@ -431,11 +461,32 @@ def binary_version() -> str:
 
 
 def validate_binary(room_id: int | None = None) -> bool:
+    """启动前确认程序与显式配置可用，拒绝让 Rust 因缺文件创建默认模板后开始监控。
+
+    仅只读检查配置的存在性和 TOML 语法；配置中的相对路径继续交给 work_dir 解释。
+    解析错误只报告类型与中文诊断，不拼接可能带配置值的异常正文，也不修改配置文件。
+    """
     if not _binary_path or not os.path.isfile(_binary_path):
         msg = f"❌ ds-monitor 二进制不存在: {_binary_path}"
         log(msg)
         notify_error(msg, room_id)
         return False
+    if _config_path:
+        if not os.path.isfile(_config_path):
+            msg = "❌ ds-monitor 配置文件不存在或不是文件，已拒绝启动"
+            log(msg)
+            notify_error(msg, room_id)
+            return False
+        try:
+            import tomllib
+
+            with open(_config_path, "rb") as source:
+                tomllib.load(source)
+        except Exception as exc:
+            msg = f"❌ ds-monitor 配置无法读取或 TOML 无效（{type(exc).__name__}），已拒绝启动"
+            log(msg)
+            notify_error(msg, room_id)
+            return False
     return True
 
 
@@ -546,8 +597,8 @@ def run_last_render(target: str | None, room_id: int | None = None) -> str:
         return msg
 
 
-# 只跑服务状态页的 check 参数：其余目标全部关掉，一次查询只有一个 RSS 请求，
-# 也不会碰任何快照、不会发通知。
+# 只保留服务状态页的一次性 check；同时关闭五个独立监测，避免配置启用后抓外网、写缓存或发通知。
+# 状态页可能尝试官方及镜像两个入口；关闭分析并清空通知出口，不把它当成完整监控轮次。
 STATUS_ONLY_FLAGS = (
     "--no-chat",
     "--no-official",
@@ -555,6 +606,13 @@ STATUS_ONLY_FLAGS = (
     "--no-platform",
     "--no-docs",
     "--no-fingerprint",
+    "--no-harness-release",
+    "--no-harness-tag",
+    "--no-harness-commit",
+    "--no-harness-npm",
+    "--no-github-profile",
+    "--no-analyze",
+    "--noticer=",
 )
 STATUS_PROBE_TIMEOUT_SECS = 60.0
 # 回复长度上限：一次故障可能同时有恢复 + 新故障，别把消息刷屏
@@ -565,10 +623,11 @@ def run_status_probe() -> str:
     """跑一次只含服务状态页的 `check`，用于 `/monitor sp` 现场查询。
 
     走的是 ds-monitor 自己的抓取链路（含官方域名失败后回退国际镜像），
-    所以 Python 这边不需要也不应该自己去请求状态页。
+    所以 Python 这边不需要也不应该自己去请求状态页。所有其他目标显式关闭，
+    不读写 watch 缓存；超时、执行异常和非零退出均返回带失败标记的诊断，供回复层原样保留。
     """
     if not validate_binary():
-        return f"❌ ds-monitor 二进制不存在: {_binary_path}"
+        return f"❌ ds-monitor 启动前校验失败（二进制或配置不可用）: {_binary_path}"
 
     args = base_args("check")
     args.extend(STATUS_ONLY_FLAGS)
@@ -583,9 +642,13 @@ def run_status_probe() -> str:
             cwd=work_dir(),
             timeout=STATUS_PROBE_TIMEOUT_SECS,
         )
-        out = result.stdout
+        out = result.stdout or ""
         if result.stderr:
             out += "\n" + result.stderr
+        if result.returncode != 0:
+            # 失败诊断优先于可能很长的进度 stdout，避免回复截断时丢掉真正错误。
+            detail = "\n".join(part.strip() for part in (result.stderr, result.stdout) if part)
+            return f"❌ 状态页查询失败（退出码 {result.returncode}）\n{detail}".strip()
         return out
     except subprocess.TimeoutExpired:
         return f"❌ 状态页查询超时（{int(STATUS_PROBE_TIMEOUT_SECS)}s）"
@@ -624,13 +687,13 @@ def handle_output_line(line: str, generation: int) -> None:
     target_key = _active_output_target or "chat"
     now = datetime.now(timezone.utc)
 
-    if payload.startswith("===") and CYCLE_RESULT_MARKER in payload:
+    if line.startswith(f"=== {CYCLE_RESULT_MARKER} "):
         # 记录本轮检查结果；继续走下面的汇总逻辑，让 "===" 正常结束变更摘要
-        record_cycle_result(payload, generation)
+        record_cycle_result(line, generation)
 
-    if payload.startswith("===") and CYCLE_DONE_MARKER in payload:
+    if line.startswith(f"=== {CYCLE_DONE_MARKER} "):
         # 整轮（含分析、通知）结束：按本轮变化触发看板自动发布
-        record_cycle_done(payload)
+        record_cycle_done(line, generation)
 
     if target_key == "status" and handle_status_output_line(payload, now):
         return
@@ -762,98 +825,117 @@ def cycle_status_text(key: str, status: str) -> str:
     return f"{cycle_target_label(key)} {CYCLE_STATUS_LABELS.get(status, status)}"
 
 
+def parse_cycle_marker(
+    line: str, marker: str, count_keys: tuple[str, ...]
+) -> dict[str, str] | None:
+    """仅接收完整机器行；非法数字、重复字段和截断行不影响 stdout 读取线程。"""
+    prefix = f"=== {marker} "
+    if not line.startswith(prefix) or not line.endswith(" ==="):
+        return None
+    fields: dict[str, str] = {}
+    for token in line[len(prefix) : -4].split():
+        key, sep, value = token.partition("=")
+        if not sep or not key or not value or key in fields:
+            return None
+        fields[key] = value
+    for key in count_keys:
+        raw = fields.get(key, "")
+        # isdigit 会接纳 int() 不支持的上标字符；先限制 ASCII 十进制与 u64 范围。
+        if not (raw and len(raw) <= 20 and raw.isascii() and raw.isdecimal()):
+            return None
+        if int(raw) > (1 << 64) - 1:
+            return None
+    return fields
+
+
 def record_cycle_result(line: str, generation: int) -> None:
-    """解析 `=== 本轮检查结果 ... ===` 标记，并唤醒等待本轮结果的调用方。"""
+    """保存当前进程代次的完整检查结果，广播唤醒等待者并开启一次完成标记窗口。"""
     global _cycle_result_generation, _cycle_statuses, _cycle_counts
-
-    fields: dict[str, str] = {}
-    for token in line.split():
-        key, sep, value = token.partition("=")
-        # 标记两端的 "===" 会被切成空 key，这里只收 "key=value" 形式
-        if not sep or not key:
-            continue
-        fields[key] = value
-
-    counts: dict[str, int] = {}
-    for key in ("changes", "notices", "errors"):
-        raw = fields.pop(key, None)
-        if raw is not None and raw.lstrip("-").isdigit():
-            counts[key] = int(raw)
-
-    _cycle_statuses = fields
-    _cycle_counts = counts
-    _cycle_result_generation = generation
-    _cycle_event.set()
+    global _cycle_done_pending_generation
+    count_keys = ("changes", "notices", "errors")
+    fields = parse_cycle_marker(line, CYCLE_RESULT_MARKER, count_keys)
+    if fields is None or any(
+        fields.get(key) not in CYCLE_STATUS_LABELS for key in CYCLE_TARGET_LABELS
+    ):
+        return
+    with _watch_lock:
+        if generation != _watch_generation or _watch_stop_requested or _unloading:
+            return
+        _cycle_statuses = {key: fields[key] for key in CYCLE_TARGET_LABELS}
+        _cycle_counts = {key: int(fields[key]) for key in count_keys}
+        _cycle_result_generation = generation
+        _cycle_done_pending_generation = generation
+        _cycle_event.set()
 
 
-def _count_field(fields: dict[str, str], key: str) -> int:
-    raw = fields.get(key, "")
-    return int(raw) if raw.lstrip("-").isdigit() else 0
+def record_cycle_done(line: str, generation: int) -> None:
+    """检查结果之后仅接收一次同代完成标记，再触发网页/文档或指纹的看板发布。
 
-
-def record_cycle_done(line: str) -> None:
-    """解析 `=== 本轮完成 changes=… fingerprint=… analyzed=… ===`，并按本轮变化触发看板发布。
-
-    这一行由 ds-monitor 在整轮（含分析、通知）结束后打印，所以到这里时本轮的分析正文
-    与图片都已经落盘；一轮只有一行，多个目标同时变化也只发布一次。
-
-    判据是"看板内容变了多少"：网页/文档变化（`changes`）加指纹变化（`fingerprint`）。
-    看板的 Fingerprints 页展示指纹历史，所以只有指纹变化时同样要重新导出。
+    严格结构与顺序排除普通日志、残留旧代和重复完成行；文本 stdout 仍不是独立事件通道，
+    不能用于鉴别上游正文伪造的完整协议行。该边界在插件维护说明中记录。
     """
-    global _last_cycle_changes, _last_cycle_analyzed
-
-    fields: dict[str, str] = {}
-    for token in line.split():
-        key, sep, value = token.partition("=")
-        if not sep or not key:
-            continue
-        fields[key] = value
-
-    changes = _count_field(fields, "changes") + _count_field(fields, "fingerprint")
-    _last_cycle_changes = changes
-    _last_cycle_analyzed = _count_field(fields, "analyzed")
-
+    global _last_cycle_changes, _last_cycle_analyzed, _cycle_done_pending_generation
+    fields = parse_cycle_marker(
+        line, CYCLE_DONE_MARKER, ("changes", "fingerprint", "analyzed")
+    )
+    if fields is None:
+        return
+    with _watch_lock:
+        if (generation != _watch_generation or _watch_stop_requested or _unloading
+                or _cycle_done_pending_generation != generation):
+            return
+        _cycle_done_pending_generation = -1
+        changes = int(fields["changes"]) + int(fields["fingerprint"])
+        _last_cycle_changes = changes
+        _last_cycle_analyzed = int(fields["analyzed"])
     if _publish_enabled:
         maybe_publish(changes)
 
 
 def wait_cycle_result(generation: int, timeout: float) -> bool:
-    """等待指定 watch 代次的本轮检查结果。
-
-    超时，或这次检查已被更晚的 /monitor check 取代时返回 False。
-    """
+    """等待指定进程代次的检查结果；进程提前退出、停用或被替换时立即结束等待。"""
     deadline = time.monotonic() + timeout
-    while generation == _watch_generation:
+    while True:
+        with _watch_lock:
+            if generation != _watch_generation or _unloading or not _enabled:
+                return False
+            if _cycle_result_generation == generation:
+                return True
+            if (_watch_exited_generation == generation or _watch_process is None
+                    or _watch_process.poll() is not None):
+                return False
+            _cycle_event.clear()
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             return False
-        if _cycle_event.wait(min(remaining, 1.0)):
-            _cycle_event.clear()
-            if _cycle_result_generation == generation:
-                return True
-    return False
+        _cycle_event.wait(min(remaining, 0.2))
 
 
 def cycle_report(elapsed: float) -> str:
-    """把本轮检查结果整理成一条 QQ 消息。"""
+    """把 Rust 周期状态标记整理成回复，任何已检查目标的失败都不能伪装成无事发生。
+
+    指纹未配置时应由 Rust 返回跳过或失败；这里如实展示，不自行静音。
+    独立快目标不在该状态行内，不合成它们的字段或把它们的诊断计入周期结果。
+    """
     statuses = dict(_cycle_statuses)
     changes = [key for key, status in statuses.items() if status == "change"]
     alerts = [key for key, status in statuses.items() if status == "alert"]
-    page_errors = [key for key in CYCLE_ERROR_KEYS if statuses.get(key) == "error"]
+    errors = [
+        key for key in (*CYCLE_ERROR_KEYS, "fingerprint")
+        if statuses.get(key) == "error"
+    ]
 
     if changes:
         headline = "🔔 检测到变化：" + "、".join(cycle_target_label(key) for key in changes)
     elif alerts:
         headline = "⚠️ 本轮有告警：" + "、".join(cycle_target_label(key) for key in alerts)
-    elif page_errors:
-        headline = (
-            "⚠️ 本轮没有变化，但 "
-            + "、".join(cycle_target_label(key) for key in page_errors)
-            + " 检查失败"
-        )
+    elif errors:
+        headline = "⚠️ 本轮未发现变化"
     else:
         headline = "✅ 无事发生"
 
+    if errors:
+        headline += "；" + "、".join(cycle_target_label(key) for key in errors) + " 检查失败"
     lines = [f"{headline}（用时 {elapsed:.0f}s）"]
     detail = " · ".join(
         cycle_status_text(key, status) for key, status in statuses.items()
@@ -866,104 +948,139 @@ def cycle_report(elapsed: float) -> str:
 
 
 def watch_stdout_loop(proc: subprocess.Popen[str], generation: int) -> None:
-    global _watch_process
+    """读取当前代输出；EOF 只终止等待，进程仍活着时保留句柄，避免失去停止能力。"""
+    global _watch_process, _watch_exited_generation
 
     try:
         assert proc.stdout is not None
         for line in proc.stdout:
             handle_output_line(line, generation)
-    except Exception as e:
-        log(f"watch 输出读取失败: {e}")
+    except Exception as exc:
+        log(f"watch 输出读取失败: {exc}")
     finally:
         code = proc.poll()
+        # 不能拿生命周期锁：stop_watch 可能正持该锁等待本进程退出。
         with _watch_lock:
-            if _watch_process is proc:
-                _watch_process = None
-        if not _watch_stop_requested:
-            log(f"watch 进程退出，exit={code}")
+            if _watch_process is proc and generation == _watch_generation:
+                if code is not None:
+                    _watch_process = None
+                _watch_exited_generation = generation
+                _cycle_event.set()
+                requested = _watch_stop_requested
+            else:
+                requested = True
+        if not requested:
+            log(f"watch 输出结束，exit={code}")
 
 
-def start_watch() -> bool:
+def start_watch(expected_generation: int | None = None) -> bool:
+    """串行启动 watch；只执行仍有效的开启意图，立即退出或启动线程失败均返回 False。
+
+    生命周期锁覆盖创建和登记，句柄锁只保护状态；off/unload 可在创建期间使意图失效。
+    若创建后才发现取消，先登记再停止该进程，停止失败也保留句柄，绝不遗留失管进程。
+    """
     global _watch_process, _watch_thread, _watch_stop_requested, _watch_generation
 
-    with _watch_lock:
-        if _watch_process is not None and _watch_process.poll() is None:
-            return True
-
+    with _lifecycle_lock:
+        with _watch_lock:
+            if (_unloading or not _enabled or (expected_generation is not None
+                    and expected_generation != _lifecycle_generation)):
+                return False
+            if _watch_process is not None and _watch_process.poll() is None:
+                return True
         if not validate_binary():
             return False
-
         args = base_args("watch")
         args.append(f"--interval={_check_interval}")
-
-        _watch_stop_requested = False
         try:
-            _watch_process = subprocess.Popen(
-                args,
-                cwd=work_dir(),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                creationflags=(
-                    getattr(subprocess, "CREATE_NO_WINDOW", 0)
-                    | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-                ),
+            proc = subprocess.Popen(
+                args, cwd=work_dir(), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, encoding="utf-8", errors="replace",
+                creationflags=(getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                               | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)),
             )
-        except Exception as e:
-            _watch_process = None
-            log(f"watch 启动失败: {e}")
-            notify_error(f"❌ ds-monitor watch 启动失败: {e}")
+        except Exception as exc:
+            log(f"watch 启动失败: {exc}")
+            notify_error(f"❌ ds-monitor watch 启动失败: {exc}")
             return False
-
-        _watch_generation += 1
-        generation = _watch_generation
-        _watch_thread = threading.Thread(
-            target=watch_stdout_loop,
-            args=(_watch_process, generation),
-            daemon=True,
-        )
-        _watch_thread.start()
-        log(f"watch 已启动 (pid={_watch_process.pid}, interval={_check_interval}s, gen={generation})")
+        with _watch_lock:
+            _watch_process = proc
+            _watch_stop_requested = False
+            _watch_generation += 1
+            generation = _watch_generation
+            _cycle_event.clear()
+            cancelled = (_unloading or not _enabled or (expected_generation is not None
+                         and expected_generation != _lifecycle_generation))
+        if cancelled:
+            stop_watch()
+            return False
+        if proc.poll() is not None:
+            with _watch_lock:
+                if _watch_process is proc:
+                    _watch_process = None
+                _cycle_event.set()
+            log(f"watch 启动后立即退出，exit={proc.returncode}")
+            return False
+        _watch_thread = threading.Thread(target=watch_stdout_loop, args=(proc, generation), daemon=True)
+        try:
+            _watch_thread.start()
+        except Exception as exc:
+            log(f"watch 输出线程启动失败: {exc}")
+            stop_watch()
+            return False
+        if proc.poll() is not None:
+            _cycle_event.set()
+            return False
+        log(f"watch 已启动 (pid={proc.pid}, interval={_check_interval}s, gen={generation})")
         return True
 
 
-def stop_watch(timeout: float = 10.0) -> None:
+def stop_watch(timeout: float = 10.0) -> bool:
+    """串行停止已登记进程；只有确认退出才清句柄，失败返回 False 并禁止后续替换。
+
+    等待进程期间不持句柄锁，也不 join 输出线程，避免和 stdout 的 finally 互锁。
+    本函数不改变开启意图，命令 off/unload 负责先使旧排队任务失效。
+    """
     global _watch_process, _watch_stop_requested
 
-    with _watch_lock:
-        proc = _watch_process
-        _watch_stop_requested = True
-
-    if proc is None or proc.poll() is not None:
+    with _lifecycle_lock:
+        with _watch_lock:
+            proc = _watch_process
+            _watch_stop_requested = True
+            _cycle_event.set()
+        if proc is None:
+            return True
+        if proc.poll() is None:
+            log(f"停止 watch 进程 (pid={proc.pid})")
+            try:
+                proc.terminate()
+                proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                log(f"watch 进程未按时退出，强制结束进程树 (pid={proc.pid})")
+                try:
+                    if os.name == "nt":
+                        subprocess.run(
+                            ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            timeout=5, check=False,
+                        )
+                except Exception as exc:
+                    log(f"结束 watch 进程树失败: {exc}")
+                try:
+                    proc.kill()
+                    proc.wait(timeout=5)
+                except Exception as exc:
+                    log(f"watch 强制停止失败: {exc}")
+            except Exception as exc:
+                log(f"watch 停止失败: {exc}")
+        if proc.poll() is None:
+            log(f"watch 仍未退出，保留进程句柄 (pid={proc.pid})")
+            return False
         with _watch_lock:
             if _watch_process is proc:
                 _watch_process = None
-        return
-
-    log(f"停止 watch 进程 (pid={proc.pid})")
-    proc.terminate()
-    try:
-        proc.wait(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        log(f"watch 进程未按时退出，强制结束进程树 (pid={proc.pid})")
-        if os.name == "nt":
-            subprocess.run(
-                ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=False,
-            )
-        proc.kill()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            log(f"watch 进程 kill 后仍未退出 (pid={proc.pid})")
-
-    with _watch_lock:
-        if _watch_process is proc:
-            _watch_process = None
+            _cycle_event.set()
+        return True
 
 
 def cooling_down(last_at: float) -> bool:
@@ -1036,8 +1153,10 @@ def latest_web_change_report(target: MonitorTarget, page: int = 1) -> str:
             try:
                 with open(metadata_path, "r", encoding="utf-8") as f:
                     metadata = json.load(f)
-            except Exception as exc:
-                log(f"读取 {target.label} 最近变更 metadata 失败: {exc}")
+            except (OSError, ValueError) as exc:
+                return f"{target.label}: 读取最近变更 metadata 失败（{type(exc).__name__}）"
+            if not isinstance(metadata, dict):
+                return f"{target.label}: 最近变更 metadata 格式无效"
 
         try:
             with open(diff_path, "r", encoding="utf-8", errors="replace") as f:
@@ -1082,10 +1201,14 @@ def latest_docs_change_report(target: MonitorTarget, page: int = 1) -> str:
         try:
             with open(manifest_path, "r", encoding="utf-8") as f:
                 manifest = json.load(f)
-        except (OSError, json.JSONDecodeError) as exc:
-            return f"{target.label}: 读取 manifest 失败: {exc}"
+        except (OSError, ValueError) as exc:
+            return f"{target.label}: 读取 manifest 失败（{type(exc).__name__}）"
 
-        entries = manifest.get("changes", [])
+        if not isinstance(manifest, dict):
+            return f"{target.label}: manifest 格式无效"
+        entries = manifest.get("changes")
+        if not isinstance(entries, list) or any(not isinstance(entry, dict) for entry in entries):
+            return f"{target.label}: manifest 变更清单格式无效"
         counts = {kind: 0 for kind in ("added", "updated", "removed")}
         for entry in entries:
             kind = str(entry.get("kind", "")).lower()
@@ -1145,8 +1268,8 @@ def fingerprint_history_report(limit: int = 5) -> str:
     try:
         with open(_fingerprint_history_path, "r", encoding="utf-8") as f:
             raw_lines = f.readlines()
-    except OSError as exc:
-        return ds(f"读取 fingerprint 历史失败：{exc}")
+    except (OSError, UnicodeError) as exc:
+        return ds(f"读取 fingerprint 历史失败（{type(exc).__name__}）")
 
     records: list[dict[str, Any]] = []
     for line in reversed(raw_lines):
@@ -1164,7 +1287,8 @@ def fingerprint_history_report(limit: int = 5) -> str:
             continue
         if not isinstance(record.get("models"), dict):
             continue
-        if not isinstance(record.get("errors"), list):
+        errors = record.get("errors")
+        if not isinstance(errors, list) or any(not isinstance(error, str) for error in errors):
             continue
         records.append(record)
         if len(records) >= limit:
@@ -1229,12 +1353,18 @@ def status_page_report(output: str) -> str:
     - `status: <摘要>`：入口回退提示、基线/无变化计数；
     - `【DeepSeek 状态】...` 块：未恢复事件的明细（每块以空行或 `---` 分隔）；
     - `=== 本轮检查结果 ... status=baseline|nochange|change|error ===`：本轮结论。
+
+    执行失败优先于进程打印过的成功片段；跳过和缺失完整标记不等于健康，
+    仅可信成功结论且没有故障明细时显示无未恢复事件。这里只格式化，不抓取、不发送。
     """
     if "unexpected argument" in output:
         return ds(
-            "ds-monitor 二进制不认识状态页查询用的参数（--no-platform 等），"
-            "说明跑的还是旧版本；先重新构建 release 再试"
+            "❌ ds-monitor 二进制不认识状态页查询参数，说明跑的还是旧版本；"
+            "先重新构建 release 再试\n" + output.strip()[:600]
         )
+
+    if output.lstrip().startswith("❌"):
+        return ds(output.strip()[:REPLY_MAX_CHARS])
 
     status_field = ""
     summary = ""
@@ -1284,8 +1414,13 @@ def status_page_report(output: str) -> str:
         lines.append(summary)
     if mirror:
         lines.append("入口: 官方域名不可用，已自动回退国际镜像")
-    if status_field == "error" or error:
+    failed = status_field == "error" or bool(error)
+    if failed:
         lines.append("❌ " + (error or "订阅源抓不到，本轮没拿到状态"))
+    elif status_field == "skipped":
+        lines.append("⚠️ 服务状态页检查已跳过，请确认状态页监测是否启用")
+    elif status_field not in {"baseline", "nochange", "change", "alert"}:
+        lines.append("❌ 未返回完整的状态页检查结果，无法确认当前服务状态")
     if blocks:
         lines.append("")
         for block in blocks[:3]:
@@ -1293,7 +1428,7 @@ def status_page_report(output: str) -> str:
             lines.append("")
         if len(blocks) > 3:
             lines.append(f"（另有 {len(blocks) - 3} 条未恢复事件）")
-    elif status_field in {"baseline", "nochange"}:
+    elif status_field in {"baseline", "nochange"} and not failed:
         lines.append("当前没有未恢复事件 ✅")
 
     return ds("\n".join(lines).strip()[:REPLY_MAX_CHARS])
@@ -1332,26 +1467,32 @@ def do_check(room_id: int | None = None) -> None:
 
 
 def on_load() -> None:
-    # PluginHost 会先构造候选代并执行 on_load；候选失败时保留旧代。
-    # 本地配置错误属于可降级问题，继续使用内置默认值，避免首次加载时禁用插件。
+    """加载配置并建立新意图代次；卸载前排队任务不能作用于这一代。"""
+    global _unloading, _lifecycle_generation
+    with _watch_lock:
+        _unloading = False
+        _lifecycle_generation += 1
+        intent = _lifecycle_generation
     try:
         load_config()
     except Exception as exc:
         log(f"加载配置失败，改用内置默认值继续启动: {type(exc).__name__}: {exc}")
-    enabled = ", ".join(
-        target.label for target in _target_configs.values() if target.enabled
-    )
+    enabled = ", ".join(target.label for target in _target_configs.values() if target.enabled)
     status_state = "启用" if _status_config.get("enabled", True) else "未启用"
-    log(
-        f"加载完成 (binary={_binary_path}, interval={_check_interval}s, "
-        f"targets={enabled}, status={status_state})"
-    )
+    log(f"加载完成 (binary={_binary_path}, interval={_check_interval}s, targets={enabled}, status={status_state})")
     if _enabled:
-        start_watch()
+        start_watch(intent)
 
 
 def on_unload() -> None:
-    stop_watch()
+    """先撤销排队启动，再停止当前句柄；后台构建结束也不能复活进程。"""
+    global _unloading, _lifecycle_generation
+    with _watch_lock:
+        _unloading = True
+        _lifecycle_generation += 1
+        _cycle_event.set()
+    if not stop_watch():
+        log("卸载时 watch 未能停止，句柄已保留，禁止后续启动")
     log("卸载")
 
 
@@ -1402,16 +1543,26 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
 
 
 def cmd_status(msg: IcaNewMessage, client: IcaClient) -> None:
+    """分别展示开启意图与实际进程，停止失败不能显示为已经暂停。"""
+    with _watch_lock:
+        running = _watch_process is not None and _watch_process.poll() is None
+        enabled = _enabled
+    if running:
+        state = "✅ 运行中" if enabled else "⚠️ 已请求暂停，但进程尚未退出"
+    else:
+        state = "⚠️ 已开启但进程未运行" if enabled else "⏸ 已暂停"
     lines = [
         "🔍 DS 监测：DeepSeek 网页监测",
         f"插件版本: {PLUGIN_MANIFEST.version}",
         f"EXE版本: {binary_version()}",
-        f"状态: {'✅ 运行中' if _enabled and _watch_process is not None and _watch_process.poll() is None else '⏸ 已暂停'}",
+        f"状态: {state}",
         f"检查间隔: {_check_interval}s",
     ]
     if _publish_enabled:
         if _publish_in_progress:
             publish_state = "⏳ 正在发布"
+        elif _publish_failures >= PUBLISH_MAX_FAILURES:
+            publish_state = "⏸ 连续失败已熔断（/monitor deploy 手动恢复）"
         elif _publish_pending:
             publish_state = "🕓 待发布（下一轮补）"
         elif _last_publish_ok is None:
@@ -1462,7 +1613,7 @@ def cmd_status(msg: IcaNewMessage, client: IcaClient) -> None:
         lines.append(f"  备用入口: {status_cfg['fallback_url']}")
     lines.append(
         f"  抓取间隔: {status_cfg.get('interval', 120)}s"
-        "（只在 watch 内存里比较，不落盘；/monitor sp 可现场查询）"
+        "（watch 持久保存基线与待发通知；/monitor sp 只查询、不写状态）"
     )
     checked = _last_check_times.get("status")
     changed = _last_change_times.get("status")
@@ -1479,47 +1630,67 @@ def cmd_status(msg: IcaNewMessage, client: IcaClient) -> None:
     client.send_message(msg.reply_with("\n".join(lines)))
 
 
+def _lifecycle_reply(msg: IcaNewMessage, client: IcaClient, text: str) -> None:
+    """生命周期回复失败只记日志，不能撤销已受理任务或打断回滚。调用时不持状态锁。"""
+    try:
+        client.send_message(msg.reply_with(text))
+    except Exception as exc:
+        log(f"生命周期命令回复失败: {type(exc).__name__}: {exc}")
+
+
 def cmd_check(msg: IcaNewMessage, client: IcaClient) -> None:
-    global _enabled, _last_restart_cmd_at
-
-    if cooling_down(_last_restart_cmd_at):
-        remain = int(COMMAND_COOLDOWN_SECS - (time.monotonic() - _last_restart_cmd_at)) + 1
-        client.send_message(msg.reply_with(ds(f"命令冷却中，请 {remain} 秒后再试")))
+    """提交可取消的重启检查；更新期间不插队，等待结果不持生命周期锁。"""
+    global _enabled, _last_restart_cmd_at, _lifecycle_generation
+    rejection = ""
+    with _operation_lock:
+        if _update_in_progress or _unloading:
+            rejection = "正在更新或卸载监测，暂不能重启检查"
+        elif cooling_down(_last_restart_cmd_at):
+            rejection = "命令冷却中，请稍后再试"
+        else:
+            _last_restart_cmd_at = time.monotonic()
+            with _watch_lock:
+                _enabled = True
+                _lifecycle_generation += 1
+                intent = _lifecycle_generation
+    if rejection:
+        _lifecycle_reply(msg, client, ds(rejection))
         return
-
-    _last_restart_cmd_at = time.monotonic()
-    _enabled = True
-    client.send_message(msg.reply_with(ds("正在重启 watch，启动后会立即检查并回报本轮结果")))
+    _lifecycle_reply(msg, client, ds("正在重启 watch，启动后会立即检查并回报本轮结果"))
 
     def restart() -> None:
-        stop_watch()
-        _cycle_event.clear()
-        if not start_watch():
-            client.send_message(msg.reply_with(ds("watch 重启失败")))
-            return
-
-        generation = _watch_generation
-        started = time.monotonic()
-        if not wait_cycle_result(generation, CYCLE_WAIT_SECS):
-            if generation != _watch_generation:
-                # 已被更晚的 /monitor check 取代，让那次检查回报结果
+        with _lifecycle_lock:
+            with _operation_lock:
+                if _update_in_progress:
+                    return
+            with _watch_lock:
+                if _unloading or not _enabled or intent != _lifecycle_generation:
+                    return
+            if not stop_watch():
+                _lifecycle_reply(msg, client, ds("旧 watch 未能停止，未启动新进程"))
                 return
-            client.send_message(
-                msg.reply_with(
-                    ds(
-                        f"watch 已重启，但 {int(CYCLE_WAIT_SECS)}s 内没等到本轮检查结果，"
-                        "请稍后用 /monitor 查看状态与日志"
-                    )
-                )
-            )
-            return
-
-        client.send_message(msg.reply_with(cycle_report(time.monotonic() - started)))
+            if not start_watch(intent):
+                with _watch_lock:
+                    if intent != _lifecycle_generation or _unloading or not _enabled:
+                        return
+                _lifecycle_reply(msg, client, ds("watch 重启失败"))
+                return
+            generation = _watch_generation
+        started = time.monotonic()
+        ready = wait_cycle_result(generation, CYCLE_WAIT_SECS)
+        with _watch_lock:
+            if intent != _lifecycle_generation or _unloading or not _enabled:
+                return
+            alive = _watch_process is not None and _watch_process.poll() is None
+        if ready:
+            report = cycle_report(time.monotonic() - started)
+        elif not alive or _watch_exited_generation == generation:
+            report = ds("watch 已提前退出或输出中断，未取得本轮检查结果，请查看日志")
+        else:
+            report = ds(f"watch 已重启，但 {int(CYCLE_WAIT_SECS)}s 内未取得本轮检查结果")
+        _lifecycle_reply(msg, client, report)
 
     threading.Thread(target=restart, daemon=True).start()
-
-
-# --- 看板自动发布 ---------------------------------------------------------
 
 
 def noticer_rooms(cfg: dict[str, Any]) -> list[str]:
@@ -1543,9 +1714,10 @@ def noticer_rooms(cfg: dict[str, Any]) -> list[str]:
 
 
 def noticer_post(text: str) -> bool:
-    """把一条通知发到 [noticer] 的房间；失败只记日志，不抛异常。
+    """向所有配置房间发送发布结论，HTTP 与业务确认均成功才算成功。
 
-    Token 只进请求头，不写日志、不进正文。
+    只检查本次通知，不因通知失败重跑已经完成的部署；Token 仅放请求头。
+    单房间失败不阻断其他广播房间，也不把部分广播成功误报为全部成功。
     """
     cfg = load_rust_config().get("noticer") or {}
     url = str(cfg.get("url") or "").strip()
@@ -1555,26 +1727,33 @@ def noticer_post(text: str) -> bool:
         return False
 
     token = str(cfg.get("token") or "")
-    sent = False
+    all_sent = True
     for room in rooms:
-        headers = {"Content-Type": "application/json; charset=utf-8"}
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
-        request = urllib.request.Request(
-            url,
-            data=json.dumps({"room": room, "message": text}).encode("utf-8"),
-            headers=headers,
-            method="POST",
-        )
         try:
+            headers = {"Content-Type": "application/json; charset=utf-8"}
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
+            request = urllib.request.Request(
+                url,
+                data=json.dumps({"room": room, "message": text}).encode("utf-8"),
+                headers=headers,
+                method="POST",
+            )
             with urllib.request.urlopen(request, timeout=10) as response:
-                if 200 <= response.status < 300:
-                    sent = True
-                else:
-                    log(f"发布通知到 {room} 失败: HTTP {response.status}")
+                # noticer 的确认是小型 JSON；拒绝异常大正文，避免无界读取。
+                body = response.read(65537)
+                if len(body) > 65536:
+                    raise ValueError("确认正文超限")
+                payload = json.loads(body)
+                if not (200 <= response.status < 300):
+                    raise ValueError("HTTP 状态未成功")
+                if not isinstance(payload, dict) or payload.get("status") != "ok":
+                    raise ValueError("业务状态未确认成功")
         except Exception as exc:
-            log(f"发布通知到 {room} 失败: {type(exc).__name__}: {exc}")
-    return sent
+            all_sent = False
+            # 不回显服务端正文或异常中的 URL，避免把私有配置带进日志。
+            log(f"发布通知到 {room} 未确认成功（{type(exc).__name__}）")
+    return all_sent
 
 
 def site_stats(root: str) -> tuple[int, float]:
@@ -1613,23 +1792,27 @@ def archive_entries(root: str) -> list[tuple[str, str]] | None:
     except (OSError, ValueError, TypeError):
         return None
 
+    # 两类集合都由导出器固定生成；缺一类不能补成空集合，否则会把历史误报为新增。
+    if not isinstance(data, dict) or not {"targets", "fingerprints"}.issubset(data):
+        return None
+    targets = data["targets"]
+    fingerprints = data["fingerprints"]
+    if not isinstance(targets, dict) or not isinstance(fingerprints, list):
+        return None
     entries: list[tuple[str, str]] = []
-    targets = data.get("targets")
-    if isinstance(targets, dict):
-        for target, items in targets.items():
-            if not isinstance(target, str) or not isinstance(items, list):
-                continue
-            for item in items:
-                entry_id = item.get("id") if isinstance(item, dict) else None
-                if isinstance(entry_id, str) and entry_id:
-                    entries.append((target, entry_id))
-
-    fingerprints = data.get("fingerprints")
-    if isinstance(fingerprints, list):
-        for item in fingerprints:
-            entry_id = item.get("checked_at") if isinstance(item, dict) else None
-            if isinstance(entry_id, str) and entry_id:
-                entries.append(("fingerprints", entry_id))
+    for target, items in targets.items():
+        if not isinstance(target, str) or not isinstance(items, list):
+            return None
+        for item in items:
+            entry_id = item.get("id") if isinstance(item, dict) else None
+            if not isinstance(entry_id, str) or not entry_id:
+                return None
+            entries.append((target, entry_id))
+    for item in fingerprints:
+        entry_id = item.get("checked_at") if isinstance(item, dict) else None
+        if not isinstance(entry_id, str) or not entry_id:
+            return None
+        entries.append(("fingerprints", entry_id))
     return entries
 
 
@@ -1650,276 +1833,355 @@ def new_archive_urls(
     ]
 
 
-def plan_publish(changes: int, pending: bool, in_progress: bool) -> str:
-    """发布判据，纯函数（便于本地直接验算）：skip / queue / publish 三选一。
+def reserve_publish(automatic: bool) -> bool:
+    """在启动线程前原子占位，与 update 共用操作锁。
 
-    - 正在发布时只登记待发布：构建 + 导出 + 上传不能两路一起跑；
-    - 上一次没成功（pending）时，即使本轮没有变化也要补一次，免得看板一直落后。
+    自动发布受开关和连续失败熔断控制；人工发布可用于恢复熔断。
+    更新或发布正在进行时只保留待办，不并发构建或导出。锁内不做外部调用。
     """
-    if not (changes > 0 or pending):
-        return "skip"
-    return "queue" if in_progress else "publish"
+    global _publish_in_progress, _publish_pending
+    with _operation_lock:
+        if _unloading:
+            return False
+        if automatic and (
+            not _publish_enabled or _publish_failures >= PUBLISH_MAX_FAILURES
+        ):
+            return False
+        if _update_in_progress or _publish_in_progress:
+            _publish_pending = True
+            return False
+        _publish_in_progress = True
+        _publish_pending = False
+        return True
 
 
 def maybe_publish(changes: int) -> None:
-    """按本轮变化决定要不要发起一次发布。"""
-    global _publish_pending
+    """合并变化并安排一次发布；连续失败到上限后等人工恢复。
 
-    action = plan_publish(changes, _publish_pending, _publish_in_progress)
-    if action == "skip":
-        return
-    if action == "queue":
-        _publish_pending = True
-        log(f"本轮有 {changes} 处变化，但发布已在进行中，登记为待发布")
-        return
+    占位发生在线程启动前，下一轮变化只置 pending；启动线程失败则还回待办。
+    """
+    global _publish_pending, _publish_in_progress
+    with _operation_lock:
+        if _unloading or not _publish_enabled:
+            return
+        if changes > 0:
+            _publish_pending = True
+        if not _publish_pending or not reserve_publish(automatic=True):
+            return
+    try:
+        threading.Thread(
+            target=publish_once, args=(True,), kwargs={"reserved": True}, daemon=True
+        ).start()
+    except Exception as exc:
+        with _operation_lock:
+            _publish_in_progress = False
+            _publish_pending = True
+        log(f"发布线程启动失败（{type(exc).__name__}），保留待发布")
 
-    _publish_pending = False
-    threading.Thread(target=publish_once, args=(True,), daemon=True).start()
 
+def publish_once(notify_room: bool, *, reserved: bool = False) -> str:
+    """执行已占位的发布，失败统一记账，通知失败不重跑部署。
 
-def publish_once(notify_room: bool) -> str:
-    """导出并部署一次看板（跑 web_craw/deploy.ps1），返回给用户看的结论。
-
-    构建、导出、上传都在脚本里完成，这里只负责跑它、判断结果、按需通知，以及把发布
-    期间又攒下的变化补一次。`notify_room` 为真时结论发到 noticer 房间（自动发布走这条
-    路）；手动 `/monitor deploy` 传假，由命令自己回复，免得同一条消息发两遍。
+    自动与手工共用同一事务出口；缺脚本、异常、超时都纳入连续失败计数。
+    发布期间新增的待办在成功后合并补一次，失败则留给下一轮，达到上限即熔断。
+    插件卸载后不启动排队的发布；已经运行的部署不在此处强杀。
     """
     global _publish_in_progress, _publish_pending, _publish_failures
     global _last_publish_at, _last_publish_ok
 
-    report = ""
-    follow_up = False
+    if not reserved and not reserve_publish(automatic=notify_room):
+        return ds("发布暂未执行：正在更新/发布、自动重试已暂停，或插件正在卸载")
+    with _operation_lock:
+        if _unloading:
+            _publish_in_progress = False
+            _publish_pending = True
+            return ds("插件正在卸载，已取消排队的看板发布")
 
-    if _update_in_progress:
-        # 二进制正在被构建/替换，这时跑导出等于和 update 抢 target 目录
-        _publish_pending = True
-        return ds("正在更新监测二进制，看板发布挪到下一轮补上")
-
-    root = repo_root()
-    script = os.path.join(root, DEPLOY_SCRIPT_NAME)
-    if not os.path.isfile(script):
-        _last_publish_ok = False
-        report = ds(f"看板发布失败：找不到部署脚本 {script}")
-        if notify_room:
-            noticer_post(report)
-        return report
-
-    log(f"开始发布看板: {script}")
-    entries_before = archive_entries(root)
-    _publish_in_progress = True
     started = time.monotonic()
     ok = False
+    report = ""
     try:
-        try:
-            result = subprocess.run(
-                ["pwsh", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script],
-                cwd=root,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=PUBLISH_TIMEOUT_SECS,
-            )
-            output = (result.stdout or "") + (result.stderr or "")
-            ok = result.returncode == 0 and "Deployment complete!" in output
-            if ok:
-                count, size = site_stats(root)
-                url = publish_url(output) or ARCHIVE_SITE_URL
-                fresh_urls = new_archive_urls(entries_before, archive_entries(root), url)
-                scope = ""
-                if _last_cycle_changes:
-                    scope = (
-                        f"（最近一轮 {_last_cycle_changes} 处变化，"
-                        f"分析 {_last_cycle_analyzed} 份）"
-                    )
-                lines = [f"✅ 看板已更新{scope}"]
-                if fresh_urls:
-                    lines.append("新页面：")
-                    lines.extend(fresh_urls)
-                else:
-                    lines.append(url)
-                lines.append(
-                    f"site/ 共 {count} 个文件、{size:.1f} MiB，"
-                    f"用时 {time.monotonic() - started:.0f}s"
-                )
-                report = ds("\n".join(lines))
-            else:
-                tail = output.strip()[-500:]
-                report = ds(f"❌ 看板发布失败（exit {result.returncode}）:\n{tail}")
-        except subprocess.TimeoutExpired:
-            report = ds(f"❌ 看板发布超时（{int(PUBLISH_TIMEOUT_SECS)}s），本次放弃")
-        except Exception as exc:
-            report = ds(f"❌ 看板发布失败: {type(exc).__name__}: {exc}")
-    finally:
-        _publish_in_progress = False
-        _last_publish_at = time.monotonic()
-        _last_publish_ok = ok
-
+        root = repo_root()
+        script = os.path.join(root, DEPLOY_SCRIPT_NAME)
+        if not os.path.isfile(script):
+            raise FileNotFoundError("找不到部署脚本")
+        log(f"开始发布看板: {script}")
+        entries_before = archive_entries(root)
+        result = subprocess.run(
+            ["pwsh", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=PUBLISH_TIMEOUT_SECS,
+        )
+        output = (result.stdout or "") + (result.stderr or "")
+        ok = result.returncode == 0 and "Deployment complete!" in output
         if ok:
-            _publish_failures = 0
-            # 发布期间又攒下的变化：刚跑完，紧接着补一次
-            follow_up = _publish_pending
-            _publish_pending = False
-        else:
-            _publish_failures += 1
-            if _publish_failures >= PUBLISH_MAX_FAILURES:
-                _publish_pending = False
-                report += (
-                    f"\n（已连续失败 {_publish_failures} 次，暂停自动重试；"
-                    "修好后用 /monitor deploy 手动发布）"
-                )
+            count, size = site_stats(root)
+            url = publish_url(output) or ARCHIVE_SITE_URL
+            fresh_urls = new_archive_urls(entries_before, archive_entries(root), url)
+            lines = ["✅ 看板已更新"]
+            if fresh_urls:
+                lines.append("新页面：")
+                # 避免一次积压生成无界通知；完整记录仍可从主站访问。
+                lines.extend(fresh_urls[:8])
+                if len(fresh_urls) > 8:
+                    lines.append(f"另有 {len(fresh_urls) - 8} 条记录：{url}")
             else:
+                lines.append(url)
+            lines.append(
+                f"site/ 共 {count} 个文件、{size:.1f} MiB，"
+                f"用时 {time.monotonic() - started:.0f}s"
+            )
+            report = ds("\n".join(lines))
+        else:
+            report = ds(
+                f"❌ 看板发布失败（exit {result.returncode}）:\n{output.strip()[-500:]}"
+            )
+    except subprocess.TimeoutExpired:
+        report = ds(f"❌ 看板发布超时（{int(PUBLISH_TIMEOUT_SECS)}s），本次放弃")
+    except Exception as exc:
+        report = ds(f"❌ 看板发布失败: {type(exc).__name__}: {exc}")
+    finally:
+        with _operation_lock:
+            _last_publish_at = time.time()
+            _last_publish_ok = ok
+            if ok:
+                _publish_failures = 0
+            else:
+                _publish_failures += 1
                 _publish_pending = True
+                if _publish_failures >= PUBLISH_MAX_FAILURES:
+                    report += (
+                        f"\n（已连续失败 {_publish_failures} 次，暂停自动重试；"
+                        "修好后用 /monitor deploy 手动发布）"
+                    )
+        # 通知仍在占位内，防止新一轮在旧任务通知期间挤入并覆盖发布状态。
+        try:
+            if notify_room and not noticer_post(report):
+                log("发布结论未全部送达；部署结果已记录，不因此重复部署")
+        except Exception as exc:
+            log(f"发布结论通知异常（{type(exc).__name__}），不重复部署")
+        finally:
+            with _operation_lock:
+                _publish_in_progress = False
 
-        if notify_room:
-            noticer_post(report)
-
-    if follow_up:
-        threading.Thread(target=publish_once, args=(True,), daemon=True).start()
+    if ok:
+        maybe_publish(0)
     return report
 
 
 def cmd_deploy(msg: IcaNewMessage, client: IcaClient) -> None:
-    """`/monitor deploy`：立刻导出并部署一次看板（管理员 + 冷却）。
-
-    自动发布没开、或自动发布失败要救急时用它；导出与部署都在 deploy.ps1 里完成，
-    结果直接回在这条命令下。
-    """
-    global _last_publish_cmd_at
-
+    """管理员手动发布；原子占位可绕过熔断，结果只回复当前命令。"""
+    global _last_publish_cmd_at, _publish_in_progress, _publish_pending
     if not is_admin(msg, client):
         client.send_message(msg.reply_with(ds("只有管理员才能手动发布看板")))
         return
 
-    if _publish_in_progress:
-        client.send_message(msg.reply_with(ds("已有一次发布在进行中，等它跑完再用")))
+    with _operation_lock:
+        if cooling_down(_last_publish_cmd_at):
+            report = ds("命令冷却中，请稍后再试")
+            accepted = False
+        else:
+            accepted = reserve_publish(automatic=False)
+            report = ds(
+                "正在导出并部署看板（构建 + 导出 + 上传，通常 1-3 分钟）"
+                if accepted else "正在更新/发布，或插件正在卸载，请稍后再试"
+            )
+            if accepted:
+                _last_publish_cmd_at = time.monotonic()
+    if not accepted:
+        client.send_message(msg.reply_with(report))
         return
-
-    if cooling_down(_last_publish_cmd_at):
-        remain = int(COMMAND_COOLDOWN_SECS - (time.monotonic() - _last_publish_cmd_at)) + 1
-        client.send_message(msg.reply_with(ds(f"命令冷却中，请 {remain} 秒后再试")))
-        return
-
-    _last_publish_cmd_at = time.monotonic()
-    client.send_message(
-        msg.reply_with(ds("正在导出并部署看板（构建 + 导出 + 上传，通常 1-3 分钟）"))
-    )
 
     def deploy() -> None:
-        client.send_message(msg.reply_with(publish_once(False)))
+        result = publish_once(False, reserved=True)
+        try:
+            client.send_message(msg.reply_with(result))
+        except Exception as exc:
+            log(f"手动发布结果回复失败（{type(exc).__name__}）")
 
-    threading.Thread(target=deploy, daemon=True).start()
+    try:
+        try:
+            client.send_message(msg.reply_with(report))
+        except Exception as exc:
+            log(f"发布开始回复失败（{type(exc).__name__}），继续执行已受理任务")
+        threading.Thread(target=deploy, daemon=True).start()
+    except Exception as exc:
+        with _operation_lock:
+            _publish_in_progress = False
+            _publish_pending = True
+        log(f"手动发布线程启动失败（{type(exc).__name__}），已释放占位")
 
 
 def cmd_update(msg: IcaNewMessage, client: IcaClient) -> None:
-    """`/monitor update`：构建 release、刷新运行副本、重启 watch。
+    """先构建并暂存新副本，成功后才短暂停机原子替换；新进程启动失败则回滚旧副本。
 
-    watch 锁住的是副本，所以这里可以放心停掉它再覆盖构建产物：
-    停 watch → `cargo build --release` → 复制副本 → 重启 watch。
-    任一步失败都回到"旧副本继续监测"，不把监测留在停止状态。
+    操作锁仅负责与发布互斥占位；构建、通知、等待结果都不持锁。生命周期锁只覆盖
+    最终停止/替换/启动，off/unload 可随时撤销意图。原先关闭时只更新文件，不启动。
     """
-    global _last_update_cmd_at, _update_in_progress
-
+    global _last_update_cmd_at, _update_in_progress, _lifecycle_generation
     if not is_admin(msg, client):
-        client.send_message(msg.reply_with(ds("只有管理员才能触发更新")))
+        _lifecycle_reply(msg, client, ds("只有管理员才能触发更新"))
         return
-
-    if _update_in_progress:
-        client.send_message(msg.reply_with(ds("已有一次更新在进行中，请稍候")))
-        return
-
-    if _publish_in_progress:
-        # 发布正在跑 deploy.ps1（内含 cargo build --release），这时换二进制会互相抢锁
-        client.send_message(
-            msg.reply_with(ds("正在发布看板，等它跑完再更新（/monitor 可看状态）"))
-        )
-        return
-
-    if cooling_down(_last_update_cmd_at):
-        remain = int(COMMAND_COOLDOWN_SECS - (time.monotonic() - _last_update_cmd_at)) + 1
-        client.send_message(msg.reply_with(ds(f"命令冷却中，请 {remain} 秒后再试")))
-        return
-
     source = source_binary_path()
-    if not _binary_path or not source:
-        client.send_message(msg.reply_with(ds("未配置 ds-monitor 二进制路径，无法更新")))
+    destination = _binary_path
+    if not destination or not source:
+        _lifecycle_reply(msg, client, ds("未配置 ds-monitor 二进制路径，无法更新"))
         return
-    if os.path.normcase(os.path.abspath(source)) == os.path.normcase(os.path.abspath(_binary_path)):
-        client.send_message(
-            msg.reply_with(
-                ds(
-                    "binary 指向的是构建产物本体，长跑 watch 会锁住它；"
-                    "请改成同目录下的副本（例如 ds-monitor-copy.exe）"
-                )
-            )
-        )
+    if os.path.normcase(os.path.abspath(source)) == os.path.normcase(os.path.abspath(destination)):
+        _lifecycle_reply(msg, client, ds("binary 指向构建产物本体，请改成同目录运行副本"))
+        return
+    # 与已有切换先串行，再原子占位；不能持操作锁等待生命周期锁。
+    rejection = ""
+    with _lifecycle_lock:
+        with _operation_lock:
+            if _update_in_progress or _publish_in_progress:
+                rejection = "已有更新或看板发布在进行中，请稍候"
+            elif cooling_down(_last_update_cmd_at):
+                rejection = "命令冷却中，请稍后再试"
+            else:
+                with _watch_lock:
+                    if _unloading:
+                        rejection = "插件正在卸载，已取消更新"
+                    else:
+                        _lifecycle_generation += 1
+                        intent = _lifecycle_generation
+                if not rejection:
+                    _last_update_cmd_at = time.monotonic()
+                    _update_in_progress = True
+    if rejection:
+        _lifecycle_reply(msg, client, ds(rejection))
         return
 
-    _last_update_cmd_at = time.monotonic()
-    _update_in_progress = True
-    client.send_message(msg.reply_with(ds("正在更新：停 watch → 构建 release → 刷新副本 → 重启 watch")))
+    def current() -> bool:
+        with _watch_lock:
+            return not _unloading and intent == _lifecycle_generation
+
+    def watch_state() -> str:
+        with _watch_lock:
+            alive = _watch_process is not None and _watch_process.poll() is None
+            return "旧 watch 仍在运行" if alive else "当前未运行 watch，未自动开启"
+
+    def reply(text: str) -> None:
+        _lifecycle_reply(msg, client, ds(text))
 
     def update() -> None:
         global _update_in_progress
-
+        staging = ""
+        keep_backup = False
+        generation: int | None = None
         try:
-            stop_watch()
-
-            failure = ""
-            root = repo_root()
-            log(f"开始构建 release (cwd={root or '继承当前目录'})")
+            if not current():
+                return
             try:
                 result = subprocess.run(
                     ["cargo", "build", "--release", "--bin", "ds-monitor"],
-                    cwd=root or None,
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    timeout=BUILD_TIMEOUT_SECS,
+                    cwd=repo_root() or None, capture_output=True, text=True,
+                    encoding="utf-8", errors="replace", timeout=BUILD_TIMEOUT_SECS,
                 )
                 if result.returncode != 0:
-                    tail = (result.stderr or result.stdout or "").strip()
-                    failure = f"构建失败（exit {result.returncode}）:\n{tail[-500:]}"
+                    tail = (result.stderr or result.stdout or "").strip()[-500:]
+                    reply(f"构建失败（exit {result.returncode}）:\n{tail}\n{watch_state()}")
+                    return
             except subprocess.TimeoutExpired:
-                failure = f"构建超时（{int(BUILD_TIMEOUT_SECS)}s）"
+                reply(f"构建超时（{int(BUILD_TIMEOUT_SECS)}s）\n{watch_state()}")
+                return
             except Exception as exc:
-                failure = f"构建失败: {exc}"
+                reply(f"构建失败: {exc}\n{watch_state()}")
+                return
+            if not current():
+                reply("更新的后续切换已取消，未重启 watch")
+                return
+            # 同一磁盘暂存并备份，任一次复制失败都不触碰运行中的旧文件。
+            try:
+                staging = tempfile.mkdtemp(prefix=".ds-monitor-update-", dir=os.path.dirname(destination) or ".")
+                staged = os.path.join(staging, "new.exe")
+                backup = os.path.join(staging, "old.exe")
+                shutil.copy2(source, staged)
+                had_backup = os.path.isfile(destination)
+                if had_backup:
+                    shutil.copy2(destination, backup)
+            except Exception as exc:
+                reply(f"暂存副本失败，未替换旧文件: {exc}\n{watch_state()}")
+                return
+            def rollback(reason: str) -> None:
+                """在生命周期锁内恢复旧文件；取消不复活，停止或替换失败保留可手动恢复的备份。"""
+                nonlocal keep_backup
+                with _lifecycle_lock:
+                    if not current() or not _enabled:
+                        reply(f"{reason}；开启意图已取消，未额外恢复监测")
+                        return
+                    if not had_backup:
+                        reply(f"{reason}；原先没有旧副本可回滚，请查看日志")
+                        return
+                    if not stop_watch():
+                        keep_backup = True
+                        reply(f"{reason}；新 watch 未能停止，禁止回滚覆盖；旧副本保留在 {backup}")
+                        return
+                    try:
+                        os.replace(backup, destination)
+                    except Exception as exc:
+                        keep_backup = True
+                        reply(f"{reason}；回滚失败: {exc}；旧副本保留在 {backup}")
+                        return
+                    restored = current() and _enabled and start_watch(intent)
+                    state = "已恢复旧副本监测" if restored else "旧副本已恢复到磁盘，但监测未启动"
+                    reply(f"{reason}，已回滚旧文件；{state}")
 
-            if not failure:
+            with _lifecycle_lock:
+                if not current():
+                    reply("更新的后续切换已取消，未重启 watch")
+                    return
+                if not stop_watch():
+                    reply("旧 watch 未能停止，保留句柄，未替换运行副本")
+                    return
                 try:
-                    shutil.copy2(source, _binary_path)
+                    os.replace(staged, destination)
                 except Exception as exc:
-                    failure = f"刷新副本失败: {exc}"
-
-            started = start_watch()
-            if not started:
-                client.send_message(
-                    msg.reply_with(ds("更新后 watch 启动失败，请用 /monitor 检查二进制路径"))
-                )
+                    restored = current() and _enabled and start_watch(intent)
+                    state = "已用未改动的旧副本恢复监测" if restored else watch_state()
+                    reply(f"原子替换失败，旧文件未改动: {exc}\n{state}")
+                    return
+                if not current() or not _enabled:
+                    reply("副本更新完成；监测保持暂停或已卸载，未启动 watch")
+                    return
+                if not start_watch(intent):
+                    rollback("新副本启动失败")
+                    return
+                generation = _watch_generation
+            started = time.monotonic()
+            ready = wait_cycle_result(generation, CYCLE_WAIT_SECS)
+            if not current() or not _enabled:
+                reply("副本已更新；监测已暂停或被后续操作取代，未额外恢复")
                 return
-
-            if failure:
-                client.send_message(
-                    msg.reply_with(
-                        ds(f"{failure}\n\n已用旧副本恢复监测（EXE版本: {binary_version()}）")
-                    )
-                )
+            if ready:
+                report = cycle_report(time.monotonic() - started)
+            elif _watch_exited_generation == generation or _watch_process is None or _watch_process.poll() is not None:
+                rollback("新 watch 在首轮结果前退出或输出中断")
                 return
-
-            generation = _watch_generation
-            started_at = time.monotonic()
-            if wait_cycle_result(generation, CYCLE_WAIT_SECS):
-                report = cycle_report(time.monotonic() - started_at)
             else:
-                report = ds("watch 已重启，但没在限定时间内等到本轮检查结果")
-            client.send_message(
-                msg.reply_with(f"{ds(f'更新完成（EXE版本: {binary_version()}）')}\n\n{report}")
-            )
+                report = "watch 已启动，但未在限定时间内取得本轮检查结果"
+            reply(f"更新完成\n\n{report}")
         finally:
-            _update_in_progress = False
+            if staging and not keep_backup:
+                try:
+                    shutil.rmtree(staging)
+                except OSError as exc:
+                    log(f"清理更新临时目录失败: {exc}")
+            with _operation_lock:
+                _update_in_progress = False
 
-    threading.Thread(target=update, daemon=True).start()
+    # 回复、线程构造或 start 失败，都必须归还预占，不能让更新永久卡在进行中。
+    try:
+        reply("正在更新：旧 watch 继续运行 → 构建 release → 暂存副本 → 短暂停机原子切换")
+        threading.Thread(target=update, daemon=True).start()
+    except Exception as exc:
+        with _operation_lock:
+            _update_in_progress = False
+        log(f"无法启动更新任务: {exc}")
 
 
 def cmd_status_page(msg: IcaNewMessage, client: IcaClient) -> None:
@@ -2062,45 +2324,70 @@ def cmd_render_last(
 
 
 def cmd_enable(msg: IcaNewMessage, client: IcaClient, on: bool) -> None:
-    """`/monitor on|off`。
-
-    `off` 只有管理员能做：停掉监测会让所有人收不到推送。`on` 谁都可以（发现监测停了，
-    顺手开回来是好事；已经在跑时只回一句状态，不重启——重启会打断正在跑的那一轮）。
-
-    开启时和 `/monitor check` 一样回报本轮检查结果：watch 一起来就会跑一轮，等它的
-    `=== 本轮检查结果 ... ===` 比让用户再发一次 check 省事。
-    """
-    global _enabled
-
+    """开启提交可取消任务；暂停先撤销全部旧意图，停止失败保留句柄并如实报告。"""
+    global _enabled, _lifecycle_generation
     if not on:
         if not is_admin(msg, client):
-            client.send_message(msg.reply_with(ds("只有管理员才能暂停监测")))
+            _lifecycle_reply(msg, client, ds("只有管理员才能暂停监测"))
             return
-        _enabled = False
-        stop_watch()
-        client.send_message(msg.reply_with(ds("监测已暂停")))
+        with _watch_lock:
+            _enabled = False
+            _lifecycle_generation += 1
+            intent = _lifecycle_generation
+            _cycle_event.set()
+        with _lifecycle_lock:
+            with _watch_lock:
+                superseded = intent != _lifecycle_generation
+            stopped = superseded or stop_watch()
+        text = "暂停请求已被新的开启命令取代" if superseded else (
+            "监测已暂停" if stopped else "已取消后续启动，但 watch 未能停止；保留句柄，请检查日志")
+        _lifecycle_reply(msg, client, ds(text))
         return
-
-    _enabled = True
-
-    with _watch_lock:
-        running = _watch_process is not None and _watch_process.poll() is None
-    if running:
-        client.send_message(msg.reply_with(ds("监测已在运行（要立即检查用 /monitor check）")))
+    rejection = ""
+    with _operation_lock:
+        if _update_in_progress or _unloading:
+            rejection = "正在更新或卸载监测，暂不能开启"
+        else:
+            with _watch_lock:
+                _enabled = True
+                _lifecycle_generation += 1
+                intent = _lifecycle_generation
+    if rejection:
+        _lifecycle_reply(msg, client, ds(rejection))
         return
 
     def enable() -> None:
-        if not start_watch():
-            client.send_message(msg.reply_with(ds("监测启动失败")))
-            return
-
-        generation = _watch_generation
-        started_at = time.monotonic()
-        if wait_cycle_result(generation, CYCLE_WAIT_SECS):
-            report = cycle_report(time.monotonic() - started_at)
+        with _lifecycle_lock:
+            with _operation_lock:
+                if _update_in_progress:
+                    return
+            with _watch_lock:
+                if _unloading or not _enabled or intent != _lifecycle_generation:
+                    return
+                running = _watch_process is not None and _watch_process.poll() is None
+            if running:
+                _lifecycle_reply(msg, client, ds("监测已在运行（要立即检查用 /monitor check）"))
+                return
+            if not start_watch(intent):
+                with _watch_lock:
+                    if _unloading or not _enabled or intent != _lifecycle_generation:
+                        return
+                _lifecycle_reply(msg, client, ds("监测启动失败"))
+                return
+            generation = _watch_generation
+        started = time.monotonic()
+        ready = wait_cycle_result(generation, CYCLE_WAIT_SECS)
+        with _watch_lock:
+            if _unloading or not _enabled or intent != _lifecycle_generation:
+                return
+            alive = _watch_process is not None and _watch_process.poll() is None
+        if ready:
+            report = cycle_report(time.monotonic() - started)
+        elif not alive or _watch_exited_generation == generation:
+            report = ds("watch 已提前退出或输出中断，未取得本轮检查结果，请查看日志")
         else:
-            report = ds(f"没在 {int(CYCLE_WAIT_SECS)}s 内等到本轮检查结果，稍后用 /monitor 查看")
-        client.send_message(msg.reply_with(f"{ds('监测已开启')}\n\n{report}"))
+            report = ds(f"没在 {int(CYCLE_WAIT_SECS)}s 内取得本轮检查结果，稍后用 /monitor 查看")
+        _lifecycle_reply(msg, client, f"{ds('监测已开启')}\n\n{report}")
 
     threading.Thread(target=enable, daemon=True).start()
 

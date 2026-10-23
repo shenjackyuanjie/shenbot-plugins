@@ -33,6 +33,8 @@
 
 ## 插件文档
 
+- DeepSeek 监测（[ds_monitor.py](plugins/ds_monitor.py)）：运行副本、命令、更新回滚与发布熔断见
+  [监测插件维护说明](docs/ds-monitor.md)。
 - 名竞小工具（[namerena.py](plugins/namerena.py)）：命令表、依赖与配置项、`+ol` 导出格式见
   [namer 命令说明](docs/namer-commands.md)。
 
