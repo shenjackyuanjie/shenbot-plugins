@@ -318,9 +318,9 @@ class ImageService:
             f"任务 {short} 待确认\n"
             + head
             + f"参数：尺寸 {params['size']} / 质量 {params['quality']} / 背景 {params['background']}\n"
-            "回复 /codex confirm 开始生成、/codex cancel 取消、"
-            "/codex set --quality high 调参数；只有一个待确认任务时可省略编号。\n"
-            "10 分钟内有效。"
+            f"确认：/codex confirm {short}\n"
+            f"改参数：/codex set {short} --quality high · 取消：/codex cancel {short}\n"
+            "10 分钟内有效；只剩一个待确认任务时可以省略编号。"
         )
 
     def _receipt(self, client, msg, text: str, short: str) -> None:

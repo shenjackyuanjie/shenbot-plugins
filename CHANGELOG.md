@@ -13,7 +13,7 @@
 - 新增 `alert_groups` 配置：额度自动提醒只发指定群（支持多个）；留空沿用 `allowed_groups`，白名单里其他群仍可手动 `/codex check`，提醒进度仍按群独立记录。
 - 插件日志改走宿主 `shenbot_api.info/warn`：生图各阶段与额度自动轮询的失败提示进入 Bot tracing 日志（带时间戳与级别），不再直接 `print`；`shenbot_api` 同步声明 `debug/info/warn`（宿主 0.9.7 起提供）。
 - 生图子命令支持省略 `image` 前缀：`/codex confirm`、`/codex cancel`、`/codex status`、`/codex set`、`/codex attach`、`/codex direct` 与带前缀时等价。
-- 预览末尾直接给出可省略编号的下一步命令；`direct` 模式不再复述用户原话，只标注模式与参数。
+- 预览直接给出带任务编号的可复制命令（确认/改参数/取消），并注明只剩一个待确认任务时才可省略编号；`direct` 模式不再复述用户原话，只标注模式与参数。
 - `/codex image status` 不带编号时列出最近 5 条任务（任务号、状态、创建时间），失败提示也直接带上任务号，不用先自己记编号。
 - 润色 `max_tokens` 由 2048 提到 10000（上游实测接受），避免 high 思考占满预算导致 `finish_reason=length` 被截断；审核或润色解析失败时同时归档响应正文，便于定位是截断还是格式问题。
 - `/codex image confirm|cancel|status|set|attach` 支持省略编号：本人在当前群只剩一个待确认任务时直接操作它，有多个则列出现有编号；宿主管理员可用 `confirm`/`cancel` 代办本群其他人的任务，账号与群仍然强制匹配，回执标注“管理员代办”。

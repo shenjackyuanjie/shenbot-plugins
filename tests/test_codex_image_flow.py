@@ -178,7 +178,9 @@ class ImageFlowTests(unittest.TestCase):
         self.assertIn("直接生成", preview)
         # direct 没润色，预览不再复述用户原话，并直接给出可省略编号的下一步。
         self.assertNotIn("提示词：", preview)
-        self.assertIn("/codex confirm", preview)
+        # 预览必须给出带编号的可复制命令，避免之后多任务时无从下手。
+        self.assertIn("/codex confirm abcdef12", preview)
+        self.assertIn("/codex cancel abcdef12", preview)
         # direct 不改写提示词，但前审与后审仍是两次独立请求，草稿要求两次 pass。
         self.assertEqual(stages, ["pre_review", "post_review"])
         self.assertTrue(archive.drafted)
