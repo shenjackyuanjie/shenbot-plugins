@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import tempfile
+import threading
+import time
 import unittest
 import urllib.error
 from datetime import datetime
@@ -213,6 +215,25 @@ class CommandTests(unittest.TestCase):
             self.finish()
         self.assertEqual(self.client.send_message.call_count, 1)
         self.assertFalse(self.state.busy)
+
+
+class GenerationSlotTests(unittest.TestCase):
+    def test_queue_rejects_when_waiting_is_full_and_wakes_on_release(self):
+        slots = codex.GenerationSlots(concurrency=2, max_waiting=1)
+        self.assertTrue(slots.acquire())
+        self.assertTrue(slots.acquire())
+        waiter = threading.Thread(target=slots.acquire, daemon=True)
+        waiter.start()
+        deadline = time.monotonic() + 2
+        while slots.snapshot()[1] == 0 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertEqual(slots.snapshot(), (2, 1))
+        # 并发已满且排队已满：新的确认直接拒绝，不占坑也不排队。
+        self.assertFalse(slots.acquire())
+        slots.release()
+        waiter.join(2)
+        self.assertFalse(waiter.is_alive())
+        self.assertEqual(slots.snapshot(), (2, 0))
 
 
 if __name__ == "__main__":

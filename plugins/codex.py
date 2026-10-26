@@ -149,6 +149,8 @@ PLUGIN_MANIFEST = PluginManifest(
             deepseek_model="deepseek-flash",
             # 留空时额度提醒沿用 allowed_groups；填写后只发这些群。
             alert_groups=[],
+            image_concurrency=3,
+            image_queue_limit=5,
         )
     },
 )
@@ -173,6 +175,9 @@ class Settings:
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-flash"
     alert_groups: frozenset[int] = frozenset()
+    # 生图只有收费生成需要排队；审核与润色不占这两个名额。
+    image_concurrency: int = 3
+    image_queue_limit: int = 5
 
     def __post_init__(self) -> None:
         # 未单独配置提醒群时沿用白名单，避免升级后静默失去额度提醒。
@@ -200,6 +205,53 @@ class QuotaSnapshot:
     windows: dict[int, QuotaWindow]
 
 
+class GenerationSlots:
+    """限制同时执行的收费生成；达到并发上限时排队，队列满则直接拒绝。
+
+    只覆盖生成这一步：审核、润色和建任务都不占名额，所以慢任务不会挡住别人提问。
+    """
+
+    def __init__(self, concurrency: int, max_waiting: int) -> None:
+        self.concurrency = concurrency
+        self.max_waiting = max_waiting
+        self._condition = threading.Condition()
+        self._running = 0
+        self._waiting = 0
+        self._closed = False
+
+    def snapshot(self) -> tuple[int, int]:
+        with self._condition:
+            return self._running, self._waiting
+
+    def acquire(self) -> bool:
+        """占用一个生成名额；需要排队时阻塞，队列已满或插件卸载时返回 False。"""
+        with self._condition:
+            if self._running < self.concurrency:
+                self._running += 1
+                return True
+            if self._waiting >= self.max_waiting:
+                return False
+            self._waiting += 1
+            while self._running >= self.concurrency and not self._closed:
+                self._condition.wait()
+            self._waiting -= 1
+            if self._closed:
+                return False
+            self._running += 1
+            return True
+
+    def release(self) -> None:
+        with self._condition:
+            self._running = max(0, self._running - 1)
+            self._condition.notify()
+
+    def close(self) -> None:
+        """卸载时唤醒所有等待者，让它们按取消处理，不再发图。"""
+        with self._condition:
+            self._closed = True
+            self._condition.notify_all()
+
+
 class Runtime:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -210,8 +262,9 @@ class Runtime:
         self.baselines: dict[int, QuotaSnapshot] = {}
         self.poll_watch: IcaConnectionWatch | None = None
         self.poll_error: str | None = None
-        # 生图是分钟级收费操作，全局单槽位；忙时直接拒绝而不是排队堆额度风险。
-        self.image_busy = False
+        self.image_slots = GenerationSlots(
+            settings.image_concurrency, settings.image_queue_limit
+        )
 
 
 _runtime = Runtime(Settings())
@@ -673,6 +726,12 @@ def on_load() -> None:
         type(group) is not int or group == 0 for group in groups
     ):
         raise ValueError("codex：allowed_groups 必须为非零整数群号列表")
+    concurrency = cfg.get_value("image_concurrency")
+    queue_limit = cfg.get_value("image_queue_limit")
+    if type(concurrency) is not int or not 1 <= concurrency <= 8:
+        raise ValueError("codex：image_concurrency 必须为 1-8 的整数")
+    if type(queue_limit) is not int or not 0 <= queue_limit <= 50:
+        raise ValueError("codex：image_queue_limit 必须为 0-50 的整数")
     alerts = cfg.get_value("alert_groups") or []
     if not isinstance(alerts, list) or any(
         type(group) is not int or group == 0 for group in alerts
@@ -705,6 +764,8 @@ def on_load() -> None:
             cooldown,
             **(image | {"deepseek_api_key": image["deepseek_api_key"].strip()}),
             alert_groups=frozenset(abs(group) for group in alerts),
+            image_concurrency=concurrency,
+            image_queue_limit=queue_limit,
         )
     )
     # 首次尽快记录静默基准，之后每两分钟检查。宿主仅在插件提交后开始计时。
@@ -718,6 +779,33 @@ def on_unload() -> None:
         watch = state.poll_watch
     if watch is not None:
         watch.close()
+    state.image_slots.close()
+
+
+def _run_generation(state: Runtime, msg, client, service, prefix: str) -> str:
+    """收费生成只在名额池里执行：满员排队，队列满则拒绝，未确认的草稿不受影响。"""
+    slots = state.image_slots
+    running, waiting = slots.snapshot()
+    if running >= slots.concurrency:
+        _reply(
+            state,
+            msg,
+            client,
+            f"已有 {running} 个生图任务在跑，本次排队等待（前面 {waiting} 个）。",
+        )
+    if not slots.acquire():
+        with state.lock:
+            stopping = state.stopped
+        if stopping:
+            return ""
+        return (
+            f"生成队列已满（最多 {slots.max_waiting} 个排队），"
+            "请稍后再确认；草稿在有效期内仍可确认。"
+        )
+    try:
+        return service.confirm(msg, client, prefix)
+    finally:
+        slots.release()
 
 
 def _image_worker(
@@ -775,7 +863,7 @@ def _image_worker(
         elif action == "set":
             text = service.set_params(msg, value, options)
         elif action == "confirm":
-            text = service.confirm(msg, client, value)
+            text = _run_generation(state, msg, client, service, value)
         elif action == "cancel":
             text = service.cancel(msg, value)
         else:
@@ -789,9 +877,6 @@ def _image_worker(
         traceback.print_exc()
         client.warn(f"codex：生图流程异常（{type(error).__name__}: {error}）")
         text = "生图流程失败，请稍后用 /codex image status 查看记录。"
-    finally:
-        with state.lock:
-            state.image_busy = False
     with state.lock:
         stopped = state.stopped
     # confirm 已在开始时回执并自行回图，text 为 None 时不再追加任何文本。
@@ -802,7 +887,7 @@ def _image_worker(
 def _handle_image(
     state: Runtime, command: list[str], msg: IcaNewMessage, client: IcaClient
 ) -> None:
-    """命令分派只做参数检查与单槽位占位；真正网络调用都放到 worker 线程。"""
+    """命令分派只做参数检查与线程启动；真正网络调用都放到 worker 线程。"""
     parts = command[2:]
     if not parts or parts == ["help"]:
         _reply(state, msg, client, IMAGE_HELP)
@@ -854,19 +939,9 @@ def _handle_image(
         if not value:
             _reply(state, msg, client, "用法：/codex image <图片描述>")
             return
-    notice = ""
     with state.lock:
         if state.stopped:
             return
-        if state.image_busy:
-            info(f"codex：生图任务被拒绝 action={action}，已有任务在处理")
-            notice = "已有生图任务在处理，请稍后再试。"
-        else:
-            state.image_busy = True
-    # _reply 内部会取同一把不可重入锁，因此必须在释放后再发送。
-    if notice:
-        _reply(state, msg, client, notice)
-        return
     threading.Thread(
         target=_image_worker,
         args=(state, action, msg, client, value, options),
