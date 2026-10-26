@@ -42,15 +42,17 @@ MAX_RESPONSE_BYTES = 1024 * 1024
 DISPLAY_ZONE = timezone(timedelta(hours=8))
 LOGIN_HELP = "请启动 DSH，在「设置 → Codex 订阅」刷新额度或重新登录后再试。"
 HELP_TEXT = (
-    "Codex 订阅帮助\n"
+    "Codex 帮助\n"
     "/codex check：查询 DSH 当前账号的套餐、剩余额度和重置时间。\n"
     "/codex 或 /codex help：显示本帮助，不联网，不占用查询冷却。\n"
     "/codex image <描述>：润色并审核后预览提示词，本人确认后生成图片；可引用一张图片改图。\n"
+    "/codex image direct <描述>：跳过润色，直接按原描述生成。\n"
     "/codex image confirm|cancel|status <编号>：确认生成、取消或查看任务。\n"
-    f"自动提醒：每 {POLL_SECONDS // 60} 分钟检查，剩余额度跨过 95%、90%、85%……0% 时提醒。\n"
+    "/codex image help：生图帮助，含尺寸、质量、背景参数说明。\n"
+    f"自动提醒：每 {POLL_SECONDS // 60} 分钟检查，剩余额度跨过 95%、90%、85%……0% 时提醒；"
+    "只发配置的提醒群。\n"
     "reset 警告：剩余额度比上次上涨时报告；上次不为 0% 时提示“浪费了xx%额度😭”。\n"
-    "仅白名单群可用；额度自动提醒只发配置的提醒群，其他群仍可手动 /codex check。\n"
-    "登录失效请在 DSH 中刷新。"
+    "仅白名单群可用；登录失效请在 DSH 中刷新。"
 )
 IMAGE_HELP = (
     "Codex 生图帮助\n"
@@ -60,8 +62,8 @@ IMAGE_HELP = (
     "/codex image confirm <编号>：确认后生成并引用当前消息回图。\n"
     "/codex image cancel|status <编号>：取消或以查看任务状态。\n"
     "草稿 10 分钟有效，确认只生效一次；结果不确定时不会自动重试。\n"
-    "参数可写在描述前后：--size 1024x1536、--quality low/medium/high/xhigh/max、"
-    "--background transparent/opaque，缺省均为 auto。"
+    "参数可写在描述前后：--size 1024x1536（512–2048，或 auto）、"
+    "--quality low/medium/high/xhigh/max、--background transparent/opaque，缺省均为 auto。"
 )
 
 IMAGE_QUALITIES = ("auto", "low", "medium", "high", "xhigh", "max")
@@ -126,9 +128,10 @@ def _split_image_options(parts: list[str]) -> tuple[dict[str, str], str, str | N
 
 PLUGIN_MANIFEST = PluginManifest(
     plugin_id="codex",
-    name="Codex 订阅查询",
+    name="Codex 订阅与生图",
     version=VERSION,
-    description="指定群使用 /codex 查看帮助、/codex check 查询订阅，每两分钟检查额度下降与 reset",
+    description="白名单群用 /codex check 查询订阅、/codex image 审核润色后确认生图；"
+    "每两分钟检查额度下降与 reset，提醒只发配置的 alert_groups",
     authors=["shenjack"],
     config={
         "main": ConfigStorage(

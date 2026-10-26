@@ -9,6 +9,7 @@
 - 单槽位执行，10 分钟草稿、账号/群/发起者三方绑定、确认只消费一次；结果不确定时不自动重试。
 - 生图与审核请求全部先落 PG 再外发；图片保存二进制，认证字段不归档。
 - 新增命令分派、审核拦截、确认一次生成与忙时拒绝的离线回归，以及真实 DS 审核、润色与订阅生图各一次连通性验证（生图 1/10）。
+- `/codex` 帮助同步为“Codex 帮助”：补上 `direct` 子命令、`/codex image help` 入口、提醒群限制与尺寸参数范围；插件名改为“Codex 订阅与生图”，描述覆盖查询、生图与提醒群。
 - 新增 `alert_groups` 配置：额度自动提醒只发指定群（支持多个）；留空沿用 `allowed_groups`，白名单里其他群仍可手动 `/codex check`，提醒进度仍按群独立记录。
 - 插件日志改走宿主 `shenbot_api.info/warn`：生图各阶段与额度自动轮询的失败提示进入 Bot tracing 日志（带时间戳与级别），不再直接 `print`；`shenbot_api` 同步声明 `debug/info/warn`（宿主 0.9.7 起提供）。
 - 生图支持 `--size 1024x1536`、`--quality low/medium/high/xhigh/max`、`--background transparent/opaque`，可写在描述前后，缺省 auto；参数在创建任务时冻结进 `jobs.image_params`，确认命令不接受参数，预览展示的取值就是最终请求值。
