@@ -21,6 +21,8 @@ MAX_PROMPT = 2000
 MAX_REPLY_IMAGE_BYTES = 8 * 1024 * 1024
 # 多图改图沿用上游工具的同一次引用上限，避免一次请求塞进过多参考。
 MAX_REFERENCE_IMAGES = 5
+# 多张参考图会一起进审核请求，限制总量避免超长 Base64 请求体被上游直接拒绝。
+MAX_REFERENCE_TOTAL_BYTES = 16 * 1024 * 1024
 
 
 class ImageError(RuntimeError):
@@ -77,6 +79,7 @@ def reference_images(client, msg) -> list[bytes]:
     if len(images) > MAX_REFERENCE_IMAGES:
         raise ImageError(f"一次最多引用 {MAX_REFERENCE_IMAGES} 张图片。")
     collected = []
+    total = 0
     for item in images:
         url = item.get("url")
         if not url:
@@ -87,7 +90,11 @@ def reference_images(client, msg) -> list[bytes]:
                 url = client.get_nt_pic_url_by_file_id(fid)
             except (RuntimeError, ValueError):
                 raise ImageError("无法从 QQ 取回引用图片，请重新发送。") from None
-        collected.append(_download(url))
+        data = _download(url)
+        total += len(data)
+        if total > MAX_REFERENCE_TOTAL_BYTES:
+            raise ImageError("引用图片总量过大，请减少数量或压缩后重试。")
+        collected.append(data)
     return collected
 
 

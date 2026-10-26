@@ -212,6 +212,7 @@ class ImageFlowTests(unittest.TestCase):
                 {"type": "image/png", "url": "https://fixture/2.png"},
             ]
         }
+        # 总量上限作为独立守卫，避免一次引用把审核请求撑爆。
         with patch.object(
             image_service,
             "_download",
