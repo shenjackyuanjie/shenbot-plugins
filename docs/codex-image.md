@@ -59,6 +59,7 @@ HTTP/Socket.IO 受理仅记为 submitted，不能伪称 QQ 最终送达。
 /codex image <描述>            文字生图；引用图片（最多 5 张）时按改图处理
 /codex image direct <描述>     跳过润色，直接按原描述生成
 /codex image set <编号>        确认前调整尺寸、质量与背景
+/codex image attach <编号>     引用含图片的消息，追加参考图并重新审核
 /codex image confirm <编号>    本人确认后生成并回图
 /codex image cancel <编号>     取消草稿或任务
 /codex image status <编号>     查看任务状态
@@ -76,6 +77,10 @@ HTTP/Socket.IO 受理仅记为 submitted，不能伪称 QQ 最终送达。
 参数在创建任务时写入 `jobs.image_params`，预览展示的就是确认后发给上游的值。
 确认前用 `/codex image set <编号> --quality high` 调整，只合并给出的键、不接受描述文本；
 确认命令本身不带参数，一经确认便不能再改。重放同一来源不会改写已记录参数。
+
+确认前还可以用 `/codex image attach <编号>` 追加参考图：单条消息最多 5 张、总量 16 MB 以内。
+参考图参与审核，所以追加会作废已冻结的草稿并把任务退回审核状态，重新跑前审与后审后才给新预览；
+原任务跑过润色就继续润色，direct 任务保持直出。
 
 预览会展示模式、提示词、参数与 8 位任务编号，10 分钟内有效。确认只生效一次，
 且只有原群、原发起者、当前机器人账号三者同时匹配才可操作。引用多张图片或非图片会被拒绝，

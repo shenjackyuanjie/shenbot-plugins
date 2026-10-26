@@ -18,7 +18,13 @@ class FakeArchive:
     """只记录关键状态转换，不模拟 SQL；真实持久化由 test_codex_archive 覆盖。"""
 
     def __init__(self):
-        self.job = {"id": "job-1", "reviewed_prompt": "润色后", "state": "reviewing"}
+        self.job = {
+            "id": "job-1",
+            "original_prompt": "虚构图片要求",
+            "reviewed_prompt": "润色后",
+            "state": "reviewing",
+        }
+        self.appended = 0
         self.blocked = False
         self.drafted = False
         self.confirmed = False
@@ -65,6 +71,13 @@ class FakeArchive:
 
     def images(self, job, role):
         return [self.image(job, role)]
+
+    def append_references(self, job, owner, images):
+        self.appended = len(images)
+        return len(images)
+
+    def has_stage(self, job, stage):
+        return False
 
     def cancel(self, job, owner):
         pass
@@ -221,6 +234,31 @@ class ImageFlowTests(unittest.TestCase):
             collected = image_service.reference_images(Mock(), msg)
         # 多图按消息中的顺序全部作为参考，不再因为多图直接拒绝。
         self.assertEqual(collected, [first.getvalue(), second.getvalue()])
+
+    def test_attach_appends_references_and_reviews_again(self):
+        archive = FakeArchive()
+        service = self.service(archive)
+        stages = []
+        verdicts = iter(
+            [
+                {"decision": "pass", "reason": "可以"},
+                {"decision": "pass", "reason": "可以"},
+            ]
+        )
+
+        def record(call, job, stopped):
+            stages.append(call.stage)
+            return "request", SimpleNamespace(value=next(verdicts))
+
+        service._call = Mock(side_effect=record)
+        msg = message()
+        msg.reply = {"files": [{"type": "image/png", "url": "https://fixture/1.png"}]}
+        with patch.object(image_service, "_download", return_value=b"fixture"):
+            preview = service.attach(msg, Mock(), "abcdef12")
+        # 追加参考图作废旧草稿，必须重新跑前审和后审再冻结。
+        self.assertEqual(stages, ["pre_review", "post_review"])
+        self.assertEqual(archive.appended, 1)
+        self.assertIn("待确认", preview)
 
     def test_params_can_be_adjusted_before_confirmation(self):
         archive = FakeArchive()

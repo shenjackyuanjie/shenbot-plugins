@@ -233,6 +233,23 @@ class ImageService:
         self.log("create", job=short, chars=len(prompt), references=len(images))
         for position, data in enumerate(images):
             archive.put_image(job, "reference", data, position=position)
+        return self._review(job, prompt, images, direct=direct, params=params)
+
+    def _review(
+        self,
+        job,
+        prompt: str,
+        images: list[bytes],
+        *,
+        direct: bool,
+        params: dict,
+    ) -> str:
+        """执行前审、（润色）、后审并冻结草稿，返回预览文本。
+
+        direct 只跳过润色：两次审核仍然独立执行，放行对象始终是最终要生成的提示词。
+        """
+        archive = self.archive
+        short = str(job)[:8]
         stopped = threading.Event()
 
         def review(stage: str, content: str, original: str | None = None):
@@ -335,6 +352,34 @@ class ImageService:
         sent.set_img(data, "image/png", False)
         client.send_message(sent)
         self.log("delivered", job=short)
+
+    def attach(self, msg, client, prefix: str) -> str:
+        """给待确认任务追加参考图；参考图参与审核，追加后必须重跑审核再给新预览。"""
+        archive = self.archive
+        owner = self.owner(msg)
+        job = archive.owned_job_by_prefix(prefix, owner)
+        images = reference_images(client, msg)
+        if not images:
+            raise ImageError("请引用带图片的消息再执行 attach。")
+        total = archive.append_references(job["id"], owner, images)
+        merged = archive.images(job["id"], "reference")
+        self.log(
+            "references appended",
+            job=str(job["id"])[:8],
+            added=len(images),
+            total=total,
+        )
+        # 沿用原任务的模式：跑过润色的任务继续润色，direct 任务保持直出。
+        direct = not archive.has_stage(job["id"], "rewrite")
+        stored = job.get("image_params") or {}
+        params = {
+            "size": stored.get("size", "auto"),
+            "quality": stored.get("quality", "auto"),
+            "background": stored.get("background", "auto"),
+        }
+        return self._review(
+            job["id"], job["original_prompt"], merged, direct=direct, params=params
+        )
 
     def set_params(self, msg, prefix: str, params: dict) -> str:
         """确认前调整尺寸、质量或背景；返回合并后的完整参数供群里核对。"""

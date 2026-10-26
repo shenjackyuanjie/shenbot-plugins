@@ -23,6 +23,8 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 SCHEMA_VERSION = 3
+# 一个任务最多引用几张图；命令层与存档层共用同一个上限。
+MAX_REFERENCES = 5
 
 
 class ArchiveError(RuntimeError):
@@ -60,6 +62,33 @@ def sanitized(value):
     if isinstance(value, list):
         return [sanitized(item) for item in value]
     return value
+
+
+def _image_meta(data: bytes) -> tuple[str, str, int, int]:
+    """解码并校验待归档图片，返回摘要、MIME 与尺寸；不通过就拒绝，不猜测格式。"""
+    if not 0 < len(data) <= 50 * 1024 * 1024:
+        raise ArchiveError("图片超过存档大小限制。")
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(BytesIO(data)) as image:
+                width, height = image.size
+                media_type = {
+                    "PNG": "image/png",
+                    "JPEG": "image/jpeg",
+                    "WEBP": "image/webp",
+                }.get(image.format)
+                if media_type is None or width * height > 64_000_000:
+                    raise ArchiveError("图片格式或像素量超出支持范围。")
+                image.verify()
+    except (
+        OSError,
+        ValueError,
+        Image.DecompressionBombError,
+        Image.DecompressionBombWarning,
+    ):
+        raise ArchiveError("无法解码待存档图片。") from None
+    return hashlib.sha256(data).hexdigest(), media_type, width, height
 
 
 class Archive:
@@ -423,33 +452,9 @@ class Archive:
 
         position 用于多图参考的顺序，同一用途的不同位置互不覆盖。
         """
-        if (
-            role not in {"reference", "original", "delivery"}
-            or not 0 < len(data) <= 50 * 1024 * 1024
-            or position < 0
-        ):
+        if role not in {"reference", "original", "delivery"} or position < 0:
             raise ArchiveError("图片用途无效或超过存档大小限制。")
-        try:
-            with warnings.catch_warnings():
-                warnings.simplefilter("error", Image.DecompressionBombWarning)
-                with Image.open(BytesIO(data)) as image:
-                    width, height = image.size
-                    media_type = {
-                        "PNG": "image/png",
-                        "JPEG": "image/jpeg",
-                        "WEBP": "image/webp",
-                    }.get(image.format)
-                    if media_type is None or width * height > 64_000_000:
-                        raise ArchiveError("图片格式或像素量超出支持范围。")
-                    image.verify()
-        except (
-            OSError,
-            ValueError,
-            Image.DecompressionBombError,
-            Image.DecompressionBombWarning,
-        ):
-            raise ArchiveError("无法解码待存档图片。") from None
-        digest = hashlib.sha256(data).hexdigest()
+        digest, media_type, width, height = _image_meta(data)
         with self._db() as db:
             job = db.execute(
                 self._sql("SELECT state FROM {schema}.jobs WHERE id=%s FOR UPDATE"),
@@ -493,6 +498,75 @@ class Archive:
             if row is None:
                 raise ArchiveError("该用途已有不同图片，不覆盖既有存档。")
         return digest
+
+    def append_references(
+        self, job_id: UUID, owner: tuple[int, int, int], images: list[bytes]
+    ) -> int:
+        """确认前追加参考图：全部成功才算数，并把草稿退回审核状态等待重审。
+
+        参考图参与审核，追加后原草稿必须作废，否则放行结论会落到没审过的图上。
+        """
+        if not images:
+            raise ArchiveError("没有需要追加的参考图。")
+        metas = [_image_meta(data) for data in images]
+        with self._db() as db:
+            job = db.execute(
+                self._sql(
+                    "SELECT state, expires_at > now() AS valid FROM {schema}.jobs "
+                    "WHERE id=%s AND account=%s AND room_id=%s AND sender_id=%s FOR UPDATE"
+                ),
+                (job_id, *owner),
+            ).fetchone()
+            if job is None:
+                raise ArchiveError("未找到属于你的当前群任务。")
+            if job["state"] != "awaiting_confirmation" or not job["valid"]:
+                raise ArchiveError("只有待确认且未过期的任务可以追加参考图。")
+            existing = db.execute(
+                self._sql(
+                    "SELECT count(*) AS n, coalesce(max(position), -1) AS last FROM {schema}.job_assets "
+                    "WHERE job_id=%s AND role='reference'"
+                ),
+                (job_id,),
+            ).fetchone()
+            if existing["n"] + len(images) > MAX_REFERENCES:
+                raise ArchiveError(f"参考图最多 {MAX_REFERENCES} 张。")
+            first = existing["last"] + 1
+            for offset, (digest, media_type, width, height) in enumerate(metas):
+                data = images[offset]
+                db.execute(
+                    self._sql(
+                        "INSERT INTO {schema}.assets(sha256,media_type,width,height,bytes,data) "
+                        "VALUES (%s,%s,%s,%s,%s,%s) ON CONFLICT(sha256) DO NOTHING"
+                    ),
+                    (digest, media_type, width, height, len(data), data),
+                )
+                db.execute(
+                    self._sql(
+                        "INSERT INTO {schema}.job_assets(job_id,sha256,role,position,request_id) "
+                        "VALUES (%s,%s,'reference',%s,NULL)"
+                    ),
+                    (job_id, digest, first + offset),
+                )
+            db.execute(
+                self._sql(
+                    "UPDATE {schema}.jobs SET state='reviewing',reviewed_prompt=NULL,approval_digest=NULL,"
+                    "updated_at=now() WHERE id=%s"
+                ),
+                (job_id,),
+            )
+            self._event(db, job_id, "references_appended", {"count": len(images)})
+            return existing["n"] + len(images)
+
+    def has_stage(self, job_id: UUID, stage: str) -> bool:
+        """判断该任务是否跑过某个阶段；追加参考图时据此沿用原润色/直出模式。"""
+        with self._db() as db:
+            row = db.execute(
+                self._sql(
+                    "SELECT 1 AS hit FROM {schema}.requests WHERE job_id=%s AND stage=%s LIMIT 1"
+                ),
+                (job_id, stage),
+            ).fetchone()
+            return row is not None
 
     def images(self, job_id: UUID, role: str) -> list[bytes]:
         """按 position 顺序读取某个用途的全部图片；多图参考按引用顺序参与改图。"""

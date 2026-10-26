@@ -47,6 +47,7 @@ HELP_TEXT = (
     "/codex 或 /codex help：显示本帮助，不联网，不占用查询冷却。\n"
     "/codex image <描述>：润色并审核后预览提示词，本人确认后生成图片；可引用图片改图。\n"
     "/codex image direct <描述>：跳过润色，直接按原描述生成。\n"
+    "/codex image attach <编号>：确认前追加参考图（引用含图片的消息）。\n"
     "/codex image set <编号>：确认前调整尺寸、质量与背景。\n"
     "/codex image confirm|cancel|status <编号>：确认生成、取消或查看任务。\n"
     "/codex image help：生图帮助，含尺寸、质量、背景参数说明。\n"
@@ -60,6 +61,7 @@ IMAGE_HELP = (
     "/codex image <描述>：先润色并做前后两次 NSFW 审核，展示提示词等待你确认。\n"
     "/codex image direct <描述>：跳过润色，只做两次 NSFW 审核后直接按原描述生成。\n"
     "引用图片时按改图处理，最多 5 张，按引用顺序一起作为参考；引用里没有图片会被拒绝。\n"
+    "/codex image attach <编号>：引用含图片的消息，把图追加为参考图并重新审核。\n"
     "/codex image set <编号> [--size WxH] [--quality 级别] [--background 模式]：确认前调整参数。\n"
     "/codex image confirm <编号>：确认后生成并引用当前消息回图。\n"
     "/codex image cancel|status <编号>：取消或以查看任务状态。\n"
@@ -860,6 +862,8 @@ def _image_worker(
             text = service.create(
                 msg, client, value, direct=action == "direct", params=options
             )
+        elif action == "attach":
+            text = service.attach(msg, client, value)
         elif action == "set":
             text = service.set_params(msg, value, options)
         elif action == "confirm":
@@ -894,7 +898,7 @@ def _handle_image(
         return
     action = parts[0]
     options: dict[str, str] = {}
-    if action in ("confirm", "cancel", "status"):
+    if action in ("confirm", "cancel", "status", "attach"):
         if len(parts) != 2 or len(parts[1]) != 8:
             _reply(
                 state, msg, client, "用法：/codex image " + action + " <8 位任务编号>"

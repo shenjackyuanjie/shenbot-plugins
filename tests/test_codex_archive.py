@@ -4,6 +4,7 @@
 不读取 DSH 表，不请求模型，不发送 QQ，结束只删除自己创建的 schema。
 """
 
+import hashlib
 import os
 import re
 import secrets
@@ -162,6 +163,23 @@ class ArchiveFlowTests(unittest.TestCase):
         # 同一位置已经是另一张图时拒绝覆盖，避免审核与执行换图。
         with self.assertRaises(ArchiveError):
             self.archive.put_image(multi, "reference", image, position=1)
+        # 追加参考图只在待确认时可用，追加后草稿退回审核状态等待重审。
+        multi_hashes = [
+            hashlib.sha256(image).hexdigest(),
+            hashlib.sha256(red.getvalue()).hexdigest(),
+        ]
+        pre_m = self._review(multi, "pre_review", "pass", "两张参考图", multi_hashes)
+        post_m = self._review(multi, "post_review", "pass", "两张参考图", multi_hashes)
+        self.archive.prepare_draft(multi, "两张参考图", pre_m, post_m)
+        green = BytesIO()
+        Image.new("RGB", (2, 2), "green").save(green, "PNG")
+        self.assertEqual(
+            self.archive.append_references(multi, owner, [green.getvalue()]), 3
+        )
+        refreshed = self.archive.owned_job(multi, owner)
+        self.assertEqual(refreshed["state"], "reviewing")
+        self.assertIsNone(refreshed["reviewed_prompt"])
+        self.assertFalse(self.archive.has_stage(multi, "rewrite"))
 
         with self.archive._db() as db:
             rows = db.execute(
