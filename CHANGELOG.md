@@ -2,6 +2,12 @@
 
 宿主版本对应 [shenbot_api.py](shenbot_api.py) 的 `__version__`；ICA/Tailchat API 与各插件的 `VERSION` 分别管理。
 
+## 2026-10-26 Codex 持久存档基础层
+
+- 新增独立 `codex` schema 的任务、逐请求、事件及图片二进制归档，连接由本地配置提供，不依赖 DSH 运行时或 profile。认证字段不存档，驱动错误不透传。
+- 增加双独立审核闸门、冻结草稿、账号/群/本人原子确认及每任务单次生成约束；图片按摘要去重并实际保存 `bytea`，不只留路径。
+- 通过真实 PG 临时 schema 验证确认并发、跨群隔离、重放防重、未知结果不重新生成及图片持久读取。详见 [存档说明](docs/codex-image.md)。此提交仅为基础层，尚未接入群命令或真实生图。
+
 ## 2026-10-26 Codex 子命令整理
 
 - [codex](plugins/codex.py) **0.3.0 → 0.4.0**：`/codex` 改为本地帮助，保留 `/codex help`；手动额度查询改为 `/codex check`，仍共用原有查询槽位、冷却、限流与卸载保护。
