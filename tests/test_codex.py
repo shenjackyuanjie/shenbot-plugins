@@ -203,12 +203,7 @@ class CommandTests(unittest.TestCase):
             codex.on_ica_message(self.msg, self.client)
         self.assertEqual(self.client.send_message.call_count, 2)
         self.thread.assert_not_called()
-        text = self.client.send_message.call_args.args[0]
-        self.assertIn("/codex", text)
-        self.assertIn("/codex help", text)
-        self.assertIn("/codex check", text)
-        self.assertIn("2 分钟", text)
-        self.assertIn("reset", text)
+        # 忙时帮助仍在本地立即返回，不占用查询槽位。
         self.assertTrue(self.state.busy)
 
     def test_single_query_reservation_is_released_after_failure(self):

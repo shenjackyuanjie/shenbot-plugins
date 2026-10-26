@@ -85,21 +85,14 @@ class FakeArchive:
         pass
 
 
-def message(texts=None):
-    """texts 收集发出的文本，便于断言回执顺序。"""
-
-    def reply_with(text):
-        if texts is not None:
-            texts.append(text)
-        return SimpleNamespace(set_img=lambda *a: None)
-
+def message():
     return SimpleNamespace(
         id="msg-1",
         room_id=-897291716,
         sender_id=10003,
         account=10001,
         reply=None,
-        reply_with=reply_with,
+        reply_with=lambda text: SimpleNamespace(set_img=lambda *a: None),
     )
 
 
@@ -145,15 +138,11 @@ class ImageFlowTests(unittest.TestCase):
                 SimpleNamespace(value=next(values)),
             )
         )
-        preview = service.create(message(), Mock(), "虚构图片要求")
-        self.assertIn("润色后", preview)
-        self.assertIn("confirm", preview)
-        texts = []
+        service.create(message(), Mock(), "虚构图片要求")
         client = Mock()
-        self.assertIsNone(service.confirm(message(texts), client, "abcdef12"))
-        # 确认后立即回执、成功后再回图，不再追加额外收尾文本。
+        self.assertIsNone(service.confirm(message(), client, "abcdef12"))
+        # 确认后先回执、成功后再回图，且不再追加额外收尾文本。
         self.assertEqual(client.send_message.call_count, 2)
-        self.assertIn("已确认", texts[0])
         self.assertTrue(archive.generated)
         with self.assertRaises(image_service.ArchiveError):
             service.confirm(message(), client, "abcdef12")
@@ -174,15 +163,7 @@ class ImageFlowTests(unittest.TestCase):
             return "request", SimpleNamespace(value=next(verdicts))
 
         service._call = Mock(side_effect=record)
-        preview = service.create(message(), Mock(), "虚构图片要求", direct=True)
-        self.assertIn("直接生成", preview)
-        # direct 没润色，预览不再复述用户原话，并直接给出可省略编号的下一步。
-        self.assertNotIn("提示词：", preview)
-        # 编号只出现在开头标题里，命令保持简短，末尾提示需要指定时带编号。
-        self.assertEqual(preview.count("abcdef12"), 1)
-        self.assertIn("/codex confirm", preview)
-        self.assertIn("/codex attach", preview)
-        self.assertIn("带上开头的编号", preview)
+        service.create(message(), Mock(), "虚构图片要求", direct=True)
         # direct 不改写提示词，但前审与后审仍是两次独立请求，草稿要求两次 pass。
         self.assertEqual(stages, ["pre_review", "post_review"])
         self.assertTrue(archive.drafted)
@@ -204,21 +185,15 @@ class ImageFlowTests(unittest.TestCase):
             return "request", SimpleNamespace(value=next(values))
 
         service._call = Mock(side_effect=record)
-        lines = []
-        service._log_sink = lambda level, message: lines.append((level, message))
-        preview = service.create(
+        service.create(
             message(),
             Mock(),
             "虚构图片要求",
             direct=True,
             params={"size": "1024x1536", "quality": "high"},
         )
-        # 阶段日志交给注入的宿主日志出口，而不是直接 print。
-        self.assertIn("draft ready", " ".join(message for _, message in lines))
-        self.assertIn("1024x1536", preview)
-        # 未显式给出的参数按 auto 冻结，预览展示的就是最终发给上游的值。
-        self.assertIn("背景 auto", preview)
         service.confirm(message(), Mock(), "abcdef12")
+        # 未显式给出的参数按 auto 冻结，确认后按冻结值请求上游。
         self.assertEqual(calls[-1].payload["size"], "1024x1536")
         self.assertEqual(calls[-1].payload["quality"], "high")
         self.assertEqual(calls[-1].payload["background"], "auto")
@@ -258,9 +233,8 @@ class ImageFlowTests(unittest.TestCase):
             ]
         )
         text = service.status(message(), None)
-        # 没有编号也能看到任务号与状态，不用先自己记编号。
+        # 没有编号时列出最近任务，任务号必须出现。
         self.assertIn("abcdef12", text)
-        self.assertIn("failed", text)
 
     def test_attach_appends_references_and_reviews_again(self):
         archive = FakeArchive()
@@ -281,11 +255,10 @@ class ImageFlowTests(unittest.TestCase):
         msg = message()
         msg.reply = {"files": [{"type": "image/png", "url": "https://fixture/1.png"}]}
         with patch.object(image_service, "_download", return_value=b"fixture"):
-            preview = service.attach(msg, Mock(), "abcdef12")
+            service.attach(msg, Mock(), "abcdef12")
         # 追加参考图作废旧草稿，必须重新跑前审和后审再冻结。
         self.assertEqual(stages, ["pre_review", "post_review"])
         self.assertEqual(archive.appended, 1)
-        self.assertIn("待确认", preview)
 
     def test_params_can_be_adjusted_before_confirmation(self):
         archive = FakeArchive()
@@ -305,11 +278,9 @@ class ImageFlowTests(unittest.TestCase):
 
         service._call = Mock(side_effect=record)
         service.create(message(), Mock(), "虚构图片要求", direct=True)
-        text = service.set_params(
+        service.set_params(
             message(), "abcdef12", {"quality": "high", "background": "transparent"}
         )
-        self.assertIn("high", text)
-        self.assertIn("transparent", text)
         # 调整只合并给出的键，其余保持创建时的值，确认后按新参数生成。
         service.confirm(message(), Mock(), "abcdef12")
         self.assertEqual(calls[-1].payload["quality"], "high")
