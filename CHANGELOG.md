@@ -12,6 +12,7 @@
 - `/codex` 帮助同步为“Codex 帮助”：补上 `direct` 子命令、`/codex image help` 入口、提醒群限制与尺寸参数范围；插件名改为“Codex 订阅与生图”，描述覆盖查询、生图与提醒群。
 - 新增 `alert_groups` 配置：额度自动提醒只发指定群（支持多个）；留空沿用 `allowed_groups`，白名单里其他群仍可手动 `/codex check`，提醒进度仍按群独立记录。
 - 插件日志改走宿主 `shenbot_api.info/warn`：生图各阶段与额度自动轮询的失败提示进入 Bot tracing 日志（带时间戳与级别），不再直接 `print`；`shenbot_api` 同步声明 `debug/info/warn`（宿主 0.9.7 起提供）。
+- 支持一条消息引用多张图片：最多 5 张，按引用顺序存档、送审并一起作为改图参考；`job_assets` 增加 `position`，主键扩为 `(job_id, role, position)`，`codex` schema 结构版本 2 → 3 自动迁移。
 - 生图改为名额池：同时最多 `image_concurrency`（默认 3）个生成，超出排队，等待超过 `image_queue_limit`（默认 5）才拒绝确认；创建任务、审核、润色与调整参数不再被生成阻塞。插件卸载时排队的确认按取消处理。
 - 新增 `/codex image set <编号>` [--size WxH] [--quality 级别] [--background 模式]`：创建任务后、确认前可调整生成参数，只合并给出的键且不接受描述文本；确认后拒绝修改，预览与生成保持一致。参数调整记入 `events.params_updated`。
 - 生图支持 `--size 1024x1536`、`--quality low/medium/high/xhigh/max`、`--background transparent/opaque`，可写在描述前后，缺省 auto；参数在创建任务时冻结进 `jobs.image_params`，确认命令不接受参数，预览展示的取值就是最终请求值。

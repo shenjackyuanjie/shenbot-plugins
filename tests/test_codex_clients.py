@@ -92,7 +92,7 @@ class SDKFlowTests(unittest.TestCase):
             "deepseek-flash",
             "pre_review",
             "纸鹤",
-            image=image,
+            images=(image,),
         )
         self.assertEqual(review.parse(send(review)).value["decision"], "pass")
         self.assertNotIn("data:image", json.dumps(review.archive_payload))
@@ -108,7 +108,9 @@ class SDKFlowTests(unittest.TestCase):
         self.assertEqual(rewrite.payload["reasoning_effort"], "high")
         rewrite.parse(send(rewrite))
 
-        edit = codex_call("润色后", "fixture-access", "fixture-account", image=image)
+        edit = codex_call(
+            "润色后", "fixture-access", "fixture-account", images=(image,)
+        )
         parsed = edit.parse(send(edit))
         self.assertEqual(parsed.images[0][1], image)
         self.assertNotIn("b64_json", json.dumps(parsed.value))

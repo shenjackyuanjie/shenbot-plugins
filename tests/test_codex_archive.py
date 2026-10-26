@@ -150,6 +150,19 @@ class ArchiveFlowTests(unittest.TestCase):
         self.archive.cancel(job, owner)
         self.assertFalse(self.archive.finish_job(job, "succeeded"))
         self.assertEqual(restarted.owned_job(job, owner)["state"], "cancelled")
+        # 多图参考：不同 position 互不覆盖，按顺序取回。
+        multi = self.archive.create_job(owner, "fixture-multi", "两张参考图")
+        red = BytesIO()
+        Image.new("RGB", (2, 2), "red").save(red, "PNG")
+        self.archive.put_image(multi, "reference", image, position=0)
+        self.archive.put_image(multi, "reference", red.getvalue(), position=1)
+        self.assertEqual(
+            self.archive.images(multi, "reference"), [image, red.getvalue()]
+        )
+        # 同一位置已经是另一张图时拒绝覆盖，避免审核与执行换图。
+        with self.assertRaises(ArchiveError):
+            self.archive.put_image(multi, "reference", image, position=1)
+
         with self.archive._db() as db:
             rows = db.execute(
                 self.archive._sql(

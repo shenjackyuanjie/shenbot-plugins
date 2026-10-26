@@ -56,8 +56,10 @@ CREATE TABLE {schema}.job_assets (
     job_id uuid NOT NULL REFERENCES {schema}.jobs(id),
     sha256 text NOT NULL REFERENCES {schema}.assets(sha256),
     role text NOT NULL CHECK (role IN ('reference','original','delivery')),
+    -- 一次可以引用多张参考图，position 保留命令里的顺序，改图请求按它对齐。
+    position integer NOT NULL DEFAULT 0 CHECK (position >= 0),
     request_id uuid REFERENCES {schema}.requests(id),
-    PRIMARY KEY(job_id, role)
+    PRIMARY KEY(job_id, role, position)
 );
 CREATE TABLE {schema}.events (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -71,4 +73,4 @@ COMMENT ON TABLE {schema}.jobs IS 'QQ 生图任务及确认状态；只存命令
 COMMENT ON TABLE {schema}.requests IS '每次外部模型/额度请求；外发前提交 started，禁止保存认证头';
 COMMENT ON TABLE {schema}.assets IS '参考图、原图与发送副本实际二进制，按 SHA-256 去重';
 COMMENT ON TABLE {schema}.events IS '确认、取消、回图及恢复事件；Bridge 受理不等于 QQ 最终送达';
-INSERT INTO {schema}.schema_version(version) VALUES (2);
+INSERT INTO {schema}.schema_version(version) VALUES (3);

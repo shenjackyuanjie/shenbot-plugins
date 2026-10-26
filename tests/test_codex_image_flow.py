@@ -6,7 +6,7 @@
 import unittest
 from io import BytesIO
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from PIL import Image
 
@@ -28,7 +28,7 @@ class FakeArchive:
         self.job["image_params"] = params or {}
         return "abcdef12-3456-7890-abcd-ef1234567890"
 
-    def put_image(self, job, role, data, request=None):
+    def put_image(self, job, role, data, request=None, position=0):
         return "digest-" + role
 
     def begin_request(self, job, provider, stage, model, payload):
@@ -62,6 +62,9 @@ class FakeArchive:
         stream = BytesIO()
         Image.new("RGB", (2, 2), "red").save(stream, "PNG")
         return stream.getvalue()
+
+    def images(self, job, role):
+        return [self.image(job, role)]
 
     def cancel(self, job, owner):
         pass
@@ -197,6 +200,26 @@ class ImageFlowTests(unittest.TestCase):
         self.assertEqual(calls[-1].payload["size"], "1024x1536")
         self.assertEqual(calls[-1].payload["quality"], "high")
         self.assertEqual(calls[-1].payload["background"], "auto")
+
+    def test_multiple_referenced_images_keep_message_order(self):
+        first, second = BytesIO(), BytesIO()
+        Image.new("RGB", (2, 2), "red").save(first, "PNG")
+        Image.new("RGB", (2, 2), "blue").save(second, "PNG")
+        msg = message()
+        msg.reply = {
+            "files": [
+                {"type": "image/png", "url": "https://fixture/1.png"},
+                {"type": "image/png", "url": "https://fixture/2.png"},
+            ]
+        }
+        with patch.object(
+            image_service,
+            "_download",
+            side_effect=[first.getvalue(), second.getvalue()],
+        ):
+            collected = image_service.reference_images(Mock(), msg)
+        # 多图按消息中的顺序全部作为参考，不再因为多图直接拒绝。
+        self.assertEqual(collected, [first.getvalue(), second.getvalue()])
 
     def test_params_can_be_adjusted_before_confirmation(self):
         archive = FakeArchive()

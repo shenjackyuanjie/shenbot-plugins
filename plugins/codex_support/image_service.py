@@ -19,6 +19,8 @@ from .transport import TransportError
 
 MAX_PROMPT = 2000
 MAX_REPLY_IMAGE_BYTES = 8 * 1024 * 1024
+# 多图改图沿用上游工具的同一次引用上限，避免一次请求塞进过多参考。
+MAX_REFERENCE_IMAGES = 5
 
 
 class ImageError(RuntimeError):
@@ -61,8 +63,8 @@ def _download(url: str) -> bytes:
     return b"".join(chunks)
 
 
-def reference_image(client, msg) -> bytes | None:
-    """只接受一张引用图片；多图歧义直接拒绝，不擅自挑选。"""
+def reference_images(client, msg) -> list[bytes]:
+    """收集引用消息里的全部图片，按消息中的顺序返回；超过上限直接拒绝。"""
     reply = getattr(msg, "reply", None) or {}
     files = list(reply.get("files") or [])
     if not files and reply.get("file"):
@@ -71,20 +73,22 @@ def reference_image(client, msg) -> bytes | None:
     if not images:
         if files:
             raise ImageError("引用的消息里没有可编辑的图片。")
-        return None
-    if len(images) > 1:
-        raise ImageError("一次只能引用一张图片，请重新引用。")
-    item = images[0]
-    url = item.get("url")
-    if not url:
-        fid = item.get("fid")
-        if not fid:
-            raise ImageError("无法读取引用图片，请重新发送。")
-        try:
-            url = client.get_nt_pic_url_by_file_id(fid)
-        except (RuntimeError, ValueError):
-            raise ImageError("无法从 QQ 取回引用图片，请重新发送。") from None
-    return _download(url)
+        return []
+    if len(images) > MAX_REFERENCE_IMAGES:
+        raise ImageError(f"一次最多引用 {MAX_REFERENCE_IMAGES} 张图片。")
+    collected = []
+    for item in images:
+        url = item.get("url")
+        if not url:
+            fid = item.get("fid")
+            if not fid:
+                raise ImageError("无法读取引用图片，请重新发送。")
+            try:
+                url = client.get_nt_pic_url_by_file_id(fid)
+            except (RuntimeError, ValueError):
+                raise ImageError("无法从 QQ 取回引用图片，请重新发送。") from None
+        collected.append(_download(url))
+    return collected
 
 
 class ImageService:
@@ -208,7 +212,7 @@ class ImageService:
             raise ImageError(f"图片描述需为 1–{MAX_PROMPT} 字。")
         if not self.settings.deepseek_api_key:
             raise ImageError("尚未配置 DeepSeek API Key，生图功能不可用。")
-        image = reference_image(client, msg)
+        images = reference_images(client, msg)
         archive = self.archive
         # 缺省项一律按 auto 补齐：预览展示的参数就是确认后真正发给上游的参数。
         params = {
@@ -219,9 +223,9 @@ class ImageService:
         }
         job = archive.create_job(self.owner(msg), msg.id, prompt, params)
         short = str(job)[:8]
-        self.log("create", job=short, chars=len(prompt), reference=image is not None)
-        if image is not None:
-            archive.put_image(job, "reference", image)
+        self.log("create", job=short, chars=len(prompt), references=len(images))
+        for position, data in enumerate(images):
+            archive.put_image(job, "reference", data, position=position)
         stopped = threading.Event()
 
         def review(stage: str, content: str, original: str | None = None):
@@ -232,7 +236,7 @@ class ImageService:
                 stage,
                 content,
                 original=original,
-                image=image,
+                images=tuple(images),
             )
             return self._call(call, job, stopped)
 
@@ -285,8 +289,8 @@ class ImageService:
         # 参数只从任务读取：确认命令不接受尺寸等选项，避免预览与生成不一致。
         params = job.get("image_params") or {}
         archive.claim_confirmation(job["id"], owner)
-        image = archive.image(job["id"], "reference")
-        self.log("confirmed", job=short, reference=image is not None)
+        images = archive.images(job["id"], "reference")
+        self.log("confirmed", job=short, references=len(images))
         # 生成是分钟级操作，先回执再发请求，避免确认后群里长时间没有任何反馈。
         self._receipt(
             client,
@@ -299,7 +303,7 @@ class ImageService:
                 job["reviewed_prompt"],
                 login.access,
                 login.account_id,
-                image=image,
+                images=tuple(images),
                 size=params.get("size", "auto"),
                 quality=params.get("quality", "auto"),
                 background=params.get("background", "auto"),

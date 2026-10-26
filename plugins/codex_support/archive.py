@@ -22,7 +22,7 @@ from psycopg import sql
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 class ArchiveError(RuntimeError):
@@ -122,6 +122,29 @@ class Archive:
                         self._sql("UPDATE {schema}.schema_version SET version=2")
                     )
                     version = 2
+                if version == 2:
+                    # 2 → 3：一条任务允许带多张参考图，用 position 区分并保留顺序。
+                    db.execute(
+                        self._sql(
+                            "ALTER TABLE {schema}.job_assets ADD COLUMN IF NOT EXISTS "
+                            "position integer NOT NULL DEFAULT 0"
+                        )
+                    )
+                    db.execute(
+                        self._sql(
+                            "ALTER TABLE {schema}.job_assets DROP CONSTRAINT IF EXISTS job_assets_pkey"
+                        )
+                    )
+                    db.execute(
+                        self._sql(
+                            "ALTER TABLE {schema}.job_assets "
+                            "ADD PRIMARY KEY (job_id, role, position)"
+                        )
+                    )
+                    db.execute(
+                        self._sql("UPDATE {schema}.schema_version SET version=3")
+                    )
+                    version = 3
                 if version != SCHEMA_VERSION:
                     raise ArchiveError("codex 存档版本不兼容，停止初始化。")
                 return
@@ -389,12 +412,21 @@ class Archive:
             return row is not None
 
     def put_image(
-        self, job_id: UUID, role: str, data: bytes, request_id: UUID | None = None
+        self,
+        job_id: UUID,
+        role: str,
+        data: bytes,
+        request_id: UUID | None = None,
+        position: int = 0,
     ) -> str:
-        """保存实际图片二进制并去重；参考图在审核开始后不可替换，防止审核与执行换图。"""
+        """保存实际图片二进制并去重；参考图在审核开始后不可替换，防止审核与执行换图。
+
+        position 用于多图参考的顺序，同一用途的不同位置互不覆盖。
+        """
         if (
             role not in {"reference", "original", "delivery"}
             or not 0 < len(data) <= 50 * 1024 * 1024
+            or position < 0
         ):
             raise ArchiveError("图片用途无效或超过存档大小限制。")
         try:
@@ -452,37 +484,43 @@ class Archive:
             )
             row = db.execute(
                 self._sql(
-                    "INSERT INTO {schema}.job_assets(job_id,sha256,role,request_id) VALUES (%s,%s,%s,%s) "
-                    "ON CONFLICT(job_id,role) DO UPDATE SET sha256=EXCLUDED.sha256 "
+                    "INSERT INTO {schema}.job_assets(job_id,sha256,role,position,request_id) VALUES (%s,%s,%s,%s,%s) "
+                    "ON CONFLICT(job_id,role,position) DO UPDATE SET sha256=EXCLUDED.sha256 "
                     "WHERE {schema}.job_assets.sha256=EXCLUDED.sha256 RETURNING sha256"
                 ),
-                (job_id, digest, role, request_id),
+                (job_id, digest, role, position, request_id),
             ).fetchone()
             if row is None:
                 raise ArchiveError("该用途已有不同图片，不覆盖既有存档。")
         return digest
 
-    def image(self, job_id: UUID, role: str) -> bytes | None:
-        """仅由内部流程按任务读取图片；群命令必须先通过 owned_job 校验。"""
+    def images(self, job_id: UUID, role: str) -> list[bytes]:
+        """按 position 顺序读取某个用途的全部图片；多图参考按引用顺序参与改图。"""
         with self._db() as db:
-            row = db.execute(
+            rows = db.execute(
                 self._sql(
                     "SELECT a.data,a.sha256 FROM {schema}.assets a JOIN {schema}.job_assets j USING(sha256) "
-                    "WHERE j.job_id=%s AND j.role=%s"
+                    "WHERE j.job_id=%s AND j.role=%s ORDER BY j.position"
                 ),
                 (job_id, role),
-            ).fetchone()
-            if row is None:
-                return None
+            ).fetchall()
+        stored: list[bytes] = []
+        for row in rows:
             data = bytes(row["data"])
             if hashlib.sha256(data).hexdigest() != row["sha256"]:
                 raise ArchiveError("图片存档摘要不匹配，停止发送。")
-            return data
+            stored.append(data)
+        return stored
+
+    def image(self, job_id: UUID, role: str) -> bytes | None:
+        """单张用途（原图、发送副本）；多图参考请用 images。"""
+        stored = self.images(job_id, role)
+        return stored[0] if stored else None
 
     def _reference_hashes(self, db, job_id: UUID) -> list[str]:
         rows = db.execute(
             self._sql(
-                "SELECT sha256 FROM {schema}.job_assets WHERE job_id=%s AND role='reference' ORDER BY sha256"
+                "SELECT sha256 FROM {schema}.job_assets WHERE job_id=%s AND role='reference' ORDER BY position"
             ),
             (job_id,),
         ).fetchall()

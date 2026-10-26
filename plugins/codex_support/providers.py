@@ -102,29 +102,36 @@ class Call:
             raise ProviderError("INVALID_REWRITE") from None
 
 
-def _reference(image: bytes | None) -> tuple[list[str], str | None, str | None]:
-    if image is None:
-        return [], None, None
-    if not 0 < len(image) <= 8 * 1024 * 1024:
-        raise ProviderError("REFERENCE_TOO_LARGE")
-    try:
-        with Image.open(BytesIO(image)) as decoded:
-            media_type = {
-                "PNG": "image/png",
-                "JPEG": "image/jpeg",
-                "WEBP": "image/webp",
-            }.get(decoded.format)
-            if media_type is None or decoded.width * decoded.height > 64_000_000:
-                raise ProviderError("INVALID_REFERENCE")
-            decoded.verify()
-    except (OSError, ValueError, Image.DecompressionBombError):
-        raise ProviderError("INVALID_REFERENCE") from None
-    digest = hashlib.sha256(image).hexdigest()
-    return (
-        [digest],
-        media_type,
-        "data:" + media_type + ";base64," + base64.b64encode(image).decode("ascii"),
-    )
+def _references(images: tuple[bytes, ...]) -> tuple[list[str], list[tuple[str, str]]]:
+    """校验每张参考图，返回摘要和 data URL；顺序就是命令里引用的顺序。"""
+    hashes: list[str] = []
+    pictures: list[tuple[str, str]] = []
+    for data in images:
+        if not 0 < len(data) <= 8 * 1024 * 1024:
+            raise ProviderError("REFERENCE_TOO_LARGE")
+        try:
+            with Image.open(BytesIO(data)) as decoded:
+                media_type = {
+                    "PNG": "image/png",
+                    "JPEG": "image/jpeg",
+                    "WEBP": "image/webp",
+                }.get(decoded.format)
+                if media_type is None or decoded.width * decoded.height > 64_000_000:
+                    raise ProviderError("INVALID_REFERENCE")
+                decoded.verify()
+        except (OSError, ValueError, Image.DecompressionBombError):
+            raise ProviderError("INVALID_REFERENCE") from None
+        hashes.append(hashlib.sha256(data).hexdigest())
+        pictures.append(
+            (
+                media_type,
+                "data:"
+                + media_type
+                + ";base64,"
+                + base64.b64encode(data).decode("ascii"),
+            )
+        )
+    return hashes, pictures
 
 
 def deepseek_call(
@@ -135,17 +142,17 @@ def deepseek_call(
     prompt: str,
     *,
     original: str | None = None,
-    image: bytes | None = None,
+    images: tuple[bytes, ...] = (),
 ) -> Call:
     """前审、润色、后审每次构造全新消息，不拼接上一步结论形成审核偏置。"""
     if not api_key.strip() or stage not in {"pre_review", "rewrite", "post_review"}:
         raise ProviderError("INVALID_DEEPSEEK_CONFIGURATION")
-    references, media_type, image_url = _reference(image)
+    references, pictures = _references(images)
     text = json.dumps(
         {"待执行描述": prompt, "原始要求": original or prompt}, ensure_ascii=False
     )
     content = [{"type": "text", "text": text}]
-    if image_url is not None:
+    for _, image_url in pictures:
         content.append({"type": "image_url", "image_url": {"url": image_url}})
     if stage == "rewrite":
         payload = {
@@ -166,13 +173,19 @@ def deepseek_call(
     else:
         payload = review_payload(model, content)
     archived_body = copy.deepcopy(payload)
-    if image_url is not None:
-        # 图片在 assets 中有完整二进制；请求记录保留摘要而不是再复制一份巨型 Base64。
-        archived_body["messages"][-1]["content"][-1] = {
-            "type": "image_reference",
-            "sha256": references[0],
-            "media_type": media_type,
-        }
+    if pictures:
+        # 图片在 assets 中有完整二进制；请求记录保留摘要而不是再复制多份巨型 Base64。
+        archived_body["messages"][-1]["content"] = [
+            content[0],
+            *[
+                {
+                    "type": "image_reference",
+                    "sha256": digest,
+                    "media_type": media_type,
+                }
+                for digest, (media_type, _) in zip(references, pictures)
+            ],
+        ]
     return Call(
         "deepseek",
         stage,
@@ -198,7 +211,7 @@ def codex_call(
     access: str,
     account_id: str,
     *,
-    image: bytes | None = None,
+    images: tuple[bytes, ...] = (),
     size: str = "auto",
     quality: str = "auto",
     background: str = "auto",
@@ -209,7 +222,7 @@ def codex_call(
     """
     if not access or not account_id or not prompt.strip():
         raise ProviderError("INVALID_CODEX_CONFIGURATION")
-    references, media_type, image_url = _reference(image)
+    references, pictures = _references(images)
     payload = {
         "prompt": prompt,
         "model": IMAGE_MODEL,
@@ -218,14 +231,17 @@ def codex_call(
         "background": background,
     }
     archived_body = copy.deepcopy(payload)
-    if image_url is not None:
-        payload["images"] = [{"image_url": image_url}]
-        archived_body["images"] = [{"sha256": references[0], "media_type": media_type}]
+    if pictures:
+        payload["images"] = [{"image_url": url} for _, url in pictures]
+        archived_body["images"] = [
+            {"sha256": digest, "media_type": media_type}
+            for digest, (media_type, _) in zip(references, pictures)
+        ]
     return Call(
         "codex",
         "generate",
         IMAGE_MODEL,
-        IMAGE_EDIT_URL if image is not None else IMAGE_GENERATION_URL,
+        IMAGE_EDIT_URL if pictures else IMAGE_GENERATION_URL,
         payload,
         {"prompt": prompt, "reference_sha256": references, "body": archived_body},
         {
