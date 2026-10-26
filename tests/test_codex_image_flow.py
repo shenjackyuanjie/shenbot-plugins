@@ -4,6 +4,7 @@
 """
 
 import unittest
+from datetime import datetime
 from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -235,6 +236,24 @@ class ImageFlowTests(unittest.TestCase):
             collected = image_service.reference_images(Mock(), msg)
         # 多图按消息中的顺序全部作为参考，不再因为多图直接拒绝。
         self.assertEqual(collected, [first.getvalue(), second.getvalue()])
+
+    def test_status_without_id_lists_recent_jobs(self):
+        archive = FakeArchive()
+        service = self.service(archive)
+        archive.pending_job = Mock(side_effect=image_service.ArchiveError("没有"))
+        archive.recent_jobs = Mock(
+            return_value=[
+                {
+                    "short": "abcdef12",
+                    "state": "failed",
+                    "created_at": datetime(2026, 10, 26, 21, 58),
+                }
+            ]
+        )
+        text = service.status(message(), None)
+        # 没有编号也能看到任务号与状态，不用先自己记编号。
+        self.assertIn("abcdef12", text)
+        self.assertIn("failed", text)
 
     def test_attach_appends_references_and_reviews_again(self):
         archive = FakeArchive()

@@ -176,8 +176,13 @@ class ImageService:
         try:
             parsed = call.parse(result)
         except ProviderError as error:
+            # 失败也保留响应正文，否则只能看到分类码，没法判断是截断还是格式问题。
             archive.finish_request(
-                request_id, "failed", http_status=result.status, error_code=str(error)
+                request_id,
+                "failed",
+                result.body,
+                http_status=result.status,
+                error_code=str(error),
             )
             self.log(
                 "request rejected",
@@ -273,26 +278,36 @@ class ImageService:
             )
             return self._call(call, job, stopped)
 
-        pre, verdict = review("pre_review", prompt)
-        self.log("pre_review", job=short, decision=verdict.value["decision"])
-        if verdict.value["decision"] != "pass":
-            archive.finish_job(job, "blocked")
-            self.log("blocked", level="warn", job=short, stage="pre_review")
-            raise ImageError("内容未通过 NSFW 审核：" + verdict.value["reason"])
-        if direct:
-            final_prompt = prompt
-            self.log("direct", job=short)
-        else:
-            _, rewritten = review("rewrite", prompt)
-            final_prompt = rewritten.value["prompt"]
-            self.log("rewrite", job=short, chars=len(final_prompt))
-        post, verdict = review("post_review", final_prompt, original=prompt)
-        self.log("post_review", job=short, decision=verdict.value["decision"])
-        if verdict.value["decision"] != "pass":
-            archive.finish_job(job, "blocked")
-            self.log("blocked", level="warn", job=short, stage="post_review")
-            raise ImageError("润色结果未通过 NSFW 审核：" + verdict.value["reason"])
-        archive.prepare_draft(job, final_prompt, pre, post)
+        try:
+            pre, verdict = review("pre_review", prompt)
+            self.log("pre_review", job=short, decision=verdict.value["decision"])
+            if verdict.value["decision"] != "pass":
+                archive.finish_job(job, "blocked")
+                self.log("blocked", level="warn", job=short, stage="pre_review")
+                raise ImageError("内容未通过 NSFW 审核：" + verdict.value["reason"])
+            if direct:
+                final_prompt = prompt
+                self.log("direct", job=short)
+            else:
+                _, rewritten = review("rewrite", prompt)
+                final_prompt = rewritten.value["prompt"]
+                self.log("rewrite", job=short, chars=len(final_prompt))
+            post, verdict = review("post_review", final_prompt, original=prompt)
+            self.log("post_review", job=short, decision=verdict.value["decision"])
+            if verdict.value["decision"] != "pass":
+                archive.finish_job(job, "blocked")
+                self.log("blocked", level="warn", job=short, stage="post_review")
+                raise ImageError("润色结果未通过 NSFW 审核：" + verdict.value["reason"])
+            archive.prepare_draft(job, final_prompt, pre, post)
+        except (ProviderError, TransportError) as error:
+            # 上游格式异常也带上任务号，否则群里只看到一句无法追查的失败提示。
+            code = getattr(error, "code", None) or str(error)
+            archive.finish_job(job, "failed")
+            self.log("review failed", level="warn", job=short, code=code)
+            raise ImageError(
+                f"任务 {short} 的提示词处理失败（{code}）："
+                f"可用 /codex image status {short} 查看记录，或稍后重新发起。"
+            ) from None
         self.log("draft ready", job=short)
         mode = "直接生成（未润色）" if direct else "润色"
         return (
@@ -407,8 +422,24 @@ class ImageService:
         )
 
     def status(self, msg, prefix: str | None) -> str:
-        job = self.archive.resolve_job(prefix, self.scope(msg))
-        return f"任务 {str(job['id'])[:8]} 当前状态：{job['state']}。"
+        """有编号查那个任务；没有编号先看待确认任务，否则列出最近几条。"""
+        owner = self.scope(msg)
+        if prefix:
+            job = self.archive.owned_job_by_prefix(prefix, owner)
+            return f"任务 {prefix} 当前状态：{job['state']}。"
+        try:
+            job = self.archive.pending_job(owner)
+        except ArchiveError as error:
+            rows = self.archive.recent_jobs(owner)
+            if not rows:
+                return str(error)
+            lines = ["最近的任务（任务号：状态）："]
+            lines.extend(
+                f"{row['short']}：{row['state']}（{row['created_at']:%m-%d %H:%M}）"
+                for row in rows
+            )
+            return "\n".join(lines)
+        return f"待确认任务 {str(job['id'])[:8]}，10 分钟内有效。"
 
     def cancel(self, msg, prefix: str | None) -> str:
         owner = self.scope(msg)

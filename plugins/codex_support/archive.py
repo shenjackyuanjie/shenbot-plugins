@@ -265,6 +265,18 @@ class Archive:
             raise ArchiveError(f"有多个待确认任务，请带上编号：{listing}")
         return rows[0]
 
+    def recent_jobs(self, owner: Scope, limit: int = 5) -> list[dict]:
+        """最近的任务摘要；没有编号时用它查看记录，不返回提示词正文。"""
+        with self._db() as db:
+            return db.execute(
+                self._sql(
+                    "SELECT left(id::text,8) AS short, state, created_at FROM {schema}.jobs "
+                    "WHERE account=%s AND room_id=%s AND (%s::bigint IS NULL OR sender_id=%s) "
+                    "ORDER BY created_at DESC LIMIT %s"
+                ),
+                (owner[0], owner[1], owner[2], owner[2], limit),
+            ).fetchall()
+
     def resolve_job(self, prefix: str | None, owner: Scope) -> dict:
         """有编号按前缀定位，没有编号就用范围内唯一的待确认任务。"""
         if prefix:

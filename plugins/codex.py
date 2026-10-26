@@ -889,7 +889,7 @@ def _image_worker(
 
         traceback.print_exc()
         client.warn(f"codex：生图流程异常（{type(error).__name__}: {error}）")
-        text = "生图流程失败，请稍后用 /codex image status 查看记录。"
+        text = "生图流程失败。发送 /codex image status 可以查看最近任务与状态。"
     with state.lock:
         stopped = state.stopped
     # confirm 已在开始时回执并自行回图，text 为 None 时不再追加任何文本。

@@ -62,9 +62,12 @@ HTTP/Socket.IO 受理仅记为 submitted，不能伪称 QQ 最终送达。
 /codex image attach <编号>     引用含图片的消息，追加参考图并重新审核
 /codex image confirm [编号]    确认后生成并回图；只剩一个待确认任务时可省略
 /codex image cancel <编号>     取消草稿或任务
-/codex image status <编号>     查看任务状态
+/codex image status [编号]     查看任务状态；不带编号时列出最近 5 条记录
 /codex image help              生图帮助
 ~~~
+
+`/codex image status` 不带编号时先返回当前群唯一的待确认任务；没有待确认任务，
+就列出最近 5 条任务的任务号、状态与创建时间，不用先记住编号。
 
 `confirm`、`cancel`、`status`、`set`、`attach` 都可以省略编号，此时使用本人在当前群
 唯一待确认的任务；有多个时会回消息列出现有编号，不做猜测。

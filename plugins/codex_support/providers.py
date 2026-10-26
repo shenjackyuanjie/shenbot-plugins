@@ -168,7 +168,8 @@ def deepseek_call(
             "thinking": {"type": "enabled"},
             "reasoning_effort": "high",
             "stream": False,
-            "max_tokens": 2048,
+            # 思考与正文共用这一段预算；给小了会被截断成 finish_reason=length。
+            "max_tokens": 8192,
         }
     else:
         payload = review_payload(model, content)
