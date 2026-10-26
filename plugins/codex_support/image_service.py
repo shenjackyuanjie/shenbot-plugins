@@ -86,10 +86,15 @@ class ImageService:
     """短生命周期实例；认证从注入的 login_provider 读取，不在实例中保存明文副本。"""
 
     def __init__(
-        self, settings: ImageSettings, login_provider, archive: Archive | None = None
+        self,
+        settings: ImageSettings,
+        login_provider,
+        account: int,
+        archive: Archive | None = None,
     ):
         self.settings = settings
         self.login_provider = login_provider
+        self.account = account
         self._archive = archive
 
     @property
@@ -101,12 +106,11 @@ class ImageService:
             self._archive = Archive(self.settings.pg_connection)
         return self._archive
 
-    @staticmethod
-    def owner(msg) -> tuple[int, int, int]:
-        account = getattr(msg, "account", None) or getattr(msg, "self_id", None)
-        if not isinstance(account, int) or account <= 0:
+    def owner(self, msg) -> tuple[int, int, int]:
+        """消息本身不携带机器人账号，必须用连接状态的 self_id 绑定归属。"""
+        if not isinstance(self.account, int) or self.account <= 0:
             raise ImageError("当前连接缺少可用机器人账号。")
-        return account, msg.room_id, msg.sender_id
+        return self.account, msg.room_id, msg.sender_id
 
     def _call(self, call, job_id, stopped: threading.Event):
         """登记 started 后只发送一次；失败与不确定分别归档，绝不重试。"""

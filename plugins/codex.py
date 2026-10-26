@@ -642,7 +642,14 @@ def _image_worker(
         deepseek_base_url=state.settings.deepseek_base_url,
         deepseek_model=state.settings.deepseek_model,
     )
-    service = ImageService(settings, lambda: read_login(state.settings.dsh_home))
+    # 消息对象不携带机器人账号；归属绑定必须使用当前连接的 self_id。
+    try:
+        account = client.status.self_id
+    except Exception:
+        account = None
+    service = ImageService(
+        settings, lambda: read_login(state.settings.dsh_home), account
+    )
     try:
         if action == "create":
             text = service.create(msg, client, value)

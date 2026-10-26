@@ -82,6 +82,7 @@ class ImageFlowTests(unittest.TestCase):
             lambda: SimpleNamespace(
                 access="fixture-access", account_id="fixture-account"
             ),
+            10001,
             archive=archive,
         )
 
