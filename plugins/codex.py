@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     from ica_typing import IcaClient, IcaNewMessage
     from shenbot_api import IcaConnectionState, IcaConnectionWatch
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 POLL_SECONDS = 120
 THRESHOLD_STEP = 5
 COMMAND = "/codex"
@@ -34,8 +34,8 @@ DISPLAY_ZONE = timezone(timedelta(hours=8))
 LOGIN_HELP = "请启动 DSH，在「设置 → Codex 订阅」刷新额度或重新登录后再试。"
 HELP_TEXT = (
     "Codex 订阅帮助\n"
-    "/codex：查询 DSH 当前账号的套餐、剩余额度和重置时间。\n"
-    "/codex help：显示本帮助，不联网，不占用查询冷却。\n"
+    "/codex check：查询 DSH 当前账号的套餐、剩余额度和重置时间。\n"
+    "/codex 或 /codex help：显示本帮助，不联网，不占用查询冷却。\n"
     f"自动提醒：每 {POLL_SECONDS // 60} 分钟检查，剩余额度跨过 95%、90%、85%……0% 时提醒。\n"
     "reset 警告：剩余额度比上次上涨时报告；上次不为 0% 时提示“浪费了xx%额度😭”。\n"
     "仅白名单群可用；登录失效请在 DSH 中刷新。"
@@ -45,7 +45,7 @@ PLUGIN_MANIFEST = PluginManifest(
     plugin_id="codex",
     name="Codex 订阅查询",
     version=VERSION,
-    description="指定群使用 /codex 查询订阅、/codex help 查看帮助，每两分钟检查额度下降与 reset",
+    description="指定群使用 /codex 查看帮助、/codex check 查询订阅，每两分钟检查额度下降与 reset",
     authors=["shenjack"],
     config={
         "main": ConfigStorage(
@@ -584,10 +584,10 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
         msg.is_from_self
         or msg.room_id >= 0
         or -msg.room_id not in state.settings.allowed_groups
-        or command not in ([COMMAND], [COMMAND, "help"])
+        or command not in ([COMMAND], [COMMAND, "help"], [COMMAND, "check"])
     ):
         return
-    if command == [COMMAND, "help"]:
+    if command in ([COMMAND], [COMMAND, "help"]):
         _reply(state, msg, client, HELP_TEXT)
         return
     with state.lock:

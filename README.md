@@ -33,8 +33,8 @@
 
 ## 插件文档
 
-- Codex 订阅查询（[codex.py](plugins/codex.py)）：指定群 `/codex`，只读复用 DSH 当前账号，
-  显示套餐、剩余额度与重置时间；`/codex help` 查看帮助。每两分钟轮询，剩余额度跨过 95%、90%、85% 等档位时提醒；
+- Codex 订阅查询（[codex.py](plugins/codex.py)）：指定群 `/codex check`，只读复用 DSH 当前账号，
+  显示套餐、剩余额度与重置时间；`/codex` 或 `/codex help` 查看帮助。每两分钟轮询，剩余额度跨过 95%、90%、85% 等档位时提醒；
   额度上涨报告 reset，上次余额不为 0% 时附上“浪费了xx%额度😭”。
   配置和 DSH 离线/重启行为见 [使用说明](docs/codex.md)。
 - DeepSeek 监测（[ds_monitor.py](plugins/ds_monitor.py)）：运行副本、命令、更新回滚与发布熔断见

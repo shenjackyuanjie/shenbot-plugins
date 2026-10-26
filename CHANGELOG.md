@@ -2,6 +2,12 @@
 
 宿主版本对应 [shenbot_api.py](shenbot_api.py) 的 `__version__`；ICA/Tailchat API 与各插件的 `VERSION` 分别管理。
 
+## 2026-10-26 Codex 子命令整理
+
+- [codex](plugins/codex.py) **0.3.0 → 0.4.0**：`/codex` 改为本地帮助，保留 `/codex help`；手动额度查询改为 `/codex check`，仍共用原有查询槽位、冷却、限流与卸载保护。
+- 帮助不读取凭据、不联网、不占用查询冷却；未知子命令不触发额度查询。生图规划使用 `/codex image ...`，本次尚未接入或启用。自动额度提醒保持两分钟及原有 reset 规则。
+- 同步 [使用说明](docs/codex.md) 与入口回归，验证白名单边界、帮助在查询期间可用及未实现生图命令不会误查额度。
+
 ## 2026-10-26 Codex 帮助与 reset 提醒
 
 - [codex](plugins/codex.py) **0.2.1 → 0.3.0**：新增白名单群内 `/codex help`，本地显示查询命令、自动提醒与 reset 规则，不联网、不占用查询冷却。

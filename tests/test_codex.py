@@ -138,7 +138,7 @@ class CommandTests(unittest.TestCase):
         self.msg = SimpleNamespace(
             is_from_self=False,
             room_id=-123456,
-            content="/codex",
+            content="/codex check",
             reply_with=lambda text: text,
         )
         self.client = Mock()
@@ -153,13 +153,17 @@ class CommandTests(unittest.TestCase):
     def finish(self):
         self.thread.call_args.kwargs["target"]()
 
-    def test_only_whitelisted_group_can_query(self):
+    def test_only_exact_check_in_whitelisted_group_can_query(self):
         for room in (-654321, 123456):
             codex.on_ica_message(
                 SimpleNamespace(**(vars(self.msg) | {"room_id": room})), self.client
             )
         self.thread.assert_not_called()
         self.client.send_message.assert_not_called()
+        self.msg.content = "/codex image 一只猫"
+        codex.on_ica_message(self.msg, self.client)
+        self.thread.assert_not_called()
+        self.msg.content = "/codex check"
         codex.on_ica_message(self.msg, self.client)
         self.thread.assert_called_once()
 
@@ -171,11 +175,15 @@ class CommandTests(unittest.TestCase):
         self.msg.room_id = -123456
         self.state.busy = True
         self.state.next_query_at = float("inf")
-        codex.on_ica_message(self.msg, self.client)
+        for command in ("/codex", "/codex help"):
+            self.msg.content = command
+            codex.on_ica_message(self.msg, self.client)
+        self.assertEqual(self.client.send_message.call_count, 2)
         self.thread.assert_not_called()
         text = self.client.send_message.call_args.args[0]
         self.assertIn("/codex", text)
         self.assertIn("/codex help", text)
+        self.assertIn("/codex check", text)
         self.assertIn("2 分钟", text)
         self.assertIn("reset", text)
         self.assertTrue(self.state.busy)
