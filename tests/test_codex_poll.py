@@ -144,6 +144,17 @@ class PollingTests(unittest.TestCase):
         self.watch.send_text.assert_called_once()
         self.assertEqual(self.watch.send_text.call_args.args[2], -123456)
 
+    def test_alerts_follow_dedicated_alert_groups(self):
+        # 提醒群与命令白名单分离：白话群里仍能手动查询，但自动提醒只发配置的群。
+        self.state.settings = codex.Settings(
+            frozenset({123456, 654321}), alert_groups=frozenset({654321})
+        )
+        self.poll()
+        self.fetch.return_value = usage(74)
+        self.poll()
+        self.watch.send_text.assert_called_once()
+        self.assertEqual(self.watch.send_text.call_args.args[2], -654321)
+
     def test_unload_closes_active_watch_and_prevents_late_notification(self):
         self.state.poll_watch = self.watch
         self.state.baselines[123456] = snapshot(98)

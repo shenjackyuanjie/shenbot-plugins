@@ -49,7 +49,8 @@ HELP_TEXT = (
     "/codex image confirm|cancel|status <编号>：确认生成、取消或查看任务。\n"
     f"自动提醒：每 {POLL_SECONDS // 60} 分钟检查，剩余额度跨过 95%、90%、85%……0% 时提醒。\n"
     "reset 警告：剩余额度比上次上涨时报告；上次不为 0% 时提示“浪费了xx%额度😭”。\n"
-    "仅白名单群可用；登录失效请在 DSH 中刷新。"
+    "仅白名单群可用；额度自动提醒只发配置的提醒群，其他群仍可手动 /codex check。\n"
+    "登录失效请在 DSH 中刷新。"
 )
 IMAGE_HELP = (
     "Codex 生图帮助\n"
@@ -140,6 +141,8 @@ PLUGIN_MANIFEST = PluginManifest(
             deepseek_api_key="",
             deepseek_base_url="https://api.deepseek.com",
             deepseek_model="deepseek-flash",
+            # 留空时额度提醒沿用 allowed_groups；填写后只发这些群。
+            alert_groups=[],
         )
     },
 )
@@ -163,6 +166,12 @@ class Settings:
     deepseek_api_key: str = field(default="", repr=False)
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-flash"
+    alert_groups: frozenset[int] = frozenset()
+
+    def __post_init__(self) -> None:
+        # 未单独配置提醒群时沿用白名单，避免升级后静默失去额度提醒。
+        if not self.alert_groups:
+            object.__setattr__(self, "alert_groups", self.allowed_groups)
 
 
 @dataclass(frozen=True)
@@ -541,7 +550,7 @@ def _poll_worker(
         current = quota_snapshot(login.owner_id or login.account_id, usage)
         with state.lock:
             state.poll_error = None
-        for group in sorted(state.settings.allowed_groups):
+        for group in sorted(state.settings.alert_groups):
             with state.lock:
                 if state.stopped:
                     return
@@ -585,7 +594,7 @@ def _start_poll(state: Runtime) -> None:
     with state.lock:
         if (
             state.stopped
-            or not state.settings.allowed_groups
+            or not state.settings.alert_groups
             or state.busy
             or time.monotonic() < state.next_query_at
         ):
@@ -624,7 +633,7 @@ def _start_poll(state: Runtime) -> None:
 
 def _schedule_poll(state: Runtime, delay: int = POLL_SECONDS) -> None:
     with state.lock:
-        if state.stopped or not state.settings.allowed_groups:
+        if state.stopped or not state.settings.alert_groups:
             return
 
     def tick() -> None:
@@ -658,6 +667,11 @@ def on_load() -> None:
         type(group) is not int or group == 0 for group in groups
     ):
         raise ValueError("codex：allowed_groups 必须为非零整数群号列表")
+    alerts = cfg.get_value("alert_groups") or []
+    if not isinstance(alerts, list) or any(
+        type(group) is not int or group == 0 for group in alerts
+    ):
+        raise ValueError("codex：alert_groups 必须为非零整数群号列表")
     home = cfg.get_value("dsh_home") or ""
     image = {
         "pg_connection": cfg.get_value("pg_connection") or "",
@@ -684,6 +698,7 @@ def on_load() -> None:
             timeout,
             cooldown,
             **(image | {"deepseek_api_key": image["deepseek_api_key"].strip()}),
+            alert_groups=frozenset(abs(group) for group in alerts),
         )
     )
     # 首次尽快记录静默基准，之后每两分钟检查。宿主仅在插件提交后开始计时。

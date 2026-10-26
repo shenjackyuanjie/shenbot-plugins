@@ -41,8 +41,10 @@ python -m pip install -r requirements.txt
 
 ```toml
 [main]
-# 使用正群号；ICA 的负 room_id 也接受并归一化。空列表不响应任何群。
+# 命令白名单：使用正群号；ICA 的负 room_id 也接受并归一化。空列表不响应任何群。
 allowed_groups = [123456789, 987654321]
+# 额度自动提醒只发这些群，支持多个；留空则沿用 allowed_groups。
+alert_groups = [123456789]
 # 已登录 DSH 的数据根目录，不是 profiles/web，也不是插件安装目录。
 # 留空依次使用 Bot 进程的 DSH_HOME 环境变量、当前用户 ~/.dsh。
 dsh_home = "D:/path/to/existing-dsh-home"
@@ -52,7 +54,8 @@ cooldown_seconds = 15
 
 修改后通过宿主重载 `codex` 插件。真实群号与本机路径只放本地、Git 忽略的配置，
 不要硬编码进插件或公共文档。`allowed_groups` 支持多个群，每群分别记录提醒进度，
-某个群发送失败不会让其他群重复收到已受理的提醒。Bot 运行用户需要有权限读取同一份 DSH 登录文件。
+某个群发送失败不会让其他群重复收到已受理的提醒。`alert_groups` 把自动提醒限制到指定群：
+白名单里其他群仍可手动 `/codex check`，但不会收到每两分钟的额度变动提醒。Bot 运行用户需要有权限读取同一份 DSH 登录文件。
 
 配置范围：超时 1–60 秒；查询冷却 1–3600 秒；默认均为 15 秒。
 并发命令共用一个查询槽位，避免同时请求；收到 HTTP 429 时遵守 Retry-After。
