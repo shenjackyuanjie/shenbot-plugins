@@ -618,12 +618,23 @@ def _image_worker(
     state: Runtime, action: str, msg: IcaNewMessage, client: IcaClient, value: str
 ) -> None:
     """后台执行分钟级操作；结束前再查停止标志，卸载后的旧代不回包。"""
-    from plugins.codex_support.archive import ArchiveError
-    from plugins.codex_support.image_service import (
-        ImageError,
-        ImageService,
-        ImageSettings,
-    )
+    # 宿主用 from_code 直接加载插件文件，没有 plugins 包；此时插件目录才是导入根。
+    import sys
+    from pathlib import Path
+
+    plugin_root = str(Path(__file__).resolve().parent)
+    if plugin_root not in sys.path:
+        sys.path.append(plugin_root)
+    try:
+        from codex_support.archive import ArchiveError
+        from codex_support.image_service import ImageError, ImageService, ImageSettings
+    except ModuleNotFoundError:  # 从仓库根运行的测试使用包路径
+        from plugins.codex_support.archive import ArchiveError
+        from plugins.codex_support.image_service import (
+            ImageError,
+            ImageService,
+            ImageSettings,
+        )
 
     settings = ImageSettings(
         pg_connection=state.settings.pg_connection,
