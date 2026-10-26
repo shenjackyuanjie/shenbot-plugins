@@ -73,38 +73,42 @@ def post_json(
         base_url, path = "https://chatgpt.com/backend-api/codex", IMAGE_ENDPOINTS[url]
     else:
         raise TransportError("INVALID_API_URL")
+    # SDK 的 close() 也会关闭传入的传输，因此外部注入时由调用方管理生命周期。
+    client = OpenAI(
+        api_key=authorization[7:],
+        base_url=base_url,
+        default_headers=extra_headers,
+        max_retries=0,
+        timeout=timeout,
+        http_client=http_client or DefaultHttpx2Client(follow_redirects=False),
+    )
     try:
-        with OpenAI(
-            api_key=authorization[7:],
-            base_url=base_url,
-            default_headers=extra_headers,
-            max_retries=0,
-            timeout=timeout,
-            http_client=http_client or DefaultHttpx2Client(follow_redirects=False),
-        ) as client:
-            try:
-                response = client.post(path, cast_to=httpx2.Response, body=payload)
-            except APIStatusError as error:
-                response = error.response
-            data = response.content
-            if len(data) > maximum_bytes:
-                raise TransportError("RESPONSE_TOO_LARGE")
-            try:
-                decoded = json.loads(data)
-                if not isinstance(decoded, dict):
-                    decoded = None
-            except (ValueError, UnicodeError):
+        try:
+            response = client.post(path, cast_to=httpx2.Response, body=payload)
+        except APIStatusError as error:
+            response = error.response
+        data = response.content
+        if len(data) > maximum_bytes:
+            raise TransportError("RESPONSE_TOO_LARGE")
+        try:
+            decoded = json.loads(data)
+            if not isinstance(decoded, dict):
                 decoded = None
-            request_id = response.headers.get("x-request-id") or response.headers.get(
-                "openai-request-id"
+        except (ValueError, UnicodeError):
+            decoded = None
+        request_id = response.headers.get("x-request-id") or response.headers.get(
+            "openai-request-id"
+        )
+        if request_id is not None:
+            # 只保留可见字符的短关联号，避免把异常响应头原样带进存档。
+            request_id = "".join(
+                char for char in request_id[:160] if char.isprintable()
             )
-            if request_id is not None:
-                # 只保留可见字符的短关联号，避免把异常响应头原样带进存档。
-                request_id = "".join(
-                    char for char in request_id[:160] if char.isprintable()
-                )
-            return HTTPResult(response.status_code, decoded, data, request_id)
+        return HTTPResult(response.status_code, decoded, data, request_id)
     except APITimeoutError:
         raise TransportError("TIMEOUT_UNCERTAIN") from None
     except APIConnectionError:
         raise TransportError("NETWORK_UNCERTAIN") from None
+    finally:
+        if http_client is None:
+            client.close()
