@@ -24,7 +24,8 @@ class FakeArchive:
         self.confirmed = False
         self.generated = False
 
-    def create_job(self, owner, source, prompt):
+    def create_job(self, owner, source, prompt, params=None):
+        self.job["image_params"] = params or {}
         return "abcdef12-3456-7890-abcd-ef1234567890"
 
     def put_image(self, job, role, data, request=None):
@@ -135,13 +136,15 @@ class ImageFlowTests(unittest.TestCase):
         with self.assertRaises(image_service.ArchiveError):
             service.confirm(message(), client, "abcdef12")
 
-
     def test_direct_skips_rewrite_but_keeps_both_reviews(self):
         archive = FakeArchive()
         service = self.service(archive)
         stages = []
         verdicts = iter(
-            [{"decision": "pass", "reason": "可以"}, {"decision": "pass", "reason": "可以"}]
+            [
+                {"decision": "pass", "reason": "可以"},
+                {"decision": "pass", "reason": "可以"},
+            ]
         )
 
         def record(call, job, stopped):
@@ -154,6 +157,38 @@ class ImageFlowTests(unittest.TestCase):
         # direct 不改写提示词，但前审与后审仍是两次独立请求，草稿要求两次 pass。
         self.assertEqual(stages, ["pre_review", "post_review"])
         self.assertTrue(archive.drafted)
+
+    def test_direct_freezes_image_options_for_generation(self):
+        archive = FakeArchive()
+        service = self.service(archive)
+        calls = []
+        values = iter(
+            [
+                {"decision": "pass", "reason": "可以"},
+                {"decision": "pass", "reason": "可以"},
+                {"image_sha256": "fixture-digest"},
+            ]
+        )
+
+        def record(call, job, stopped):
+            calls.append(call)
+            return "request", SimpleNamespace(value=next(values))
+
+        service._call = Mock(side_effect=record)
+        preview = service.create(
+            message(),
+            Mock(),
+            "虚构图片要求",
+            direct=True,
+            params={"size": "1024x1536", "quality": "high"},
+        )
+        self.assertIn("1024x1536", preview)
+        # 未显式给出的参数按 auto 冻结，预览展示的就是最终发给上游的值。
+        self.assertIn("背景 auto", preview)
+        service.confirm(message(), Mock(), "abcdef12")
+        self.assertEqual(calls[-1].payload["size"], "1024x1536")
+        self.assertEqual(calls[-1].payload["quality"], "high")
+        self.assertEqual(calls[-1].payload["background"], "auto")
 
 
 if __name__ == "__main__":

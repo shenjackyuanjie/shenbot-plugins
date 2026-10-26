@@ -51,8 +51,70 @@ IMAGE_HELP = (
     "引用一张图片时按改图处理；引用多张或非图片会被拒绝。\n"
     "/codex image confirm <编号>：确认后生成并引用当前消息回图。\n"
     "/codex image cancel|status <编号>：取消或以查看任务状态。\n"
-    "草稿 10 分钟有效，确认只生效一次；结果不确定时不会自动重试。"
+    "草稿 10 分钟有效，确认只生效一次；结果不确定时不会自动重试。\n"
+    "参数可写在描述前后：--size 1024x1536、--quality low/medium/high/xhigh/max、"
+    "--background transparent/opaque，缺省均为 auto。"
 )
+
+IMAGE_QUALITIES = ("auto", "low", "medium", "high", "xhigh", "max")
+IMAGE_BACKGROUNDS = ("auto", "transparent", "opaque")
+
+
+def _check_size(value: str) -> str | None:
+    """只接受 auto 或 512–2048 的宽x高；无法解析的值直接拒绝，不猜上游支持范围。"""
+    if value == "auto":
+        return None
+    width, _, height = value.partition("x")
+    if (
+        width.isdigit()
+        and height.isdigit()
+        and all(512 <= int(item) <= 2048 for item in (width, height))
+    ):
+        return None
+    return "尺寸需为 auto 或 512–2048 之间的 宽x高，例如 1024x1536。"
+
+
+def _check_choice(label: str, choices: tuple[str, ...]):
+    def check(value: str) -> str | None:
+        if value in choices:
+            return None
+        return f"{label}可选：{'/'.join(choices)}。"
+
+    return check
+
+
+IMAGE_OPTIONS = {
+    "--size": _check_size,
+    "--quality": _check_choice("质量", IMAGE_QUALITIES),
+    "--background": _check_choice("背景", IMAGE_BACKGROUNDS),
+}
+
+
+def _split_image_options(parts: list[str]) -> tuple[dict[str, str], str, str | None]:
+    """剥离 --size/--quality/--background，返回参数、描述与首个错误。
+
+    参数可出现在描述前后；未识别的词一律留在描述里，不吞用户内容。
+    """
+    options: dict[str, str] = {}
+    rest: list[str] = []
+    index = 0
+    while index < len(parts):
+        token = parts[index]
+        check = IMAGE_OPTIONS.get(token)
+        if check is None:
+            rest.append(token)
+            index += 1
+            continue
+        if index + 1 >= len(parts):
+            return options, "", f"{token} 需要一个取值。"
+        value = parts[index + 1]
+        error = check(value)
+        if error:
+            return options, "", error
+        options[token[2:]] = value
+        index += 2
+    return options, " ".join(rest).strip(), None
+
 
 PLUGIN_MANIFEST = PluginManifest(
     plugin_id="codex",
@@ -631,7 +693,12 @@ def on_unload() -> None:
 
 
 def _image_worker(
-    state: Runtime, action: str, msg: IcaNewMessage, client: IcaClient, value: str
+    state: Runtime,
+    action: str,
+    msg: IcaNewMessage,
+    client: IcaClient,
+    value: str,
+    options: dict[str, str],
 ) -> None:
     """后台执行分钟级操作；结束前再查停止标志，卸载后的旧代不回包。"""
     print(f"[codex] 生图任务开始 action={action}", flush=True)
@@ -669,7 +736,9 @@ def _image_worker(
     )
     try:
         if action in ("create", "direct"):
-            text = service.create(msg, client, value, direct=action == "direct")
+            text = service.create(
+                msg, client, value, direct=action == "direct", params=options
+            )
         elif action == "confirm":
             text = service.confirm(msg, client, value)
         elif action == "cancel":
@@ -704,6 +773,7 @@ def _handle_image(
         _reply(state, msg, client, IMAGE_HELP)
         return
     action = parts[0]
+    options: dict[str, str] = {}
     if action in ("confirm", "cancel", "status"):
         if len(parts) != 2 or len(parts[1]) != 8:
             _reply(
@@ -711,16 +781,21 @@ def _handle_image(
             )
             return
         value = parts[1]
-    elif action in ("create", "generate", "direct"):
-        value = " ".join(parts[1:]).strip()
+    else:
+        if action in ("create", "generate", "direct"):
+            action = "direct" if action == "direct" else "create"
+            tokens = parts[1:]
+        else:
+            # 描述本身可以以 confirm 等词开头，因此只有精确关键字才按子命令解析。
+            action = "create"
+            tokens = parts
+        options, value, error = _split_image_options(tokens)
+        if error:
+            _reply(state, msg, client, error)
+            return
         if not value:
             _reply(state, msg, client, "用法：/codex image <图片描述>")
             return
-        action = "direct" if action == "direct" else "create"
-    else:
-        # 描述本身可以以 confirm 等词开头，因此只有精确关键字才按子命令解析。
-        value = " ".join(parts).strip()
-        action = "create"
     notice = ""
     with state.lock:
         if state.stopped:
@@ -736,7 +811,7 @@ def _handle_image(
         return
     threading.Thread(
         target=_image_worker,
-        args=(state, action, msg, client, value),
+        args=(state, action, msg, client, value, options),
         name="codex-image",
         daemon=True,
     ).start()

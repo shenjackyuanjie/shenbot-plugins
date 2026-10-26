@@ -184,8 +184,16 @@ class ImageService:
         )
         return request_id, parsed
 
-    def create(self, msg, client, prompt: str, *, direct: bool = False) -> str:
-        """依次执行前审、（润色）、后审，冻结草稿并返回预览文本。
+    def create(
+        self,
+        msg,
+        client,
+        prompt: str,
+        *,
+        direct: bool = False,
+        params: dict | None = None,
+    ) -> str:
+        """依次执行前审、（润色）、后审，冻结草稿与生成参数并返回预览文本。
 
         direct 只跳过润色：两次审核仍然独立执行，放行对象始终是最终要生成的提示词。
         """
@@ -196,7 +204,14 @@ class ImageService:
             raise ImageError("尚未配置 DeepSeek API Key，生图功能不可用。")
         image = reference_image(client, msg)
         archive = self.archive
-        job = archive.create_job(self.owner(msg), msg.id, prompt)
+        # 缺省项一律按 auto 补齐：预览展示的参数就是确认后真正发给上游的参数。
+        params = {
+            "size": "auto",
+            "quality": "auto",
+            "background": "auto",
+            **(params or {}),
+        }
+        job = archive.create_job(self.owner(msg), msg.id, prompt, params)
         short = str(job)[:8]
         _log("create", job=short, chars=len(prompt), reference=image is not None)
         if image is not None:
@@ -239,6 +254,7 @@ class ImageService:
         mode = "直接生成（未润色）" if direct else "润色"
         return (
             f"任务 {short} 待确认\n模式：{mode}\n提示词：{final_prompt}\n"
+            f"参数：{params['size']} / 质量 {params['quality']} / 背景 {params['background']}\n"
             f"发送 /codex image confirm {short} 开始生成，或 /codex image cancel {short} 取消。"
             "10 分钟内有效。"
         )
@@ -259,6 +275,8 @@ class ImageService:
         job = archive.owned_job_by_prefix(prefix, owner)
         short = str(job["id"])[:8]
         login = self.login_provider()
+        # 参数只从任务读取：确认命令不接受尺寸等选项，避免预览与生成不一致。
+        params = job.get("image_params") or {}
         archive.claim_confirmation(job["id"], owner)
         image = archive.image(job["id"], "reference")
         _log("confirmed", job=short, reference=image is not None)
@@ -271,7 +289,13 @@ class ImageService:
         )
         try:
             call = codex_call(
-                job["reviewed_prompt"], login.access, login.account_id, image=image
+                job["reviewed_prompt"],
+                login.access,
+                login.account_id,
+                image=image,
+                size=params.get("size", "auto"),
+                quality=params.get("quality", "auto"),
+                background=params.get("background", "auto"),
             )
             self._call(call, job["id"], threading.Event())
         except (ProviderError, TransportError, ArchiveError) as error:

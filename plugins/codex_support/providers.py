@@ -194,18 +194,28 @@ def deepseek_call(
 
 
 def codex_call(
-    prompt: str, access: str, account_id: str, *, image: bytes | None = None
+    prompt: str,
+    access: str,
+    account_id: str,
+    *,
+    image: bytes | None = None,
+    size: str = "auto",
+    quality: str = "auto",
+    background: str = "auto",
 ) -> Call:
-    """直接复用订阅后端合同，不调用公共 OpenAI 图片计费 API 或 DSH 工具层。"""
+    """直接复用订阅后端合同，不调用公共 OpenAI 图片计费 API 或 DSH 工具层。
+
+    尺寸、质量与背景由任务冻结后传入，这里只透传，不做上游参数猜测或回退。
+    """
     if not access or not account_id or not prompt.strip():
         raise ProviderError("INVALID_CODEX_CONFIGURATION")
     references, media_type, image_url = _reference(image)
     payload = {
         "prompt": prompt,
         "model": IMAGE_MODEL,
-        "quality": "auto",
-        "size": "auto",
-        "background": "auto",
+        "quality": quality,
+        "size": size,
+        "background": background,
     }
     archived_body = copy.deepcopy(payload)
     if image_url is not None:

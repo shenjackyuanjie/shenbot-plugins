@@ -22,6 +22,8 @@ from psycopg import sql
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
+SCHEMA_VERSION = 2
+
 
 class ArchiveError(RuntimeError):
     """固定的用户可见错误；不透传可能包含连接信息的驱动异常。"""
@@ -104,7 +106,23 @@ class Archive:
                 row = db.execute(
                     self._sql("SELECT version FROM {schema}.schema_version")
                 ).fetchall()
-                if len(row) != 1 or row[0]["version"] != 1:
+                if len(row) != 1:
+                    raise ArchiveError("codex 存档版本不兼容，停止初始化。")
+                version = row[0]["version"]
+                if version == 1:
+                    # 1 → 2：把生成参数固化到任务上，确认阶段不能再从命令改写。
+                    db.execute(
+                        self._sql(
+                            "ALTER TABLE {schema}.jobs ADD COLUMN IF NOT EXISTS "
+                            # 花括号需要转义，_sql 会把 {{}} 还原成 jsonb 空对象字面量。
+                            "image_params jsonb NOT NULL DEFAULT '{{}}'::jsonb"
+                        )
+                    )
+                    db.execute(
+                        self._sql("UPDATE {schema}.schema_version SET version=2")
+                    )
+                    version = 2
+                if version != SCHEMA_VERSION:
                     raise ArchiveError("codex 存档版本不兼容，停止初始化。")
                 return
             migration = (
@@ -113,19 +131,26 @@ class Archive:
             db.execute(self._sql(migration))
 
     def create_job(
-        self, owner: tuple[int, int, int], source_id: str, prompt: str
+        self,
+        owner: tuple[int, int, int],
+        source_id: str,
+        prompt: str,
+        params: dict | None = None,
     ) -> UUID:
-        """同一平台来源只建立一个任务；生成过的旧来源不会因重放变成新任务。"""
+        """同一平台来源只建立一个任务；生成过的旧来源不会因重放变成新任务。
+
+        params 在创建时冻结尺寸、质量与背景；重放同一来源不会改写已记录的参数。
+        """
         if not source_id or not prompt.strip():
             raise ArchiveError("任务缺少可靠来源或图片描述。")
         with self._db() as db:
             row = db.execute(
                 self._sql(
-                    "INSERT INTO {schema}.jobs(id,account,room_id,sender_id,source_message_id,original_prompt) "
-                    "VALUES (%s,%s,%s,%s,%s,%s) ON CONFLICT(account,room_id,source_message_id) "
+                    "INSERT INTO {schema}.jobs(id,account,room_id,sender_id,source_message_id,original_prompt,image_params) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(account,room_id,source_message_id) "
                     "DO NOTHING RETURNING id"
                 ),
-                (uuid4(), *owner, source_id, prompt),
+                (uuid4(), *owner, source_id, prompt, Jsonb(sanitized(params or {}))),
             ).fetchone()
             if row is None:
                 row = db.execute(
