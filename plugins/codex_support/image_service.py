@@ -184,8 +184,11 @@ class ImageService:
         )
         return request_id, parsed
 
-    def create(self, msg, client, prompt: str) -> str:
-        """依次执行前审、润色、后审，冻结草稿并返回预览文本。"""
+    def create(self, msg, client, prompt: str, *, direct: bool = False) -> str:
+        """依次执行前审、（润色）、后审，冻结草稿并返回预览文本。
+
+        direct 只跳过润色：两次审核仍然独立执行，放行对象始终是最终要生成的提示词。
+        """
         prompt = prompt.strip()
         if not 0 < len(prompt) <= MAX_PROMPT:
             raise ImageError(f"图片描述需为 1–{MAX_PROMPT} 字。")
@@ -218,20 +221,24 @@ class ImageService:
             archive.finish_job(job, "blocked")
             _log("blocked", job=short, stage="pre_review")
             raise ImageError("内容未通过 NSFW 审核：" + verdict.value["reason"])
-        _, rewritten = review("rewrite", prompt)
-        _log("rewrite", job=short, chars=len(rewritten.value["prompt"]))
-        post, verdict = review(
-            "post_review", rewritten.value["prompt"], original=prompt
-        )
+        if direct:
+            final_prompt = prompt
+            _log("direct", job=short)
+        else:
+            _, rewritten = review("rewrite", prompt)
+            final_prompt = rewritten.value["prompt"]
+            _log("rewrite", job=short, chars=len(final_prompt))
+        post, verdict = review("post_review", final_prompt, original=prompt)
         _log("post_review", job=short, decision=verdict.value["decision"])
         if verdict.value["decision"] != "pass":
             archive.finish_job(job, "blocked")
             _log("blocked", job=short, stage="post_review")
             raise ImageError("润色结果未通过 NSFW 审核：" + verdict.value["reason"])
-        archive.prepare_draft(job, rewritten.value["prompt"], pre, post)
+        archive.prepare_draft(job, final_prompt, pre, post)
         _log("draft ready", job=short)
+        mode = "直接生成（未润色）" if direct else "润色"
         return (
-            f"任务 {short} 待确认\n提示词：{rewritten.value['prompt']}\n"
+            f"任务 {short} 待确认\n模式：{mode}\n提示词：{final_prompt}\n"
             f"发送 /codex image confirm {short} 开始生成，或 /codex image cancel {short} 取消。"
             "10 分钟内有效。"
         )

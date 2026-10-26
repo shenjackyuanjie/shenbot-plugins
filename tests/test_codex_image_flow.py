@@ -136,5 +136,25 @@ class ImageFlowTests(unittest.TestCase):
             service.confirm(message(), client, "abcdef12")
 
 
+    def test_direct_skips_rewrite_but_keeps_both_reviews(self):
+        archive = FakeArchive()
+        service = self.service(archive)
+        stages = []
+        verdicts = iter(
+            [{"decision": "pass", "reason": "可以"}, {"decision": "pass", "reason": "可以"}]
+        )
+
+        def record(call, job, stopped):
+            stages.append(call.stage)
+            return "request", SimpleNamespace(value=next(verdicts))
+
+        service._call = Mock(side_effect=record)
+        preview = service.create(message(), Mock(), "虚构图片要求", direct=True)
+        self.assertIn("直接生成", preview)
+        # direct 不改写提示词，但前审与后审仍是两次独立请求，草稿要求两次 pass。
+        self.assertEqual(stages, ["pre_review", "post_review"])
+        self.assertTrue(archive.drafted)
+
+
 if __name__ == "__main__":
     unittest.main()

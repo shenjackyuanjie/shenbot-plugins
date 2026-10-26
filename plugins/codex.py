@@ -47,6 +47,7 @@ HELP_TEXT = (
 IMAGE_HELP = (
     "Codex 生图帮助\n"
     "/codex image <描述>：先润色并做前后两次 NSFW 审核，展示提示词等待你确认。\n"
+    "/codex image direct <描述>：跳过润色，只做两次 NSFW 审核后直接按原描述生成。\n"
     "引用一张图片时按改图处理；引用多张或非图片会被拒绝。\n"
     "/codex image confirm <编号>：确认后生成并引用当前消息回图。\n"
     "/codex image cancel|status <编号>：取消或以查看任务状态。\n"
@@ -667,8 +668,8 @@ def _image_worker(
         settings, lambda: read_login(state.settings.dsh_home), account
     )
     try:
-        if action == "create":
-            text = service.create(msg, client, value)
+        if action in ("create", "direct"):
+            text = service.create(msg, client, value, direct=action == "direct")
         elif action == "confirm":
             text = service.confirm(msg, client, value)
         elif action == "cancel":
@@ -710,12 +711,12 @@ def _handle_image(
             )
             return
         value = parts[1]
-    elif action in ("create", "generate"):
+    elif action in ("create", "generate", "direct"):
         value = " ".join(parts[1:]).strip()
         if not value:
             _reply(state, msg, client, "用法：/codex image <图片描述>")
             return
-        action = "create"
+        action = "direct" if action == "direct" else "create"
     else:
         # 描述本身可以以 confirm 等词开头，因此只有精确关键字才按子命令解析。
         value = " ".join(parts).strip()
