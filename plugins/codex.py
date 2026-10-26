@@ -23,8 +23,8 @@ if TYPE_CHECKING:
     from ica_typing import IcaClient, IcaNewMessage
     from shenbot_api import IcaConnectionState, IcaConnectionWatch
 
-VERSION = "0.2.1"
-POLL_SECONDS = 600
+VERSION = "0.3.0"
+POLL_SECONDS = 120
 THRESHOLD_STEP = 5
 COMMAND = "/codex"
 USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
@@ -32,12 +32,20 @@ MAX_FILE_BYTES = 4 * 1024 * 1024
 MAX_RESPONSE_BYTES = 1024 * 1024
 DISPLAY_ZONE = timezone(timedelta(hours=8))
 LOGIN_HELP = "请启动 DSH，在「设置 → Codex 订阅」刷新额度或重新登录后再试。"
+HELP_TEXT = (
+    "Codex 订阅帮助\n"
+    "/codex：查询 DSH 当前账号的套餐、剩余额度和重置时间。\n"
+    "/codex help：显示本帮助，不联网，不占用查询冷却。\n"
+    f"自动提醒：每 {POLL_SECONDS // 60} 分钟检查，剩余额度跨过 95%、90%、85%……0% 时提醒。\n"
+    "reset 警告：剩余额度比上次上涨时报告；上次不为 0% 时提示“浪费了xx%额度😭”。\n"
+    "仅白名单群可用；登录失效请在 DSH 中刷新。"
+)
 
 PLUGIN_MANIFEST = PluginManifest(
     plugin_id="codex",
     name="Codex 订阅查询",
     version=VERSION,
-    description="指定群使用 /codex，只读复用 DSH 当前账号查询套餐、额度与重置时间",
+    description="指定群使用 /codex 查询订阅、/codex help 查看帮助，每两分钟检查额度下降与 reset",
     authors=["shenjack"],
     config={
         "main": ConfigStorage(
@@ -75,8 +83,9 @@ class Login:
 
 @dataclass(frozen=True)
 class QuotaWindow:
-    remaining: float
+    remaining: float  # 上次实际余额，用于检测上涨与计算未用额度。
     reset_at: float | None
+    lowest_remaining: float  # 本周期最低余额，仅用于下降提醒去重。
 
 
 @dataclass(frozen=True)
@@ -378,8 +387,9 @@ def quota_snapshot(account_id: str, usage: dict) -> QuotaSnapshot:
                 continue
             # format_usage 已校验百分比；缺少时长的窗口不猜测其身份。
             reset = value.get("reset_at")
+            remaining = 100 - value["used_percent"]
             windows[seconds] = QuotaWindow(
-                100 - value["used_percent"], reset if _positive_number(reset) else None
+                remaining, reset if _positive_number(reset) else None, remaining
             )
     return QuotaSnapshot(account_id, windows)
 
@@ -397,6 +407,16 @@ def quota_changes(
         updated[seconds] = value
         if old is None:
             continue
+        label = {18000: "5 小时", 604800: "每周"}.get(
+            seconds, f"{seconds / 3600:g} 小时"
+        )
+        if value.remaining > old.remaining:
+            notice = (
+                f"⚠️ {label}额度 reset：剩余 {old.remaining:g}% → {value.remaining:g}%"
+            )
+            if old.remaining > 0:
+                notice += f"，浪费了{old.remaining:g}%额度😭"
+            changes.append(notice)
         if old.reset_at is not None and value.reset_at is not None:
             if old.reset_at != value.reset_at:
                 continue
@@ -406,17 +426,14 @@ def quota_changes(
         crossed = [
             threshold
             for threshold in range(100 - THRESHOLD_STEP, -1, -THRESHOLD_STEP)
-            if value.remaining <= threshold < old.remaining
+            if value.remaining <= threshold < old.lowest_remaining
         ]
         if crossed:
-            label = {18000: "5 小时", 604800: "每周"}.get(
-                seconds, f"{seconds / 3600:g} 小时"
-            )
             levels = " / ".join(f"{threshold}%" for threshold in crossed)
             changes.append(f"{label}额度：跨过 {levels} 提醒线")
-        # 同一重置周期只跟踪最低值，轻微回升后再下降不会重复报同一档位。
+        # 实际余额跟随每次成功查询；下降提醒仍按同周期最低值去重。
         updated[seconds] = QuotaWindow(
-            min(old.remaining, value.remaining), value.reset_at
+            value.remaining, value.reset_at, min(old.lowest_remaining, value.remaining)
         )
     return changes, QuotaSnapshot(current.account_id, updated)
 
@@ -439,7 +456,7 @@ def _poll_worker(
             changes, baseline = quota_changes(previous, current)
             accepted = True
             if changes:
-                text = "Codex 额度下降提醒\n" + "\n".join(changes) + "\n\n" + summary
+                text = "Codex 额度变动提醒\n" + "\n".join(changes) + "\n\n" + summary
                 try:
                     accepted = watch.send_text(
                         connection.generation, connection.account, -group, text, 5.0
@@ -547,7 +564,7 @@ def on_load() -> None:
     _runtime = Runtime(
         Settings(frozenset(abs(group) for group in groups), home, timeout, cooldown)
     )
-    # 首次尽快记录静默基准，之后每十分钟检查。宿主仅在插件提交后开始计时。
+    # 首次尽快记录静默基准，之后每两分钟检查。宿主仅在插件提交后开始计时。
     _schedule_poll(_runtime, delay=1)
 
 
@@ -562,12 +579,16 @@ def on_unload() -> None:
 
 def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
     state = _runtime
+    command = (msg.content or "").split()
     if (
         msg.is_from_self
         or msg.room_id >= 0
         or -msg.room_id not in state.settings.allowed_groups
-        or (msg.content or "").strip() != COMMAND
+        or command not in ([COMMAND], [COMMAND, "help"])
     ):
+        return
+    if command == [COMMAND, "help"]:
+        _reply(state, msg, client, HELP_TEXT)
         return
     with state.lock:
         if state.stopped:

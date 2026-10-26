@@ -163,6 +163,23 @@ class CommandTests(unittest.TestCase):
         codex.on_ica_message(self.msg, self.client)
         self.thread.assert_called_once()
 
+    def test_help_is_local_during_query_and_respects_group_boundary(self):
+        self.msg.content = "/codex help"
+        self.msg.room_id = -654321
+        codex.on_ica_message(self.msg, self.client)
+        self.client.send_message.assert_not_called()
+        self.msg.room_id = -123456
+        self.state.busy = True
+        self.state.next_query_at = float("inf")
+        codex.on_ica_message(self.msg, self.client)
+        self.thread.assert_not_called()
+        text = self.client.send_message.call_args.args[0]
+        self.assertIn("/codex", text)
+        self.assertIn("/codex help", text)
+        self.assertIn("2 分钟", text)
+        self.assertIn("reset", text)
+        self.assertTrue(self.state.busy)
+
     def test_single_query_reservation_is_released_after_failure(self):
         codex.on_ica_message(self.msg, self.client)
         codex.on_ica_message(self.msg, self.client)

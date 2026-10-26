@@ -66,14 +66,42 @@ class PollingTests(unittest.TestCase):
         self.assertEqual((generation, account, room), (7, 1, -123456))
         self.assertIn("80% / 75%", text)
         self.assertIn("套餐：Pro", text)
-        # 同周期小幅回升再跌回已报告的档位，也不能重复提醒。
+        # 任何上涨都报 reset；重复的上涨后余额和已报告的下降档位不再提醒。
         self.fetch.return_value = usage(76)
+        self.poll()
+        text = self.watch.send_text.call_args.args[3]
+        self.assertIn("reset", text)
+        self.assertIn("74% → 76%", text)
+        self.assertIn("浪费了74%额度😭", text)
         self.poll()
         self.fetch.return_value = usage(74)
         self.poll()
-        self.watch.send_text.assert_called_once()
+        self.assertEqual(self.watch.send_text.call_count, 2)
 
-    def test_reset_and_account_switch_rebaseline_instead_of_reporting_false_drop(self):
+    def test_reset_reports_last_balance_but_zero_has_no_waste_warning(self):
+        self.state.baselines[123456] = snapshot(74)
+        self.fetch.return_value = usage(76)
+        self.poll()
+        self.fetch.return_value = usage(75)
+        self.poll()
+        self.assertEqual(self.watch.send_text.call_count, 1)
+        self.fetch.return_value = usage(100, RESET + 604800)
+        self.poll()
+        text = self.watch.send_text.call_args.args[3]
+        self.assertIn("75% → 100%", text)
+        self.assertIn("浪费了75%额度😭", text)
+        self.fetch.return_value = usage(0, RESET + 604800)
+        self.poll()
+        self.fetch.return_value = usage(100, RESET + 2 * 604800)
+        self.poll()
+        text = self.watch.send_text.call_args.args[3]
+        self.assertIn("reset", text)
+        self.assertIn("0% → 100%", text)
+        self.assertNotIn("浪费", text)
+        self.poll()
+        self.assertEqual(self.watch.send_text.call_count, 4)
+
+    def test_cycle_change_and_account_switch_do_not_invent_notifications(self):
         changes, baseline = codex.quota_changes(
             snapshot(96), snapshot(94, RESET + 604800)
         )
@@ -81,7 +109,7 @@ class PollingTests(unittest.TestCase):
         changes, _ = codex.quota_changes(baseline, snapshot(89, RESET + 604800))
         self.assertIn("90%", changes[0])
         changes, _ = codex.quota_changes(
-            snapshot(96), snapshot(20, owner="fixture-other-owner")
+            snapshot(20), snapshot(100, owner="fixture-other-owner")
         )
         self.assertEqual(changes, [])
 
@@ -99,6 +127,23 @@ class PollingTests(unittest.TestCase):
         self.poll()
         self.assertIn("95% / 90% / 85%", self.watch.send_text.call_args.args[3])
 
+    def test_multiple_groups_keep_independent_delivery_progress(self):
+        self.state.settings = codex.Settings(frozenset({123456, 654321}))
+        self.poll()
+        self.watch.send_text.assert_not_called()
+        self.fetch.return_value = usage(74)
+        self.watch.send_text.side_effect = [False, True]
+        with patch("builtins.print"):
+            self.poll()
+        self.assertEqual(
+            [call.args[2] for call in self.watch.send_text.call_args_list],
+            [-123456, -654321],
+        )
+        self.watch.send_text.reset_mock(side_effect=True)
+        self.poll()
+        self.watch.send_text.assert_called_once()
+        self.assertEqual(self.watch.send_text.call_args.args[2], -123456)
+
     def test_unload_closes_active_watch_and_prevents_late_notification(self):
         self.state.poll_watch = self.watch
         self.state.baselines[123456] = snapshot(98)
@@ -108,7 +153,7 @@ class PollingTests(unittest.TestCase):
         self.watch.send_text.assert_not_called()
         self.assertFalse(self.state.busy)
 
-    def test_scheduler_repeats_after_ten_minutes_and_stops_on_unload(self):
+    def test_scheduler_repeats_after_two_minutes_and_stops_on_unload(self):
         with (
             patch.object(codex, "Scheduler") as scheduler,
             patch.object(codex, "_start_poll") as start,
@@ -117,7 +162,7 @@ class PollingTests(unittest.TestCase):
             callback = scheduler.call_args.args[0]
             callback()
             start.assert_called_once_with(self.state)
-            self.assertEqual(scheduler.call_args.args[1].total_seconds(), 600)
+            self.assertEqual(scheduler.call_args.args[1].total_seconds(), 120)
             codex.on_unload()
             scheduler.reset_mock()
             callback()
