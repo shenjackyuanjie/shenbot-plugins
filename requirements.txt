@@ -1,4 +1,6 @@
 lib-not-dr
+httpx2
+openai
 pillow
 psutil
 psycopg

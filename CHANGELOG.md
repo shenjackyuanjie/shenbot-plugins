@@ -2,6 +2,13 @@
 
 宿主版本对应 [shenbot_api.py](shenbot_api.py) 的 `__version__`；ICA/Tailchat API 与各插件的 `VERSION` 分别管理。
 
+## 2026-10-26 Codex 直连协议层
+
+- 引入 OpenAI Python SDK 作为唯一模型 HTTP 客户端，显式关闭自动重试与重定向；DS 使用 Chat Completions，Codex 图片仍走现有订阅后端，不切换公共计费接口。
+- 前审与后审请求关闭思考模式并使用 `tool_choice=required`，只提供 `pass`/`nsfw` 两个函数工具；本地仍要求恰好一个合法调用，正文声称通过、多个工具、截断或异常一律不放行。
+- 图片请求体中的 Base64 只在发送时存在，归档副本改存 SHA-256 摘要；响应只接受一张严格 PNG，失败不换模型重试。
+- 离线验证使用 SDK 真实客户端与 HTTPX2 模拟传输，覆盖 required 审核、拒重复收费请求与矛盾裁决拒绝。尚未接入群命令或调用真实模型。
+
 ## 2026-10-26 Codex 持久存档基础层
 
 - 新增独立 `codex` schema 的任务、逐请求、事件及图片二进制归档，连接由本地配置提供，不依赖 DSH 运行时或 profile。认证字段不存档，驱动错误不透传。
