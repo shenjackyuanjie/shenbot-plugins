@@ -151,6 +151,22 @@ class Archive:
                 raise ArchiveError("未找到属于你的当前群任务。")
             return row
 
+    def owned_job_by_prefix(self, prefix: str, owner: tuple[int, int, int]) -> dict:
+        """群内确认使用任务编号短前缀；仍强制匹配账号、群和发起者，且必须唯一。"""
+        if not re.fullmatch(r"[0-9a-f]{8}", prefix):
+            raise ArchiveError("任务编号格式无效。")
+        with self._db() as db:
+            rows = db.execute(
+                self._sql(
+                    "SELECT * FROM {schema}.jobs WHERE id::text LIKE %s AND account=%s "
+                    "AND room_id=%s AND sender_id=%s"
+                ),
+                (prefix + "%", *owner),
+            ).fetchall()
+            if len(rows) != 1:
+                raise ArchiveError("未找到唯一的可操作任务。")
+            return rows[0]
+
     def begin_request(
         self, job_id: UUID | None, provider: str, stage: str, model: str, payload: dict
     ) -> UUID:
