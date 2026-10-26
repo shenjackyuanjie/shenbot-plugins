@@ -65,7 +65,8 @@ IMAGE_HELP = (
     "/codex image cancel|status <编号>：取消或以查看任务状态。\n"
     "草稿 10 分钟有效，确认只生效一次；结果不确定时不会自动重试。\n"
     "参数可写在描述前后：--size 1024x1536（512–2048，或 auto）、"
-    "--quality low/medium/high/xhigh/max、--background transparent/opaque，缺省均为 auto。"
+    "--quality low/medium/high/xhigh/max、--background transparent/opaque，缺省均为 auto。\n"
+    "auto 表示交给上游决定，不保证固定尺寸或比例。"
 )
 
 IMAGE_QUALITIES = ("auto", "low", "medium", "high", "xhigh", "max")

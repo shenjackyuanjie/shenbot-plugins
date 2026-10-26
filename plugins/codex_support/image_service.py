@@ -260,7 +260,7 @@ class ImageService:
         mode = "直接生成（未润色）" if direct else "润色"
         return (
             f"任务 {short} 待确认\n模式：{mode}\n提示词：{final_prompt}\n"
-            f"参数：{params['size']} / 质量 {params['quality']} / 背景 {params['background']}"
+            f"参数：尺寸 {params['size']} / 质量 {params['quality']} / 背景 {params['background']}"
             f"（可用 /codex image set {short} 调整）\n"
             f"发送 /codex image confirm {short} 开始生成，或 /codex image cancel {short} 取消。"
             "10 分钟内有效。"
@@ -337,7 +337,7 @@ class ImageService:
             keys=",".join(sorted(params)),
         )
         return (
-            f"任务 {prefix} 参数已更新：{merged.get('size', 'auto')} / "
+            f"任务 {prefix} 参数已更新：尺寸 {merged.get('size', 'auto')} / "
             f"质量 {merged.get('quality', 'auto')} / 背景 {merged.get('background', 'auto')}。\n"
             f"发送 /codex image confirm {prefix} 开始生成。"
         )
