@@ -260,7 +260,8 @@ class ImageService:
         mode = "直接生成（未润色）" if direct else "润色"
         return (
             f"任务 {short} 待确认\n模式：{mode}\n提示词：{final_prompt}\n"
-            f"参数：{params['size']} / 质量 {params['quality']} / 背景 {params['background']}\n"
+            f"参数：{params['size']} / 质量 {params['quality']} / 背景 {params['background']}"
+            f"（可用 /codex image set {short} 调整）\n"
             f"发送 /codex image confirm {short} 开始生成，或 /codex image cancel {short} 取消。"
             "10 分钟内有效。"
         )
@@ -323,6 +324,23 @@ class ImageService:
         sent.set_img(data, "image/png", False)
         client.send_message(sent)
         self.log("delivered", job=short)
+
+    def set_params(self, msg, prefix: str, params: dict) -> str:
+        """确认前调整尺寸、质量或背景；返回合并后的完整参数供群里核对。"""
+        archive = self.archive
+        owner = self.owner(msg)
+        job = archive.owned_job_by_prefix(prefix, owner)
+        merged = archive.update_image_params(job["id"], owner, params)
+        self.log(
+            "params updated",
+            job=str(job["id"])[:8],
+            keys=",".join(sorted(params)),
+        )
+        return (
+            f"任务 {prefix} 参数已更新：{merged.get('size', 'auto')} / "
+            f"质量 {merged.get('quality', 'auto')} / 背景 {merged.get('background', 'auto')}。\n"
+            f"发送 /codex image confirm {prefix} 开始生成。"
+        )
 
     def status(self, msg, prefix: str) -> str:
         job = self.archive.owned_job_by_prefix(prefix, self.owner(msg))

@@ -316,6 +316,33 @@ class Archive:
             )
             return digest
 
+    def update_image_params(
+        self, job_id: UUID, owner: tuple[int, int, int], params: dict
+    ) -> dict:
+        """确认前调整生成参数；仍绑定账号、群与发起者，且草稿必须还在有效期内。
+
+        只合并给出的键，提示词与审核记录不动：参数不参与 NSFW 判定。
+        """
+        if not params:
+            raise ArchiveError("没有需要更新的生成参数。")
+        with self._db() as db:
+            row = db.execute(
+                self._sql(
+                    "UPDATE {schema}.jobs SET image_params=image_params||%s,updated_at=now() "
+                    "WHERE id=%s AND account=%s AND room_id=%s AND sender_id=%s "
+                    "AND state='awaiting_confirmation' AND expires_at>now() RETURNING image_params"
+                ),
+                (Jsonb(sanitized(params)), job_id, *owner),
+            ).fetchone()
+            if row is None:
+                raise ArchiveError(
+                    "任务不可调整参数：请检查所属群、发起者、有效期及当前状态。"
+                )
+            self._event(
+                db, job_id, "params_updated", {"image_params": sanitized(params)}
+            )
+            return row["image_params"]
+
     def claim_confirmation(self, job_id: UUID, owner: tuple[int, int, int]) -> dict:
         """原子消费本人确认，防止并发确认、跨群操作和已过期草稿重复收费。"""
         with self._db() as db:

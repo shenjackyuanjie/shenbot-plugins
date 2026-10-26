@@ -47,6 +47,7 @@ HELP_TEXT = (
     "/codex 或 /codex help：显示本帮助，不联网，不占用查询冷却。\n"
     "/codex image <描述>：润色并审核后预览提示词，本人确认后生成图片；可引用一张图片改图。\n"
     "/codex image direct <描述>：跳过润色，直接按原描述生成。\n"
+    "/codex image set <编号>：确认前调整尺寸、质量与背景。\n"
     "/codex image confirm|cancel|status <编号>：确认生成、取消或查看任务。\n"
     "/codex image help：生图帮助，含尺寸、质量、背景参数说明。\n"
     f"自动提醒：每 {POLL_SECONDS // 60} 分钟检查，剩余额度跨过 95%、90%、85%……0% 时提醒；"
@@ -59,6 +60,7 @@ IMAGE_HELP = (
     "/codex image <描述>：先润色并做前后两次 NSFW 审核，展示提示词等待你确认。\n"
     "/codex image direct <描述>：跳过润色，只做两次 NSFW 审核后直接按原描述生成。\n"
     "引用一张图片时按改图处理；引用多张或非图片会被拒绝。\n"
+    "/codex image set <编号> [--size WxH] [--quality 级别] [--background 模式]：确认前调整参数。\n"
     "/codex image confirm <编号>：确认后生成并引用当前消息回图。\n"
     "/codex image cancel|status <编号>：取消或以查看任务状态。\n"
     "草稿 10 分钟有效，确认只生效一次；结果不确定时不会自动重试。\n"
@@ -769,6 +771,8 @@ def _image_worker(
             text = service.create(
                 msg, client, value, direct=action == "direct", params=options
             )
+        elif action == "set":
+            text = service.set_params(msg, value, options)
         elif action == "confirm":
             text = service.confirm(msg, client, value)
         elif action == "cancel":
@@ -811,6 +815,29 @@ def _handle_image(
             )
             return
         value = parts[1]
+    elif action == "set":
+        if len(parts) < 2 or len(parts[1]) != 8:
+            _reply(
+                state,
+                msg,
+                client,
+                "用法：/codex image set <8 位任务编号> [--size WxH] "
+                "[--quality 级别] [--background 模式]",
+            )
+            return
+        value = parts[1]
+        options, rest, error = _split_image_options(parts[2:])
+        if error:
+            _reply(state, msg, client, error)
+            return
+        if rest or not options:
+            _reply(
+                state,
+                msg,
+                client,
+                "参数调整只接受 --size/--quality/--background，且至少给出一个。",
+            )
+            return
     else:
         if action in ("create", "generate", "direct"):
             action = "direct" if action == "direct" else "create"

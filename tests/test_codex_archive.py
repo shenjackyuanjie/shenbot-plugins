@@ -108,6 +108,15 @@ class ArchiveFlowTests(unittest.TestCase):
         with self.assertRaises(ArchiveError):
             self.archive.prepare_draft(job, "未经审核的另一张图", pre, post)
         self.archive.prepare_draft(job, "蓝色背景上的纸鹤", pre, post)
+        # 确认前可调整参数，只合并给出的键；冻结的提示词和审核记录不受影响。
+        self.assertEqual(
+            self.archive.update_image_params(job, owner, {"quality": "high"}),
+            {"quality": "high"},
+        )
+        self.assertEqual(
+            self.archive.update_image_params(job, owner, {"background": "transparent"}),
+            {"quality": "high", "background": "transparent"},
+        )
         with self.assertRaises(ArchiveError):
             self.archive.claim_confirmation(job, (10001, -10004, 10003))
 
@@ -120,6 +129,9 @@ class ArchiveFlowTests(unittest.TestCase):
         with ThreadPoolExecutor(max_workers=2) as workers:
             results = list(workers.map(lambda _: confirm(), range(2)))
         self.assertEqual(sum(row is not None for row in results), 1)
+        # 确认消费后不能再改参数，否则预览与生成可能不一致。
+        with self.assertRaises(ArchiveError):
+            self.archive.update_image_params(job, owner, {"quality": "low"})
         payload = {
             "prompt": "蓝色背景上的纸鹤",
             "model": "fixture-image",

@@ -48,6 +48,10 @@ class FakeArchive:
     def owned_job_by_prefix(self, prefix, owner):
         return self.job
 
+    def update_image_params(self, job, owner, params):
+        self.job["image_params"] = {**self.job.get("image_params", {}), **params}
+        return self.job["image_params"]
+
     def claim_confirmation(self, job, owner):
         if self.confirmed:
             raise image_service.ArchiveError("已确认")
@@ -193,6 +197,35 @@ class ImageFlowTests(unittest.TestCase):
         self.assertEqual(calls[-1].payload["size"], "1024x1536")
         self.assertEqual(calls[-1].payload["quality"], "high")
         self.assertEqual(calls[-1].payload["background"], "auto")
+
+    def test_params_can_be_adjusted_before_confirmation(self):
+        archive = FakeArchive()
+        service = self.service(archive)
+        calls = []
+        values = iter(
+            [
+                {"decision": "pass", "reason": "可以"},
+                {"decision": "pass", "reason": "可以"},
+                {"image_sha256": "fixture-digest"},
+            ]
+        )
+
+        def record(call, job, stopped):
+            calls.append(call)
+            return "request", SimpleNamespace(value=next(values))
+
+        service._call = Mock(side_effect=record)
+        service.create(message(), Mock(), "虚构图片要求", direct=True)
+        text = service.set_params(
+            message(), "abcdef12", {"quality": "high", "background": "transparent"}
+        )
+        self.assertIn("high", text)
+        self.assertIn("transparent", text)
+        # 调整只合并给出的键，其余保持创建时的值，确认后按新参数生成。
+        service.confirm(message(), Mock(), "abcdef12")
+        self.assertEqual(calls[-1].payload["quality"], "high")
+        self.assertEqual(calls[-1].payload["background"], "transparent")
+        self.assertEqual(calls[-1].payload["size"], "auto")
 
 
 if __name__ == "__main__":
