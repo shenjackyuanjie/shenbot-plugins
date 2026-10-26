@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import sys
 import threading
 import time
 import urllib.error
@@ -565,8 +566,22 @@ def _schedule_poll(state: Runtime, delay: int = POLL_SECONDS) -> None:
     Scheduler(tick, timedelta(seconds=delay)).start()
 
 
+def _reset_support_modules() -> None:
+    """宿主热重载只替换插件模块本身，codex_support 会留在 sys.modules。
+
+    不清理的话，重载后仍会调用旧版辅助模块，导致参数含义错位等隐蔽故障。
+    """
+    for name in [
+        name
+        for name in sys.modules
+        if name == "codex_support" or name.startswith("codex_support.")
+    ]:
+        sys.modules.pop(name, None)
+
+
 def on_load() -> None:
     global _runtime
+    _reset_support_modules()
     cfg = PLUGIN_MANIFEST.config_unchecked("main")
     groups = cfg.get_value("allowed_groups") or []
     if not isinstance(groups, list) or any(
