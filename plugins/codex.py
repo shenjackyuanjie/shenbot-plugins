@@ -662,7 +662,11 @@ def _image_worker(
     except (ImageError, ArchiveError) as error:
         text = str(error)
     except Exception as error:  # 兜底只记录类型，避免上游细节进入群聊。
-        client.warn(f"codex：生图流程异常（{type(error).__name__}）")
+        # 本地控制台保留完整栈便于定位；群消息仍只给固定文案。
+        import traceback
+
+        traceback.print_exc()
+        client.warn(f"codex：生图流程异常（{type(error).__name__}: {error}）")
         text = "生图流程失败，请稍后用 /codex image status 查看记录。"
     finally:
         with state.lock:
