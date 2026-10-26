@@ -62,14 +62,21 @@ class FakeArchive:
         pass
 
 
-def message():
+def message(texts=None):
+    """texts 收集发出的文本，便于断言回执顺序。"""
+
+    def reply_with(text):
+        if texts is not None:
+            texts.append(text)
+        return SimpleNamespace(set_img=lambda *a: None)
+
     return SimpleNamespace(
         id="msg-1",
         room_id=-897291716,
         sender_id=10003,
         account=10001,
         reply=None,
-        reply_with=lambda text: SimpleNamespace(set_img=lambda *a: None),
+        reply_with=reply_with,
     )
 
 
@@ -118,9 +125,12 @@ class ImageFlowTests(unittest.TestCase):
         preview = service.create(message(), Mock(), "虚构图片要求")
         self.assertIn("润色后", preview)
         self.assertIn("confirm", preview)
+        texts = []
         client = Mock()
-        service.confirm(message(), client, "abcdef12")
-        client.send_message.assert_called_once()
+        self.assertIsNone(service.confirm(message(texts), client, "abcdef12"))
+        # 确认后立即回执、成功后再回图，不再追加额外收尾文本。
+        self.assertEqual(client.send_message.call_count, 2)
+        self.assertIn("已确认", texts[0])
         self.assertTrue(archive.generated)
         with self.assertRaises(image_service.ArchiveError):
             service.confirm(message(), client, "abcdef12")

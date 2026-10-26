@@ -236,8 +236,17 @@ class ImageService:
             "10 分钟内有效。"
         )
 
-    def confirm(self, msg, client, prefix: str) -> str:
-        """确认后只发起一次收费生成；成功返回回图说明，失败抛出可展示错误。"""
+    def _receipt(self, client, msg, text: str, short: str) -> None:
+        """回执与确认属于同一流程：发送失败只记日志，不改变已消费的确认。"""
+        try:
+            accepted = client.send_message(msg.reply_with(text))
+        except (RuntimeError, ValueError):
+            accepted = False
+        if not accepted:
+            _log("receipt not accepted", job=short)
+
+    def confirm(self, msg, client, prefix: str) -> None:
+        """确认后只发起一次收费生成；先回执再回图，失败抛出可展示错误。"""
         archive = self.archive
         owner = self.owner(msg)
         job = archive.owned_job_by_prefix(prefix, owner)
@@ -246,6 +255,13 @@ class ImageService:
         archive.claim_confirmation(job["id"], owner)
         image = archive.image(job["id"], "reference")
         _log("confirmed", job=short, reference=image is not None)
+        # 生成是分钟级操作，先回执再发请求，避免确认后群里长时间没有任何反馈。
+        self._receipt(
+            client,
+            msg,
+            f"任务 {prefix} 已确认，正在生成图片，通常需要 1–2 分钟。",
+            short,
+        )
         try:
             call = codex_call(
                 job["reviewed_prompt"], login.access, login.account_id, image=image
@@ -270,7 +286,6 @@ class ImageService:
         sent.set_img(data, "image/png", False)
         client.send_message(sent)
         _log("delivered", job=short)
-        return "已生成图片并发送到当前群。"
 
     def status(self, msg, prefix: str) -> str:
         job = self.archive.owned_job_by_prefix(prefix, self.owner(msg))

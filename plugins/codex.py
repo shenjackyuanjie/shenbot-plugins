@@ -689,7 +689,8 @@ def _image_worker(
             state.image_busy = False
     with state.lock:
         stopped = state.stopped
-    if not stopped:
+    # confirm 已在开始时回执并自行回图，text 为 None 时不再追加任何文本。
+    if text and not stopped:
         _reply(state, msg, client, text)
 
 
