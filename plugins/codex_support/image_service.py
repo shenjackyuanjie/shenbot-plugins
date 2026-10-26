@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from dataclasses import dataclass, field
 
 import requests
@@ -32,6 +33,19 @@ class ImageSettings:
     deepseek_model: str = "deepseek-flash"
     deepseek_timeout: float = 90
     image_timeout: float = 300
+
+
+def _log(event: str, **fields: object) -> None:
+    """后台进度日志：只输出阶段、任务短号与计数。
+
+    提示词、凭据、群消息内容都不进入日志，排查时用任务短号回查 PG 存档。
+    """
+    detail = " ".join(f"{key}={value}" for key, value in fields.items())
+    print(f"[codex-image] {event}{' ' + detail if detail else ''}", flush=True)
+
+
+def _elapsed(started: float) -> str:
+    return f"{time.monotonic() - started:.1f}s"
 
 
 def _download(url: str) -> bytes:
@@ -115,20 +129,38 @@ class ImageService:
     def _call(self, call, job_id, stopped: threading.Event):
         """登记 started 后只发送一次；失败与不确定分别归档，绝不重试。"""
         archive = self.archive
+        short = str(job_id)[:8]
+        started = time.monotonic()
         request_id = archive.begin_request(
             job_id, call.provider, call.stage, call.model, call.archive_payload
         )
+        _log("request", job=short, stage=call.stage, model=call.model)
         try:
             result = call.send(request_id, stopped)
         except TransportError as error:
             state = "unknown" if error.code.endswith("UNCERTAIN") else "failed"
             archive.finish_request(request_id, state, error_code=error.code)
+            _log(
+                "request failed",
+                job=short,
+                stage=call.stage,
+                code=error.code,
+                cost=_elapsed(started),
+            )
             raise
         try:
             parsed = call.parse(result)
         except ProviderError as error:
             archive.finish_request(
                 request_id, "failed", http_status=result.status, error_code=str(error)
+            )
+            _log(
+                "request rejected",
+                job=short,
+                stage=call.stage,
+                http=result.status,
+                code=str(error),
+                cost=_elapsed(started),
             )
             raise
         archive.finish_request(
@@ -141,6 +173,15 @@ class ImageService:
         )
         for role, data in parsed.images:
             archive.put_image(job_id, role, data, request_id)
+            _log("image stored", job=short, role=role, bytes=len(data))
+        _log(
+            "request ok",
+            job=short,
+            stage=call.stage,
+            http=result.status,
+            cost=_elapsed(started),
+            usage=result.body.get("usage") if isinstance(result.body, dict) else None,
+        )
         return request_id, parsed
 
     def create(self, msg, client, prompt: str) -> str:
@@ -153,6 +194,8 @@ class ImageService:
         image = reference_image(client, msg)
         archive = self.archive
         job = archive.create_job(self.owner(msg), msg.id, prompt)
+        short = str(job)[:8]
+        _log("create", job=short, chars=len(prompt), reference=image is not None)
         if image is not None:
             archive.put_image(job, "reference", image)
         stopped = threading.Event()
@@ -170,18 +213,23 @@ class ImageService:
             return self._call(call, job, stopped)
 
         pre, verdict = review("pre_review", prompt)
+        _log("pre_review", job=short, decision=verdict.value["decision"])
         if verdict.value["decision"] != "pass":
             archive.finish_job(job, "blocked")
+            _log("blocked", job=short, stage="pre_review")
             raise ImageError("内容未通过 NSFW 审核：" + verdict.value["reason"])
         _, rewritten = review("rewrite", prompt)
+        _log("rewrite", job=short, chars=len(rewritten.value["prompt"]))
         post, verdict = review(
             "post_review", rewritten.value["prompt"], original=prompt
         )
+        _log("post_review", job=short, decision=verdict.value["decision"])
         if verdict.value["decision"] != "pass":
             archive.finish_job(job, "blocked")
+            _log("blocked", job=short, stage="post_review")
             raise ImageError("润色结果未通过 NSFW 审核：" + verdict.value["reason"])
         archive.prepare_draft(job, rewritten.value["prompt"], pre, post)
-        short = str(job)[:8]
+        _log("draft ready", job=short)
         return (
             f"任务 {short} 待确认\n提示词：{rewritten.value['prompt']}\n"
             f"发送 /codex image confirm {short} 开始生成，或 /codex image cancel {short} 取消。"
@@ -193,9 +241,11 @@ class ImageService:
         archive = self.archive
         owner = self.owner(msg)
         job = archive.owned_job_by_prefix(prefix, owner)
+        short = str(job["id"])[:8]
         login = self.login_provider()
         archive.claim_confirmation(job["id"], owner)
         image = archive.image(job["id"], "reference")
+        _log("confirmed", job=short, reference=image is not None)
         try:
             call = codex_call(
                 job["reviewed_prompt"], login.access, login.account_id, image=image
@@ -205,6 +255,7 @@ class ImageService:
             code = getattr(error, "code", None) or str(error)
             state = "unknown" if "UNCERTAIN" in code else "failed"
             archive.finish_job(job["id"], state)
+            _log("generate failed", job=short, state=state, code=code)
             raise ImageError(
                 f"生成未完成（{code}）。结果不确定时不会自动重试，"
                 f"请用 /codex image status {prefix} 查看记录。"
@@ -212,10 +263,13 @@ class ImageService:
         archive.finish_job(job["id"], "succeeded")
         data = archive.image(job["id"], "original")
         if data is None:
+            _log("image missing", job=short)
             raise ImageError("生成已完成但未取到图片存档，请检查数据库。")
+        _log("generated", job=short, bytes=len(data))
         sent = msg.reply_with("已生成图片")
         sent.set_img(data, "image/png", False)
         client.send_message(sent)
+        _log("delivered", job=short)
         return "已生成图片并发送到当前群。"
 
     def status(self, msg, prefix: str) -> str:
@@ -225,4 +279,5 @@ class ImageService:
     def cancel(self, msg, prefix: str) -> str:
         job = self.archive.owned_job_by_prefix(prefix, self.owner(msg))
         self.archive.cancel(job["id"], self.owner(msg))
+        _log("cancelled", job=str(job["id"])[:8])
         return f"任务 {prefix} 已取消。"

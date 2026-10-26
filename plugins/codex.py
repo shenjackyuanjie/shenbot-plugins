@@ -633,6 +633,7 @@ def _image_worker(
     state: Runtime, action: str, msg: IcaNewMessage, client: IcaClient, value: str
 ) -> None:
     """后台执行分钟级操作；结束前再查停止标志，卸载后的旧代不回包。"""
+    print(f"[codex] 生图任务开始 action={action}", flush=True)
     # 宿主用 from_code 直接加载插件文件，没有 plugins 包；此时插件目录才是导入根。
     import sys
     from pathlib import Path
@@ -723,6 +724,7 @@ def _handle_image(
         if state.stopped:
             return
         if state.image_busy:
+            print(f"[codex] 生图任务被拒绝 action={action}：已有任务在处理", flush=True)
             notice = "已有生图任务在处理，请稍后再试。"
         else:
             state.image_busy = True
