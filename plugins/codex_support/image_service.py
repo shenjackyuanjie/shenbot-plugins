@@ -309,12 +309,17 @@ class ImageService:
                 f"可用 /codex image status {short} 查看记录，或稍后重新发起。"
             ) from None
         self.log("draft ready", job=short)
-        mode = "直接生成（未润色）" if direct else "润色"
+        if direct:
+            # direct 没有润色，提示词就是用户原话，不再复述一遍。
+            head = "模式：直接生成（未润色，按你的原始描述）\n"
+        else:
+            head = f"模式：润色\n提示词：{final_prompt}\n"
         return (
-            f"任务 {short} 待确认\n模式：{mode}\n提示词：{final_prompt}\n"
-            f"参数：尺寸 {params['size']} / 质量 {params['quality']} / 背景 {params['background']}"
-            f"（可用 /codex image set {short} 调整）\n"
-            f"发送 /codex image confirm {short} 开始生成，或 /codex image cancel {short} 取消。"
+            f"任务 {short} 待确认\n"
+            + head
+            + f"参数：尺寸 {params['size']} / 质量 {params['quality']} / 背景 {params['background']}\n"
+            "回复 /codex confirm 开始生成、/codex cancel 取消、"
+            "/codex set --quality high 调参数；只有一个待确认任务时可省略编号。\n"
             "10 分钟内有效。"
         )
 

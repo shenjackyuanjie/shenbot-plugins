@@ -171,6 +171,25 @@ class CommandTests(unittest.TestCase):
         codex.on_ica_message(self.msg, self.client)
         self.assertEqual(self.thread.call_args.kwargs["name"], "codex-query")
 
+    def test_image_subcommands_work_without_the_image_prefix(self):
+        for command in (
+            "/codex confirm",
+            "/codex cancel",
+            "/codex status",
+            "/codex set --quality high",
+            "/codex direct 一只猫",
+            "/codex attach",
+        ):
+            self.thread.reset_mock()
+            self.msg.content = command
+            codex.on_ica_message(self.msg, self.client)
+            self.assertEqual(
+                self.thread.call_args.kwargs["name"], "codex-image", command
+            )
+            self.assertEqual(
+                self.thread.call_args.kwargs["args"][1], command.split()[1], command
+            )
+
     def test_help_is_local_during_query_and_respects_group_boundary(self):
         self.msg.content = "/codex help"
         self.msg.room_id = -654321

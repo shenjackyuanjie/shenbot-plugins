@@ -176,6 +176,9 @@ class ImageFlowTests(unittest.TestCase):
         service._call = Mock(side_effect=record)
         preview = service.create(message(), Mock(), "虚构图片要求", direct=True)
         self.assertIn("直接生成", preview)
+        # direct 没润色，预览不再复述用户原话，并直接给出可省略编号的下一步。
+        self.assertNotIn("提示词：", preview)
+        self.assertIn("/codex confirm", preview)
         # direct 不改写提示词，但前审与后审仍是两次独立请求，草稿要求两次 pass。
         self.assertEqual(stages, ["pre_review", "post_review"])
         self.assertTrue(archive.drafted)

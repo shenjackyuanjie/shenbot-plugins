@@ -69,6 +69,9 @@ HTTP/Socket.IO 受理仅记为 submitted，不能伪称 QQ 最终送达。
 `/codex image status` 不带编号时先返回当前群唯一的待确认任务；没有待确认任务，
 就列出最近 5 条任务的任务号、状态与创建时间，不用先记住编号。
 
+`direct`、`set`、`attach`、`confirm`、`cancel`、`status` 都可以省略 `image` 前缀，
+`/codex confirm` 与 `/codex image confirm` 等价。
+
 `confirm`、`cancel`、`status`、`set`、`attach` 都可以省略编号，此时使用本人在当前群
 唯一待确认的任务；有多个时会回消息列出现有编号，不做猜测。
 

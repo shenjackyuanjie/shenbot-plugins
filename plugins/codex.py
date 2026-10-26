@@ -51,6 +51,7 @@ HELP_TEXT = (
     "/codex image set <编号>：确认前调整尺寸、质量与背景。\n"
     "/codex image confirm|cancel|status <编号>：确认生成、取消或查看任务。\n"
     "/codex image help：生图帮助，含尺寸、质量、背景参数说明。\n"
+    "生图子命令可以省略 image，例如直接发 /codex confirm、/codex cancel、/codex set。\n"
     f"自动提醒：每 {POLL_SECONDS // 60} 分钟检查，剩余额度跨过 95%、90%、85%……0% 时提醒；"
     "只发配置的提醒群。\n"
     "reset 警告：剩余额度比上次上涨时报告；上次不为 0% 时提示“浪费了xx%额度😭”。\n"
@@ -69,8 +70,12 @@ IMAGE_HELP = (
     "草稿 10 分钟有效，确认只生效一次；结果不确定时不会自动重试。\n"
     "参数可写在描述前后：--size 1024x1536（512–2048，或 auto）、"
     "--quality low/medium/high/xhigh/max、--background transparent/opaque，缺省均为 auto。\n"
-    "auto 表示交给上游决定，不保证固定尺寸或比例。"
+    "auto 表示交给上游决定，不保证固定尺寸或比例。\n"
+    "以上子命令都可以省略 image 前缀，例如 /codex confirm。"
 )
+
+# 这些生图子命令可以省略 image 前缀，例如 /codex confirm 与 /codex image confirm。
+IMAGE_SHORTCUTS = frozenset({"confirm", "cancel", "status", "set", "attach", "direct"})
 
 IMAGE_QUALITIES = ("auto", "low", "medium", "high", "xhigh", "max")
 IMAGE_BACKGROUNDS = ("auto", "transparent", "opaque")
@@ -974,16 +979,17 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
     """只有精确的 check 子命令进入额度查询；帮助始终在本地返回。"""
     state = _runtime
     command = (msg.content or "").split()
+    if msg.is_from_self or msg.room_id >= 0:
+        return
+    if -msg.room_id not in state.settings.allowed_groups:
+        return
+    # 常用生图子命令支持越级：/codex confirm 等价于 /codex image confirm。
+    if len(command) > 1 and command[0] == COMMAND and command[1] in IMAGE_SHORTCUTS:
+        command = [COMMAND, "image", *command[1:]]
     # 显式列举已实现的入口，拼错或尚未接入的 image 子命令不能误占查询槽位。
-    if (
-        msg.is_from_self
-        or msg.room_id >= 0
-        or -msg.room_id not in state.settings.allowed_groups
-        or (
-            command not in ([COMMAND], [COMMAND, "help"], [COMMAND, "check"])
-            and command[:2] != [COMMAND, "image"]
-        )
-    ):
+    if command not in ([COMMAND], [COMMAND, "help"], [COMMAND, "check"]) and command[
+        :2
+    ] != [COMMAND, "image"]:
         return
     if command[:2] == [COMMAND, "image"]:
         _handle_image(state, command, msg, client)
