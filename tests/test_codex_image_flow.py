@@ -181,6 +181,7 @@ class ImageFlowTests(unittest.TestCase):
         # 编号只出现在开头标题里，命令保持简短，末尾提示需要指定时带编号。
         self.assertEqual(preview.count("abcdef12"), 1)
         self.assertIn("/codex confirm", preview)
+        self.assertIn("/codex attach", preview)
         self.assertIn("带上开头的编号", preview)
         # direct 不改写提示词，但前审与后审仍是两次独立请求，草稿要求两次 pass。
         self.assertEqual(stages, ["pre_review", "post_review"])

@@ -318,8 +318,8 @@ class ImageService:
             f"任务 {short} 待确认\n"
             + head
             + f"参数：尺寸 {params['size']} / 质量 {params['quality']} / 背景 {params['background']}\n"
-            "回复 /codex confirm 开始生成、/codex cancel 取消、"
-            "/codex set --quality high 调参数；需要指定任务时带上开头的编号。\n"
+            "回复 /codex confirm 开始生成、/codex cancel 取消、/codex set --quality high 调参数。\n"
+            "引用带图片的消息发 /codex attach 可以追加参考图；需要指定任务时带上开头的编号。\n"
             "10 分钟内有效。"
         )
 
