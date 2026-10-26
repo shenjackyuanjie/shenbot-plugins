@@ -63,7 +63,8 @@ IMAGE_HELP = (
     "引用图片时按改图处理，最多 5 张，按引用顺序一起作为参考；引用里没有图片会被拒绝。\n"
     "/codex image attach <编号>：引用含图片的消息，把图追加为参考图并重新审核。\n"
     "/codex image set <编号> [--size WxH] [--quality 级别] [--background 模式]：确认前调整参数。\n"
-    "/codex image confirm <编号>：确认后生成并引用当前消息回图。\n"
+    "/codex image confirm [编号]：确认后生成并引用当前消息回图；只有一个待确认任务时可省略编号。\n"
+    "管理员可以用 confirm/cancel 直接处理本群其他人的任务。\n"
     "/codex image cancel|status <编号>：取消或以查看任务状态。\n"
     "草稿 10 分钟有效，确认只生效一次；结果不确定时不会自动重试。\n"
     "参数可写在描述前后：--size 1024x1536（512–2048，或 auto）、"
@@ -815,7 +816,7 @@ def _image_worker(
     action: str,
     msg: IcaNewMessage,
     client: IcaClient,
-    value: str,
+    value: str | None,
     options: dict[str, str],
 ) -> None:
     """后台执行分钟级操作；结束前再查停止标志，卸载后的旧代不回包。"""
@@ -854,8 +855,16 @@ def _image_worker(
         """把生图阶段日志接到宿主日志；未知级别按 info 输出。"""
         (warn if level == "warn" else info)(message)
 
+    try:
+        admins = frozenset(client.admins or ())
+    except (AttributeError, RuntimeError, ValueError):
+        admins = frozenset()
     service = ImageService(
-        settings, lambda: read_login(state.settings.dsh_home), account, log=emit
+        settings,
+        lambda: read_login(state.settings.dsh_home),
+        account,
+        log=emit,
+        admins=admins,
     )
     try:
         if action in ("create", "direct"):
@@ -898,25 +907,32 @@ def _handle_image(
         return
     action = parts[0]
     options: dict[str, str] = {}
+    value: str | None = None
     if action in ("confirm", "cancel", "status", "attach"):
-        if len(parts) != 2 or len(parts[1]) != 8:
-            _reply(
-                state, msg, client, "用法：/codex image " + action + " <8 位任务编号>"
-            )
-            return
-        value = parts[1]
-    elif action == "set":
-        if len(parts) < 2 or len(parts[1]) != 8:
+        if len(parts) == 1:
+            value = None
+        elif len(parts) == 2 and len(parts[1]) == 8:
+            value = parts[1]
+        else:
             _reply(
                 state,
                 msg,
                 client,
-                "用法：/codex image set <8 位任务编号> [--size WxH] "
-                "[--quality 级别] [--background 模式]",
+                "用法：/codex image "
+                + action
+                + " [8 位任务编号]；只剩一个待确认任务时可省略编号。",
             )
             return
-        value = parts[1]
-        options, rest, error = _split_image_options(parts[2:])
+    elif action == "set":
+        tokens = parts[1:]
+        if (
+            tokens
+            and len(tokens[0]) == 8
+            and all(char in "0123456789abcdef" for char in tokens[0])
+        ):
+            value = tokens[0]
+            tokens = tokens[1:]
+        options, rest, error = _split_image_options(tokens)
         if error:
             _reply(state, msg, client, error)
             return

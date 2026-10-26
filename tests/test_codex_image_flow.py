@@ -23,6 +23,7 @@ class FakeArchive:
             "original_prompt": "虚构图片要求",
             "reviewed_prompt": "润色后",
             "state": "reviewing",
+            "sender_id": 10003,
         }
         self.appended = 0
         self.blocked = False
@@ -51,7 +52,7 @@ class FakeArchive:
         self.generated = state == "succeeded"
         return True
 
-    def owned_job_by_prefix(self, prefix, owner):
+    def resolve_job(self, prefix, owner):
         return self.job
 
     def update_image_params(self, job, owner, params):

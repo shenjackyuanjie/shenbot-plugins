@@ -108,11 +108,14 @@ class ImageService:
         account: int,
         archive: Archive | None = None,
         log=None,
+        admins: frozenset[int] | None = None,
     ):
         self.settings = settings
         self.login_provider = login_provider
         self.account = account
         self._archive = archive
+        # 宿主管理员列表；命中时可以在当前群代办别人的任务。
+        self._admins = admins or frozenset()
         # 日志出口由插件入口注入宿主 API；未注入时静默，测试与独立调用不产生输出。
         self._log_sink = log
 
@@ -140,6 +143,12 @@ class ImageService:
         if not isinstance(self.account, int) or self.account <= 0:
             raise ImageError("当前连接缺少可用机器人账号。")
         return self.account, msg.room_id, msg.sender_id
+
+    def scope(self, msg) -> tuple[int, int, int | None]:
+        """管理员可以在当前群代办别人的任务；其他人仍然只能操作自己的。"""
+        account, room, sender = self.owner(msg)
+        delegated = sender in self._admins
+        return (account, room, None if delegated else sender)
 
     def _call(self, call, job_id, stopped: threading.Event):
         """登记 started 后只发送一次；失败与不确定分别归档，绝不重试。"""
@@ -303,12 +312,13 @@ class ImageService:
         if not accepted:
             self.log("receipt not accepted", job=short)
 
-    def confirm(self, msg, client, prefix: str) -> None:
+    def confirm(self, msg, client, prefix: str | None) -> None:
         """确认后只发起一次收费生成；先回执再回图，失败抛出可展示错误。"""
         archive = self.archive
-        owner = self.owner(msg)
-        job = archive.owned_job_by_prefix(prefix, owner)
+        owner = self.scope(msg)
+        job = archive.resolve_job(prefix, owner)
         short = str(job["id"])[:8]
+        delegated = job["sender_id"] != msg.sender_id
         login = self.login_provider()
         # 参数只从任务读取：确认命令不接受尺寸等选项，避免预览与生成不一致。
         params = job.get("image_params") or {}
@@ -319,7 +329,8 @@ class ImageService:
         self._receipt(
             client,
             msg,
-            f"任务 {prefix} 已确认，正在生成图片，通常需要 1–2 分钟。",
+            f"{'管理员代办：' if delegated else ''}"
+            f"任务 {short} 已确认，正在生成图片，通常需要 1–2 分钟。",
             short,
         )
         try:
@@ -340,7 +351,7 @@ class ImageService:
             self.log("generate failed", level="warn", job=short, state=state, code=code)
             raise ImageError(
                 f"生成未完成（{code}）。结果不确定时不会自动重试，"
-                f"请用 /codex image status {prefix} 查看记录。"
+                f"请用 /codex image status {short} 查看记录。"
             ) from None
         archive.finish_job(job["id"], "succeeded")
         data = archive.image(job["id"], "original")
@@ -353,11 +364,11 @@ class ImageService:
         client.send_message(sent)
         self.log("delivered", job=short)
 
-    def attach(self, msg, client, prefix: str) -> str:
+    def attach(self, msg, client, prefix: str | None) -> str:
         """给待确认任务追加参考图；参考图参与审核，追加后必须重跑审核再给新预览。"""
         archive = self.archive
-        owner = self.owner(msg)
-        job = archive.owned_job_by_prefix(prefix, owner)
+        owner = self.scope(msg)
+        job = archive.resolve_job(prefix, owner)
         images = reference_images(client, msg)
         if not images:
             raise ImageError("请引用带图片的消息再执行 attach。")
@@ -381,29 +392,28 @@ class ImageService:
             job["id"], job["original_prompt"], merged, direct=direct, params=params
         )
 
-    def set_params(self, msg, prefix: str, params: dict) -> str:
+    def set_params(self, msg, prefix: str | None, params: dict) -> str:
         """确认前调整尺寸、质量或背景；返回合并后的完整参数供群里核对。"""
         archive = self.archive
-        owner = self.owner(msg)
-        job = archive.owned_job_by_prefix(prefix, owner)
+        owner = self.scope(msg)
+        job = archive.resolve_job(prefix, owner)
+        short = str(job["id"])[:8]
         merged = archive.update_image_params(job["id"], owner, params)
-        self.log(
-            "params updated",
-            job=str(job["id"])[:8],
-            keys=",".join(sorted(params)),
-        )
+        self.log("params updated", job=short, keys=",".join(sorted(params)))
         return (
-            f"任务 {prefix} 参数已更新：尺寸 {merged.get('size', 'auto')} / "
+            f"任务 {short} 参数已更新：尺寸 {merged.get('size', 'auto')} / "
             f"质量 {merged.get('quality', 'auto')} / 背景 {merged.get('background', 'auto')}。\n"
-            f"发送 /codex image confirm {prefix} 开始生成。"
+            f"发送 /codex image confirm {short} 开始生成。"
         )
 
-    def status(self, msg, prefix: str) -> str:
-        job = self.archive.owned_job_by_prefix(prefix, self.owner(msg))
-        return f"任务 {prefix} 当前状态：{job['state']}。"
+    def status(self, msg, prefix: str | None) -> str:
+        job = self.archive.resolve_job(prefix, self.scope(msg))
+        return f"任务 {str(job['id'])[:8]} 当前状态：{job['state']}。"
 
-    def cancel(self, msg, prefix: str) -> str:
-        job = self.archive.owned_job_by_prefix(prefix, self.owner(msg))
-        self.archive.cancel(job["id"], self.owner(msg))
-        self.log("cancelled", job=str(job["id"])[:8])
-        return f"任务 {prefix} 已取消。"
+    def cancel(self, msg, prefix: str | None) -> str:
+        owner = self.scope(msg)
+        job = self.archive.resolve_job(prefix, owner)
+        short = str(job["id"])[:8]
+        self.archive.cancel(job["id"], owner)
+        self.log("cancelled", job=short)
+        return f"任务 {short} 已取消。"

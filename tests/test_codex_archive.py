@@ -181,6 +181,24 @@ class ArchiveFlowTests(unittest.TestCase):
         self.assertIsNone(refreshed["reviewed_prompt"])
         self.assertFalse(self.archive.has_stage(multi, "rewrite"))
 
+        # 管理员按群范围代办：不限发送者，但账号与群仍然必须匹配。
+        pending = self.archive.create_job(
+            (10001, -10002, 19999), "fixture-delegate", "别人的任务"
+        )
+        pre_d = self._review(pending, "pre_review", "pass", "别人的任务")
+        post_d = self._review(pending, "post_review", "pass", "别人的任务")
+        self.archive.prepare_draft(pending, "别人的任务", pre_d, post_d)
+        with self.assertRaises(ArchiveError):
+            self.archive.claim_confirmation(pending, (10001, -10002, 10003))
+        # 没有编号时使用范围内唯一的待确认任务。
+        delegated = self.archive.resolve_job(None, (10001, -10002, None))
+        self.assertEqual(delegated["id"], pending)
+        self.archive.claim_confirmation(pending, (10001, -10002, None))
+        self.assertEqual(
+            self.archive.owned_job(pending, (10001, -10002, None))["state"],
+            "generating",
+        )
+
         with self.archive._db() as db:
             rows = db.execute(
                 self.archive._sql(

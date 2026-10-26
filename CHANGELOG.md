@@ -12,6 +12,7 @@
 - `/codex` 帮助同步为“Codex 帮助”：补上 `direct` 子命令、`/codex image help` 入口、提醒群限制与尺寸参数范围；插件名改为“Codex 订阅与生图”，描述覆盖查询、生图与提醒群。
 - 新增 `alert_groups` 配置：额度自动提醒只发指定群（支持多个）；留空沿用 `allowed_groups`，白名单里其他群仍可手动 `/codex check`，提醒进度仍按群独立记录。
 - 插件日志改走宿主 `shenbot_api.info/warn`：生图各阶段与额度自动轮询的失败提示进入 Bot tracing 日志（带时间戳与级别），不再直接 `print`；`shenbot_api` 同步声明 `debug/info/warn`（宿主 0.9.7 起提供）。
+- `/codex image confirm|cancel|status|set|attach` 支持省略编号：本人在当前群只剩一个待确认任务时直接操作它，有多个则列出现有编号；宿主管理员可用 `confirm`/`cancel` 代办本群其他人的任务，账号与群仍然强制匹配，回执标注“管理员代办”。
 - 新增 `/codex image attach <编号>`：引用带图片的消息即可给待确认任务追加参考图；参考图参与审核，追加会作废旧草稿并重跑前审与后审，沿用原任务的润色/直出模式，返回新预览。
 - 支持一条消息引用多张图片：最多 5 张，按引用顺序存档、送审并一起作为改图参考；`job_assets` 增加 `position`，主键扩为 `(job_id, role, position)`，`codex` schema 结构版本 2 → 3 自动迁移。
 - 生图改为名额池：同时最多 `image_concurrency`（默认 3）个生成，超出排队，等待超过 `image_queue_limit`（默认 5）才拒绝确认；创建任务、审核、润色与调整参数不再被生成阻塞。插件卸载时排队的确认按取消处理。

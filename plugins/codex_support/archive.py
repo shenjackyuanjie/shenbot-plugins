@@ -25,6 +25,8 @@ from psycopg.types.json import Jsonb
 SCHEMA_VERSION = 3
 # 一个任务最多引用几张图；命令层与存档层共用同一个上限。
 MAX_REFERENCES = 5
+# 操作范围：机器人账号、来源群、发起者；发起者为 None 表示管理员代办，不限发送者。
+Scope = tuple[int, int, int | None]
 
 
 class ArchiveError(RuntimeError):
@@ -215,34 +217,59 @@ class Archive:
                     raise ArchiveError("消息来源与任务所有者不匹配。")
             return row["id"]
 
-    def owned_job(self, job_id: UUID, owner: tuple[int, int, int]) -> dict:
-        """群命令查询必须同时匹配机器人账号、来源群和发起者。"""
+    def owned_job(self, job_id: UUID, owner: Scope) -> dict:
+        """群命令查询匹配机器人账号、来源群和发起者；管理员按 scope 放开发起者。"""
         with self._db() as db:
             row = db.execute(
                 self._sql(
-                    "SELECT * FROM {schema}.jobs WHERE id=%s AND account=%s AND room_id=%s AND sender_id=%s"
+                    "SELECT * FROM {schema}.jobs WHERE id=%s AND account=%s AND room_id=%s "
+                    "AND (%s::bigint IS NULL OR sender_id=%s)"
                 ),
-                (job_id, *owner),
+                (job_id, owner[0], owner[1], owner[2], owner[2]),
             ).fetchone()
             if row is None:
                 raise ArchiveError("未找到属于你的当前群任务。")
             return row
 
-    def owned_job_by_prefix(self, prefix: str, owner: tuple[int, int, int]) -> dict:
-        """群内确认使用任务编号短前缀；仍强制匹配账号、群和发起者，且必须唯一。"""
+    def owned_job_by_prefix(self, prefix: str, owner: Scope) -> dict:
+        """群内确认使用任务编号短前缀；账号与群始终强制匹配，且必须唯一。"""
         if not re.fullmatch(r"[0-9a-f]{8}", prefix):
             raise ArchiveError("任务编号格式无效。")
         with self._db() as db:
             rows = db.execute(
                 self._sql(
                     "SELECT * FROM {schema}.jobs WHERE id::text LIKE %s AND account=%s "
-                    "AND room_id=%s AND sender_id=%s"
+                    "AND room_id=%s AND (%s::bigint IS NULL OR sender_id=%s)"
                 ),
-                (prefix + "%", *owner),
+                (prefix + "%", owner[0], owner[1], owner[2], owner[2]),
             ).fetchall()
             if len(rows) != 1:
                 raise ArchiveError("未找到唯一的可操作任务。")
             return rows[0]
+
+    def pending_job(self, owner: Scope) -> dict:
+        """返回该范围内唯一可确认的任务；没有或多个都要求明确编号。"""
+        with self._db() as db:
+            rows = db.execute(
+                self._sql(
+                    "SELECT * FROM {schema}.jobs WHERE account=%s AND room_id=%s "
+                    "AND (%s::bigint IS NULL OR sender_id=%s) "
+                    "AND state='awaiting_confirmation' AND expires_at>now() ORDER BY created_at"
+                ),
+                (owner[0], owner[1], owner[2], owner[2]),
+            ).fetchall()
+        if not rows:
+            raise ArchiveError("当前没有待确认的任务。")
+        if len(rows) > 1:
+            listing = "、".join(str(row["id"])[:8] for row in rows)
+            raise ArchiveError(f"有多个待确认任务，请带上编号：{listing}")
+        return rows[0]
+
+    def resolve_job(self, prefix: str | None, owner: Scope) -> dict:
+        """有编号按前缀定位，没有编号就用范围内唯一的待确认任务。"""
+        if prefix:
+            return self.owned_job_by_prefix(prefix, owner)
+        return self.pending_job(owner)
 
     def begin_request(
         self, job_id: UUID | None, provider: str, stage: str, model: str, payload: dict
@@ -368,9 +395,7 @@ class Archive:
             )
             return digest
 
-    def update_image_params(
-        self, job_id: UUID, owner: tuple[int, int, int], params: dict
-    ) -> dict:
+    def update_image_params(self, job_id: UUID, owner: Scope, params: dict) -> dict:
         """确认前调整生成参数；仍绑定账号、群与发起者，且草稿必须还在有效期内。
 
         只合并给出的键，提示词与审核记录不动：参数不参与 NSFW 判定。
@@ -381,10 +406,17 @@ class Archive:
             row = db.execute(
                 self._sql(
                     "UPDATE {schema}.jobs SET image_params=image_params||%s,updated_at=now() "
-                    "WHERE id=%s AND account=%s AND room_id=%s AND sender_id=%s "
+                    "WHERE id=%s AND account=%s AND room_id=%s AND (%s::bigint IS NULL OR sender_id=%s) "
                     "AND state='awaiting_confirmation' AND expires_at>now() RETURNING image_params"
                 ),
-                (Jsonb(sanitized(params)), job_id, *owner),
+                (
+                    Jsonb(sanitized(params)),
+                    job_id,
+                    owner[0],
+                    owner[1],
+                    owner[2],
+                    owner[2],
+                ),
             ).fetchone()
             if row is None:
                 raise ArchiveError(
@@ -395,15 +427,16 @@ class Archive:
             )
             return row["image_params"]
 
-    def claim_confirmation(self, job_id: UUID, owner: tuple[int, int, int]) -> dict:
-        """原子消费本人确认，防止并发确认、跨群操作和已过期草稿重复收费。"""
+    def claim_confirmation(self, job_id: UUID, owner: Scope) -> dict:
+        """原子消费确认，防止并发确认、跨群操作和已过期草稿重复收费。"""
         with self._db() as db:
             row = db.execute(
                 self._sql(
                     "UPDATE {schema}.jobs SET state='generating',updated_at=now() WHERE id=%s AND account=%s "
-                    "AND room_id=%s AND sender_id=%s AND state='awaiting_confirmation' AND expires_at>now() RETURNING *"
+                    "AND room_id=%s AND (%s::bigint IS NULL OR sender_id=%s) "
+                    "AND state='awaiting_confirmation' AND expires_at>now() RETURNING *"
                 ),
-                (job_id, *owner),
+                (job_id, owner[0], owner[1], owner[2], owner[2]),
             ).fetchone()
             if row is None:
                 raise ArchiveError(
@@ -412,15 +445,16 @@ class Archive:
             self._event(db, job_id, "confirmed", {"digest": row["approval_digest"]})
             return row
 
-    def cancel(self, job_id: UUID, owner: tuple[int, int, int]) -> None:
+    def cancel(self, job_id: UUID, owner: Scope) -> None:
         """取消不代表上游未执行；保留所有请求，后续结果仍须归档但不能自动回图。"""
         with self._db() as db:
             row = db.execute(
                 self._sql(
                     "UPDATE {schema}.jobs SET state='cancelled',updated_at=now() WHERE id=%s AND account=%s "
-                    "AND room_id=%s AND sender_id=%s AND state IN ('reviewing','awaiting_confirmation','generating') RETURNING id"
+                    "AND room_id=%s AND (%s::bigint IS NULL OR sender_id=%s) "
+                    "AND state IN ('reviewing','awaiting_confirmation','generating') RETURNING id"
                 ),
-                (job_id, *owner),
+                (job_id, owner[0], owner[1], owner[2], owner[2]),
             ).fetchone()
             if row is None:
                 raise ArchiveError("任务不可取消或不属于你。")
@@ -499,9 +533,7 @@ class Archive:
                 raise ArchiveError("该用途已有不同图片，不覆盖既有存档。")
         return digest
 
-    def append_references(
-        self, job_id: UUID, owner: tuple[int, int, int], images: list[bytes]
-    ) -> int:
+    def append_references(self, job_id: UUID, owner: Scope, images: list[bytes]) -> int:
         """确认前追加参考图：全部成功才算数，并把草稿退回审核状态等待重审。
 
         参考图参与审核，追加后原草稿必须作废，否则放行结论会落到没审过的图上。
@@ -513,9 +545,9 @@ class Archive:
             job = db.execute(
                 self._sql(
                     "SELECT state, expires_at > now() AS valid FROM {schema}.jobs "
-                    "WHERE id=%s AND account=%s AND room_id=%s AND sender_id=%s FOR UPDATE"
+                    "WHERE id=%s AND account=%s AND room_id=%s AND (%s::bigint IS NULL OR sender_id=%s) FOR UPDATE"
                 ),
-                (job_id, *owner),
+                (job_id, owner[0], owner[1], owner[2], owner[2]),
             ).fetchone()
             if job is None:
                 raise ArchiveError("未找到属于你的当前群任务。")

@@ -60,11 +60,17 @@ HTTP/Socket.IO 受理仅记为 submitted，不能伪称 QQ 最终送达。
 /codex image direct <描述>     跳过润色，直接按原描述生成
 /codex image set <编号>        确认前调整尺寸、质量与背景
 /codex image attach <编号>     引用含图片的消息，追加参考图并重新审核
-/codex image confirm <编号>    本人确认后生成并回图
+/codex image confirm [编号]    确认后生成并回图；只剩一个待确认任务时可省略
 /codex image cancel <编号>     取消草稿或任务
 /codex image status <编号>     查看任务状态
 /codex image help              生图帮助
 ~~~
+
+`confirm`、`cancel`、`status`、`set`、`attach` 都可以省略编号，此时使用本人在当前群
+唯一待确认的任务；有多个时会回消息列出现有编号，不做猜测。
+
+宿主配置的管理员（`IcaClient.admins`）可以用 `confirm` / `cancel` 处理本群其他人的任务：
+机器人账号与来源群仍然强制匹配，只是不再限制发起者，回执会标注“管理员代办”。
 
 生成参数可写在描述前后，缺省一律为 auto：
 
