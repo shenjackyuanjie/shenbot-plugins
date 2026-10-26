@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import yaml
+
 from shenbot_api import ConfigStorage, PluginManifest, Scheduler, watch_ica_connection
 
 if TYPE_CHECKING:
@@ -36,9 +37,19 @@ HELP_TEXT = (
     "Codex 订阅帮助\n"
     "/codex check：查询 DSH 当前账号的套餐、剩余额度和重置时间。\n"
     "/codex 或 /codex help：显示本帮助，不联网，不占用查询冷却。\n"
+    "/codex image <描述>：润色并审核后预览提示词，本人确认后生成图片；可引用一张图片改图。\n"
+    "/codex image confirm|cancel|status <编号>：确认生成、取消或查看任务。\n"
     f"自动提醒：每 {POLL_SECONDS // 60} 分钟检查，剩余额度跨过 95%、90%、85%……0% 时提醒。\n"
     "reset 警告：剩余额度比上次上涨时报告；上次不为 0% 时提示“浪费了xx%额度😭”。\n"
     "仅白名单群可用；登录失效请在 DSH 中刷新。"
+)
+IMAGE_HELP = (
+    "Codex 生图帮助\n"
+    "/codex image <描述>：先润色并做前后两次 NSFW 审核，展示提示词等待你确认。\n"
+    "引用一张图片时按改图处理；引用多张或非图片会被拒绝。\n"
+    "/codex image confirm <编号>：确认后生成并引用当前消息回图。\n"
+    "/codex image cancel|status <编号>：取消或以查看任务状态。\n"
+    "草稿 10 分钟有效，确认只生效一次；结果不确定时不会自动重试。"
 )
 
 PLUGIN_MANIFEST = PluginManifest(
@@ -53,6 +64,11 @@ PLUGIN_MANIFEST = PluginManifest(
             dsh_home="",
             timeout_seconds=15,
             cooldown_seconds=15,
+            # 生图配置：连接串与密钥只放本地被忽略配置，不进入日志或提交。
+            pg_connection="",
+            deepseek_api_key="",
+            deepseek_base_url="https://api.deepseek.com",
+            deepseek_model="deepseek-flash",
         )
     },
 )
@@ -72,6 +88,10 @@ class Settings:
     dsh_home: str = ""
     timeout_seconds: int = 15
     cooldown_seconds: int = 15
+    pg_connection: str = field(default="", repr=False)
+    deepseek_api_key: str = field(default="", repr=False)
+    deepseek_base_url: str = "https://api.deepseek.com"
+    deepseek_model: str = "deepseek-flash"
 
 
 @dataclass(frozen=True)
@@ -104,6 +124,8 @@ class Runtime:
         self.baselines: dict[int, QuotaSnapshot] = {}
         self.poll_watch: IcaConnectionWatch | None = None
         self.poll_error: str | None = None
+        # 生图是分钟级收费操作，全局单槽位；忙时直接拒绝而不是排队堆额度风险。
+        self.image_busy = False
 
 
 _runtime = Runtime(Settings())
@@ -552,6 +574,15 @@ def on_load() -> None:
     ):
         raise ValueError("codex：allowed_groups 必须为非零整数群号列表")
     home = cfg.get_value("dsh_home") or ""
+    image = {
+        "pg_connection": cfg.get_value("pg_connection") or "",
+        "deepseek_api_key": cfg.get_value("deepseek_api_key") or "",
+        "deepseek_base_url": cfg.get_value("deepseek_base_url")
+        or "https://api.deepseek.com",
+        "deepseek_model": cfg.get_value("deepseek_model") or "deepseek-flash",
+    }
+    if any(not isinstance(value, str) for value in image.values()):
+        raise ValueError("codex：生图连接、密钥与模型配置必须为字符串")
     timeout = cfg.get_value("timeout_seconds")
     cooldown = cfg.get_value("cooldown_seconds")
     if not isinstance(home, str):
@@ -562,7 +593,13 @@ def on_load() -> None:
         raise ValueError("codex：cooldown_seconds 必须为 1-3600 的整数")
     on_unload()
     _runtime = Runtime(
-        Settings(frozenset(abs(group) for group in groups), home, timeout, cooldown)
+        Settings(
+            frozenset(abs(group) for group in groups),
+            home,
+            timeout,
+            cooldown,
+            **(image | {"deepseek_api_key": image["deepseek_api_key"].strip()}),
+        )
     )
     # 首次尽快记录静默基准，之后每两分钟检查。宿主仅在插件提交后开始计时。
     _schedule_poll(_runtime, delay=1)
@@ -577,6 +614,93 @@ def on_unload() -> None:
         watch.close()
 
 
+def _image_worker(
+    state: Runtime, action: str, msg: IcaNewMessage, client: IcaClient, value: str
+) -> None:
+    """后台执行分钟级操作；结束前再查停止标志，卸载后的旧代不回包。"""
+    from plugins.codex_support.archive import ArchiveError
+    from plugins.codex_support.image_service import (
+        ImageError,
+        ImageService,
+        ImageSettings,
+    )
+
+    settings = ImageSettings(
+        pg_connection=state.settings.pg_connection,
+        deepseek_api_key=state.settings.deepseek_api_key,
+        deepseek_base_url=state.settings.deepseek_base_url,
+        deepseek_model=state.settings.deepseek_model,
+    )
+    service = ImageService(settings, lambda: read_login(state.settings.dsh_home))
+    try:
+        if action == "create":
+            text = service.create(msg, client, value)
+        elif action == "confirm":
+            text = service.confirm(msg, client, value)
+        elif action == "cancel":
+            text = service.cancel(msg, value)
+        else:
+            text = service.status(msg, value)
+    except (ImageError, ArchiveError) as error:
+        text = str(error)
+    except Exception as error:  # 兜底只记录类型，避免上游细节进入群聊。
+        client.warn(f"codex：生图流程异常（{type(error).__name__}）")
+        text = "生图流程失败，请稍后用 /codex image status 查看记录。"
+    finally:
+        with state.lock:
+            state.image_busy = False
+    with state.lock:
+        stopped = state.stopped
+    if not stopped:
+        _reply(state, msg, client, text)
+
+
+def _handle_image(
+    state: Runtime, command: list[str], msg: IcaNewMessage, client: IcaClient
+) -> None:
+    """命令分派只做参数检查与单槽位占位；真正网络调用都放到 worker 线程。"""
+    parts = command[2:]
+    if not parts or parts == ["help"]:
+        _reply(state, msg, client, IMAGE_HELP)
+        return
+    action = parts[0]
+    if action in ("confirm", "cancel", "status"):
+        if len(parts) != 2 or len(parts[1]) != 8:
+            _reply(
+                state, msg, client, "用法：/codex image " + action + " <8 位任务编号>"
+            )
+            return
+        value = parts[1]
+    elif action in ("create", "generate"):
+        value = " ".join(parts[1:]).strip()
+        if not value:
+            _reply(state, msg, client, "用法：/codex image <图片描述>")
+            return
+        action = "create"
+    else:
+        # 描述本身可以以 confirm 等词开头，因此只有精确关键字才按子命令解析。
+        value = " ".join(parts).strip()
+        action = "create"
+    notice = ""
+    with state.lock:
+        if state.stopped:
+            return
+        if state.image_busy:
+            notice = "已有生图任务在处理，请稍后再试。"
+        else:
+            state.image_busy = True
+    # _reply 内部会取同一把不可重入锁，因此必须在释放后再发送。
+    if notice:
+        _reply(state, msg, client, notice)
+        return
+    threading.Thread(
+        target=_image_worker,
+        args=(state, action, msg, client, value),
+        name="codex-image",
+        daemon=True,
+    ).start()
+
+
 def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
     """只有精确的 check 子命令进入额度查询；帮助始终在本地返回。"""
     state = _runtime
@@ -586,8 +710,14 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
         msg.is_from_self
         or msg.room_id >= 0
         or -msg.room_id not in state.settings.allowed_groups
-        or command not in ([COMMAND], [COMMAND, "help"], [COMMAND, "check"])
+        or (
+            command not in ([COMMAND], [COMMAND, "help"], [COMMAND, "check"])
+            and command[:2] != [COMMAND, "image"]
+        )
     ):
+        return
+    if command[:2] == [COMMAND, "image"]:
+        _handle_image(state, command, msg, client)
         return
     if command in ([COMMAND], [COMMAND, "help"]):
         _reply(state, msg, client, HELP_TEXT)

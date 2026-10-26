@@ -119,6 +119,30 @@ class SDKFlowTests(unittest.TestCase):
         self.assertNotIn("b64_json", json.dumps(parsed.value))
         self.assertEqual(len(calls), 2)
 
+    def test_rewrite_uses_high_thinking_while_reviews_stay_tool_only(self):
+        """润色启用 high 思考；审核必须关闭思考才能使用 required。"""
+        rewrite = deepseek_call(
+            "https://api.deepseek.com",
+            "fixture",
+            "deepseek-flash",
+            "rewrite",
+            "一只纸鹤",
+        )
+        self.assertEqual(rewrite.payload["thinking"], {"type": "enabled"})
+        self.assertEqual(rewrite.payload["reasoning_effort"], "high")
+        self.assertNotIn("tool_choice", rewrite.payload)
+        self.assertNotIn("tools", rewrite.payload)
+        review = deepseek_call(
+            "https://api.deepseek.com",
+            "fixture",
+            "deepseek-flash",
+            "pre_review",
+            "一只纸鹤",
+        )
+        self.assertEqual(review.payload["thinking"], {"type": "disabled"})
+        self.assertEqual(review.payload["tool_choice"], "required")
+        self.assertNotIn("reasoning_effort", review.payload)
+
     def test_ambiguous_or_text_only_verdict_never_becomes_pass(self):
         call = deepseek_call(
             "https://api.deepseek.com",

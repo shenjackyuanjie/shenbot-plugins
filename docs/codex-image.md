@@ -50,7 +50,47 @@
 恢复只补记或补投递已有结果，不自动重放模型生成。此条在归档模块之外实施，当前尚未接线。
 HTTP/Socket.IO 受理仅记为 submitted，不能伪称 QQ 最终送达。
 
-## 隔离验证
+## 命令
+
+~~~text
+/codex image <描述>            文字生图；引用一张图片时按改图处理
+/codex image confirm <编号>    本人确认后生成并回图
+/codex image cancel <编号>     取消草稿或任务
+/codex image status <编号>     查看任务状态
+/codex image help              生图帮助
+~~~
+
+预览会展示润色后的提示词与 8 位任务编号，10 分钟内有效。确认只生效一次，
+且只有原群、原发起者、当前机器人账号三者同时匹配才可操作。引用多张图片或非图片会被拒绝，
+不会静默退化成文生图。
+
+## 模型调用
+
+| 阶段 | 模型 | 思考 | 工具 |
+| --- | --- | --- | --- |
+| 前置审核 | deepseek-flash | 关闭 | 仅 pass/nsfw，tool_choice=required |
+| 润色 | deepseek-flash | 开启，reasoning_effort=high | 无 |
+| 后置审核 | deepseek-flash | 关闭 | 仅 pass/nsfw，tool_choice=required |
+| 生图 | gpt-image-2.5-flare | — | 订阅图片接口，quality=auto |
+
+审核关闭思考是使用 required 的前提；润色使用 high 思考是为了让提示词更完整。
+两次审核分别记录，任何一步失败、超时或裁决异常都停在生图之前。
+
+## 配置
+
+本地 `config/codex.toml` 的 `[main]` 增加：
+
+~~~toml
+# 从现有 DSH PostgreSQL 配置一次性复制；运行时不再读取 DSH profile。
+pg_connection = "postgresql://...（本地保密，不提交）"
+# 只写入本机配置；不要放进仓库、日志或聊天。
+deepseek_api_key = "..."
+deepseek_base_url = "https://api.deepseek.com"
+deepseek_model = "deepseek-flash"
+~~~
+
+缺少密钥或连接时，生图命令会明确提示不可用，其他额度查询功能不受影响。
+
 
 普通测试不读取真实连接。显式执行 PG 业务验证时，在插件仓库中运行：
 

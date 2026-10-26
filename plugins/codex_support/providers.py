@@ -157,7 +157,9 @@ def deepseek_call(
                 },
                 {"role": "user", "content": content},
             ],
-            "thinking": {"type": "disabled"},
+            # 润色是唯一需要深度思考的一步；官方要求 thinking 与 reasoning_effort 同时给出。
+            "thinking": {"type": "enabled"},
+            "reasoning_effort": "high",
             "stream": False,
             "max_tokens": 2048,
         }

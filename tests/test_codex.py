@@ -160,12 +160,14 @@ class CommandTests(unittest.TestCase):
             )
         self.thread.assert_not_called()
         self.client.send_message.assert_not_called()
+        # image 走独立的分钟级 worker，不能占用额度查询槽位。
         self.msg.content = "/codex image 一只猫"
         codex.on_ica_message(self.msg, self.client)
-        self.thread.assert_not_called()
+        self.assertEqual(self.thread.call_args.kwargs["name"], "codex-image")
+        self.thread.reset_mock()
         self.msg.content = "/codex check"
         codex.on_ica_message(self.msg, self.client)
-        self.thread.assert_called_once()
+        self.assertEqual(self.thread.call_args.kwargs["name"], "codex-query")
 
     def test_help_is_local_during_query_and_respects_group_boundary(self):
         self.msg.content = "/codex help"

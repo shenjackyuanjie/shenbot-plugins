@@ -2,6 +2,14 @@
 
 宿主版本对应 [shenbot_api.py](shenbot_api.py) 的 `__version__`；ICA/Tailchat API 与各插件的 `VERSION` 分别管理。
 
+## 2026-10-26 Codex 生图命令
+
+- [codex](plugins/codex.py) **0.4.0 → 0.5.0**：新增 `/codex image` 系列命令，前审、润色、后审通过后展示提示词，本人确认再生图并引用当前消息回图；可引用一张图片改图。
+- 前审、后审关闭思考并使用 `tool_choice=required` 的 pass/nsfw 工具，润色单独启用 `reasoning_effort=high`；两次审核分别归档，任何异常都不进入生图。
+- 单槽位执行，10 分钟草稿、账号/群/发起者三方绑定、确认只消费一次；结果不确定时不自动重试。
+- 生图与审核请求全部先落 PG 再外发；图片保存二进制，认证字段不归档。
+- 新增命令分派、审核拦截、确认一次生成与忙时拒绝的离线回归，以及真实 DS 审核、润色与订阅生图各一次连通性验证（生图 1/10）。
+
 ## 2026-10-26 Codex 直连协议层
 
 - 引入 OpenAI Python SDK 作为唯一模型 HTTP 客户端，显式关闭自动重试与重定向；DS 使用 Chat Completions，Codex 图片仍走现有订阅后端，不切换公共计费接口。
