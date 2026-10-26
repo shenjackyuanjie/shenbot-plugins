@@ -19,7 +19,14 @@ from typing import TYPE_CHECKING
 
 import yaml
 
-from shenbot_api import ConfigStorage, PluginManifest, Scheduler, watch_ica_connection
+from shenbot_api import (
+    ConfigStorage,
+    PluginManifest,
+    Scheduler,
+    info,
+    warn,
+    watch_ica_connection,
+)
 
 if TYPE_CHECKING:
     from ica_typing import IcaClient, IcaNewMessage
@@ -549,9 +556,9 @@ def _poll_worker(
                     )
                 except Exception:
                     # 宿主约定异常可能已外发；推进基准，避免下一轮盲目重复发送。
-                    print("[codex] 额度提醒发送结果不确定，不自动重发本次档位")
+                    warn("codex：额度提醒发送结果不确定，不自动重发本次档位")
                 if not accepted:
-                    print("[codex] 额度提醒未受理，保留该群基准等待下轮检查")
+                    warn("codex：额度提醒未受理，保留该群基准等待下轮检查")
             if accepted:
                 with state.lock:
                     if not state.stopped:
@@ -564,7 +571,7 @@ def _poll_worker(
                 )
             category = type(error).__name__
             if not state.stopped and state.poll_error != category:
-                print(f"[codex] 自动轮询暂时失败（{category}），后续轮询继续重试")
+                warn(f"codex：自动轮询暂时失败（{category}），后续轮询继续重试")
             state.poll_error = category
     finally:
         watch.close()
@@ -612,7 +619,7 @@ def _start_poll(state: Runtime) -> None:
         with state.lock:
             state.poll_watch = None
             state.busy = False
-        print(f"[codex] 自动轮询未能启动（{type(error).__name__}）")
+        warn(f"codex：自动轮询未能启动（{type(error).__name__}）")
 
 
 def _schedule_poll(state: Runtime, delay: int = POLL_SECONDS) -> None:
@@ -701,7 +708,7 @@ def _image_worker(
     options: dict[str, str],
 ) -> None:
     """后台执行分钟级操作；结束前再查停止标志，卸载后的旧代不回包。"""
-    print(f"[codex] 生图任务开始 action={action}", flush=True)
+    info(f"codex：生图任务开始 action={action}")
     # 宿主用 from_code 直接加载插件文件，没有 plugins 包；此时插件目录才是导入根。
     import sys
     from pathlib import Path
@@ -731,8 +738,13 @@ def _image_worker(
         account = client.status.self_id
     except Exception:
         account = None
+
+    def emit(level: str, message: str) -> None:
+        """把生图阶段日志接到宿主日志；未知级别按 info 输出。"""
+        (warn if level == "warn" else info)(message)
+
     service = ImageService(
-        settings, lambda: read_login(state.settings.dsh_home), account
+        settings, lambda: read_login(state.settings.dsh_home), account, log=emit
     )
     try:
         if action in ("create", "direct"):
@@ -801,7 +813,7 @@ def _handle_image(
         if state.stopped:
             return
         if state.image_busy:
-            print(f"[codex] 生图任务被拒绝 action={action}：已有任务在处理", flush=True)
+            info(f"codex：生图任务被拒绝 action={action}，已有任务在处理")
             notice = "已有生图任务在处理，请稍后再试。"
         else:
             state.image_busy = True

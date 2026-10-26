@@ -175,6 +175,8 @@ class ImageFlowTests(unittest.TestCase):
             return "request", SimpleNamespace(value=next(values))
 
         service._call = Mock(side_effect=record)
+        lines = []
+        service._log_sink = lambda level, message: lines.append((level, message))
         preview = service.create(
             message(),
             Mock(),
@@ -182,6 +184,8 @@ class ImageFlowTests(unittest.TestCase):
             direct=True,
             params={"size": "1024x1536", "quality": "high"},
         )
+        # 阶段日志交给注入的宿主日志出口，而不是直接 print。
+        self.assertIn("draft ready", " ".join(message for _, message in lines))
         self.assertIn("1024x1536", preview)
         # 未显式给出的参数按 auto 冻结，预览展示的就是最终发给上游的值。
         self.assertIn("背景 auto", preview)

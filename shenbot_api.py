@@ -27,6 +27,30 @@ def python_config_path() -> str:
     ...
 
 
+def debug(message: str) -> None:
+    """
+    向宿主日志输出调试信息，默认级别下不显示
+    added: bot-0.9.7
+    """
+    ...
+
+
+def info(message: str) -> None:
+    """
+    向宿主日志输出信息
+    added: bot-0.9.7
+    """
+    ...
+
+
+def warn(message: str) -> None:
+    """
+    向宿主日志输出警告信息
+    added: bot-0.9.7
+    """
+    ...
+
+
 class ConfigStorage:
     """
     ```python

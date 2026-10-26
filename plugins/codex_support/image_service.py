@@ -35,15 +35,6 @@ class ImageSettings:
     image_timeout: float = 300
 
 
-def _log(event: str, **fields: object) -> None:
-    """后台进度日志：只输出阶段、任务短号与计数。
-
-    提示词、凭据、群消息内容都不进入日志，排查时用任务短号回查 PG 存档。
-    """
-    detail = " ".join(f"{key}={value}" for key, value in fields.items())
-    print(f"[codex-image] {event}{' ' + detail if detail else ''}", flush=True)
-
-
 def _elapsed(started: float) -> str:
     return f"{time.monotonic() - started:.1f}s"
 
@@ -105,11 +96,24 @@ class ImageService:
         login_provider,
         account: int,
         archive: Archive | None = None,
+        log=None,
     ):
         self.settings = settings
         self.login_provider = login_provider
         self.account = account
         self._archive = archive
+        # 日志出口由插件入口注入宿主 API；未注入时静默，测试与独立调用不产生输出。
+        self._log_sink = log
+
+    def log(self, event: str, *, level: str = "info", **fields: object) -> None:
+        """阶段日志交给宿主日志，只输出阶段、任务短号与计数。
+
+        提示词、凭据、群消息内容都不进入日志，排查时用任务短号回查 PG 存档。
+        """
+        if self._log_sink is None:
+            return
+        detail = " ".join(f"{key}={value}" for key, value in fields.items())
+        self._log_sink(level, f"[codex-image] {event}{' ' + detail if detail else ''}")
 
     @property
     def archive(self) -> Archive:
@@ -134,14 +138,15 @@ class ImageService:
         request_id = archive.begin_request(
             job_id, call.provider, call.stage, call.model, call.archive_payload
         )
-        _log("request", job=short, stage=call.stage, model=call.model)
+        self.log("request", job=short, stage=call.stage, model=call.model)
         try:
             result = call.send(request_id, stopped)
         except TransportError as error:
             state = "unknown" if error.code.endswith("UNCERTAIN") else "failed"
             archive.finish_request(request_id, state, error_code=error.code)
-            _log(
+            self.log(
                 "request failed",
+                level="warn",
                 job=short,
                 stage=call.stage,
                 code=error.code,
@@ -154,8 +159,9 @@ class ImageService:
             archive.finish_request(
                 request_id, "failed", http_status=result.status, error_code=str(error)
             )
-            _log(
+            self.log(
                 "request rejected",
+                level="warn",
                 job=short,
                 stage=call.stage,
                 http=result.status,
@@ -173,8 +179,8 @@ class ImageService:
         )
         for role, data in parsed.images:
             archive.put_image(job_id, role, data, request_id)
-            _log("image stored", job=short, role=role, bytes=len(data))
-        _log(
+            self.log("image stored", job=short, role=role, bytes=len(data))
+        self.log(
             "request ok",
             job=short,
             stage=call.stage,
@@ -213,7 +219,7 @@ class ImageService:
         }
         job = archive.create_job(self.owner(msg), msg.id, prompt, params)
         short = str(job)[:8]
-        _log("create", job=short, chars=len(prompt), reference=image is not None)
+        self.log("create", job=short, chars=len(prompt), reference=image is not None)
         if image is not None:
             archive.put_image(job, "reference", image)
         stopped = threading.Event()
@@ -231,26 +237,26 @@ class ImageService:
             return self._call(call, job, stopped)
 
         pre, verdict = review("pre_review", prompt)
-        _log("pre_review", job=short, decision=verdict.value["decision"])
+        self.log("pre_review", job=short, decision=verdict.value["decision"])
         if verdict.value["decision"] != "pass":
             archive.finish_job(job, "blocked")
-            _log("blocked", job=short, stage="pre_review")
+            self.log("blocked", level="warn", job=short, stage="pre_review")
             raise ImageError("内容未通过 NSFW 审核：" + verdict.value["reason"])
         if direct:
             final_prompt = prompt
-            _log("direct", job=short)
+            self.log("direct", job=short)
         else:
             _, rewritten = review("rewrite", prompt)
             final_prompt = rewritten.value["prompt"]
-            _log("rewrite", job=short, chars=len(final_prompt))
+            self.log("rewrite", job=short, chars=len(final_prompt))
         post, verdict = review("post_review", final_prompt, original=prompt)
-        _log("post_review", job=short, decision=verdict.value["decision"])
+        self.log("post_review", job=short, decision=verdict.value["decision"])
         if verdict.value["decision"] != "pass":
             archive.finish_job(job, "blocked")
-            _log("blocked", job=short, stage="post_review")
+            self.log("blocked", level="warn", job=short, stage="post_review")
             raise ImageError("润色结果未通过 NSFW 审核：" + verdict.value["reason"])
         archive.prepare_draft(job, final_prompt, pre, post)
-        _log("draft ready", job=short)
+        self.log("draft ready", job=short)
         mode = "直接生成（未润色）" if direct else "润色"
         return (
             f"任务 {short} 待确认\n模式：{mode}\n提示词：{final_prompt}\n"
@@ -266,7 +272,7 @@ class ImageService:
         except (RuntimeError, ValueError):
             accepted = False
         if not accepted:
-            _log("receipt not accepted", job=short)
+            self.log("receipt not accepted", job=short)
 
     def confirm(self, msg, client, prefix: str) -> None:
         """确认后只发起一次收费生成；先回执再回图，失败抛出可展示错误。"""
@@ -279,7 +285,7 @@ class ImageService:
         params = job.get("image_params") or {}
         archive.claim_confirmation(job["id"], owner)
         image = archive.image(job["id"], "reference")
-        _log("confirmed", job=short, reference=image is not None)
+        self.log("confirmed", job=short, reference=image is not None)
         # 生成是分钟级操作，先回执再发请求，避免确认后群里长时间没有任何反馈。
         self._receipt(
             client,
@@ -302,7 +308,7 @@ class ImageService:
             code = getattr(error, "code", None) or str(error)
             state = "unknown" if "UNCERTAIN" in code else "failed"
             archive.finish_job(job["id"], state)
-            _log("generate failed", job=short, state=state, code=code)
+            self.log("generate failed", level="warn", job=short, state=state, code=code)
             raise ImageError(
                 f"生成未完成（{code}）。结果不确定时不会自动重试，"
                 f"请用 /codex image status {prefix} 查看记录。"
@@ -310,13 +316,13 @@ class ImageService:
         archive.finish_job(job["id"], "succeeded")
         data = archive.image(job["id"], "original")
         if data is None:
-            _log("image missing", job=short)
+            self.log("image missing", level="warn", job=short)
             raise ImageError("生成已完成但未取到图片存档，请检查数据库。")
-        _log("generated", job=short, bytes=len(data))
+        self.log("generated", job=short, bytes=len(data))
         sent = msg.reply_with("已生成图片")
         sent.set_img(data, "image/png", False)
         client.send_message(sent)
-        _log("delivered", job=short)
+        self.log("delivered", job=short)
 
     def status(self, msg, prefix: str) -> str:
         job = self.archive.owned_job_by_prefix(prefix, self.owner(msg))
@@ -325,5 +331,5 @@ class ImageService:
     def cancel(self, msg, prefix: str) -> str:
         job = self.archive.owned_job_by_prefix(prefix, self.owner(msg))
         self.archive.cancel(job["id"], self.owner(msg))
-        _log("cancelled", job=str(job["id"])[:8])
+        self.log("cancelled", job=str(job["id"])[:8])
         return f"任务 {prefix} 已取消。"
