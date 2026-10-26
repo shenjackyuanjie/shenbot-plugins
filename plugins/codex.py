@@ -578,8 +578,10 @@ def on_unload() -> None:
 
 
 def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
+    """只有精确的 check 子命令进入额度查询；帮助始终在本地返回。"""
     state = _runtime
     command = (msg.content or "").split()
+    # 显式列举已实现的入口，拼错或尚未接入的 image 子命令不能误占查询槽位。
     if (
         msg.is_from_self
         or msg.room_id >= 0
