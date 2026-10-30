@@ -32,7 +32,7 @@ if TYPE_CHECKING:
     from ica_typing import IcaClient, IcaNewMessage
     from shenbot_api import IcaConnectionState, IcaConnectionWatch
 
-VERSION = "0.5.2"
+VERSION = "0.5.3"
 POLL_SECONDS = 120
 THRESHOLD_STEP = 5
 COMMAND = "/codex"
@@ -860,8 +860,10 @@ def _image_worker(
     )
     # 消息对象不携带机器人账号；归属绑定必须使用当前连接的 self_id。
     try:
-        account = client.status.self_id
+        status = client.status
+        account = status.self_id
     except Exception:
+        status = None
         account = None
 
     def emit(level: str, message: str) -> None:
@@ -869,7 +871,7 @@ def _image_worker(
         (warn if level == "warn" else info)(message)
 
     try:
-        admins = frozenset(client.admins or ())
+        admins = frozenset(status.admins or ())
     except (AttributeError, RuntimeError, ValueError):
         admins = frozenset()
     service = ImageService(

@@ -77,7 +77,7 @@ HTTP/Socket.IO 受理仅记为 submitted，不能伪称 QQ 最终送达。
 `confirm`、`cancel`、`status`、`set`、`attach` 都可以省略编号，此时使用本人在当前群
 唯一待确认的任务；有多个时会回消息列出现有编号，不做猜测。
 
-宿主配置的管理员（`IcaClient.admins`）可以用 `confirm` / `cancel` / `retry` 处理本群其他人的任务：
+宿主配置的管理员（`IcaClient.status.admins`，不是 QQ 群管理员身份）可以用 `confirm` / `cancel` / `retry` 处理本群其他人的任务：
 机器人账号与来源群仍然强制匹配，只是不再限制发起者，回执会标注“管理员代办”。
 
 生成参数可写在描述前后，缺省一律为 auto：

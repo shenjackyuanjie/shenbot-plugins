@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 import tempfile
 import threading
 import time
@@ -10,11 +11,13 @@ import urllib.error
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, PropertyMock, patch
 
 import yaml
 
 from plugins import codex
+from plugins.codex_support import archive as archive_module
+from plugins.codex_support import image_service
 
 NOW = 1_800_000_000
 
@@ -200,6 +203,50 @@ class CommandTests(unittest.TestCase):
         self.msg.content = "/codex image retry abcdef12"
         codex.on_ica_message(self.msg, self.client)
         self.assertEqual(self.thread.call_args.kwargs["args"][1:2], ("retry",))
+
+    def test_image_worker_reads_host_status_admins_to_delegate_in_current_room(self):
+        # 宿主只有 status.admins；宽松 Mock 会把错误的 client.admins 也伪造成可用属性。
+        msg = SimpleNamespace(
+            id="fixture-admin-command",
+            room_id=-123456,
+            sender_id=10003,
+            reply_with=lambda text: text,
+        )
+        client = SimpleNamespace(
+            status=SimpleNamespace(self_id=10001, admins=[10003]),
+            send_message=Mock(return_value=True),
+        )
+        archive = Mock()
+        archive.resolve_job.return_value = {
+            "id": "abcdef12-3456-7890-abcd-ef1234567890",
+            "sender_id": 10004,
+        }
+        with (
+            patch.dict(
+                sys.modules,
+                {
+                    "codex_support.archive": archive_module,
+                    "codex_support.image_service": image_service,
+                },
+            ),
+            patch.object(
+                image_service.ImageService,
+                "archive",
+                new_callable=PropertyMock,
+                return_value=archive,
+            ),
+        ):
+            codex._image_worker(self.state, "cancel", msg, client, "abcdef12", {})
+            archive.cancel.assert_called_once_with(
+                archive.resolve_job.return_value["id"], (10001, -123456, None)
+            )
+            archive.reset_mock()
+            # 同一入口下，普通用户仍按本人限定，不能借代办修复扩大权限。
+            client.status.admins = []
+            codex._image_worker(self.state, "cancel", msg, client, "abcdef12", {})
+            archive.cancel.assert_called_once_with(
+                archive.resolve_job.return_value["id"], (10001, -123456, 10003)
+            )
 
     def test_help_is_local_during_query_and_respects_group_boundary(self):
         self.msg.content = "/codex help"

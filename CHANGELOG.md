@@ -2,6 +2,11 @@
 
 宿主版本对应 [shenbot_api.py](shenbot_api.py) 的 `__version__`；ICA/Tailchat API 与各插件的 `VERSION` 分别管理。
 
+## 2026-10-30 Codex 管理员代办修复
+
+- [codex](plugins/codex.py) **0.5.2 → 0.5.3**：修正管理员名单读取位置，从不存在的 `client.admins` 改为 `client.status.admins`；机器人账号与管理员名单取自同一宿主 status，管理员可正常定位、代办本群其他人的任务，账号/群隔离与停止状态限制保持不变。
+- 补充真实宿主接口形状的入口回归，防止属性读取失败后把管理员静默降为普通用户；不增加 QQ 群管理员或其他身份的自动授权。
+
 ## 2026-10-30 Codex 生图失败重试
 
 - [codex](plugins/codex.py) **0.5.1 → 0.5.2**：新增 `/codex retry <8 位任务编号>`（也支持 `/codex image retry`），手动重试已确认且收到普通 HTTP 4xx/5xx 错误的生图任务（上游内容审核拒绝除外）；原任务号、审核提示词、生成参数及参考图顺序保持不变，不重新润色或审核，重试不受草稿十分钟有效期限制。
