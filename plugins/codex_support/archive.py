@@ -22,7 +22,7 @@ from psycopg import sql
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 # 一个任务最多引用几张图；命令层与存档层共用同一个上限。
 MAX_REFERENCES = 5
 # 操作范围：机器人账号、来源群、发起者；发起者为 None 表示管理员代办，不限发送者。
@@ -176,6 +176,19 @@ class Archive:
                         self._sql("UPDATE {schema}.schema_version SET version=3")
                     )
                     version = 3
+                if version == 3:
+                    # 3 → 4：按显式确认的尝试次数防重，保留每次失败请求而不是覆盖旧记录。
+                    db.execute(
+                        self._sql(
+                            "ALTER TABLE {schema}.jobs ADD COLUMN generation_attempt integer NOT NULL DEFAULT 0;"
+                            "ALTER TABLE {schema}.requests ADD COLUMN generation_attempt integer NOT NULL DEFAULT 0;"
+                            "DROP INDEX {schema}.one_generation_per_job;"
+                            "CREATE UNIQUE INDEX one_generation_per_attempt ON {schema}.requests(job_id,generation_attempt) "
+                            "WHERE stage='generate';"
+                            "UPDATE {schema}.schema_version SET version=4"
+                        )
+                    )
+                    version = 4
                 if version != SCHEMA_VERSION:
                     raise ArchiveError("codex 存档版本不兼容，停止初始化。")
                 return
@@ -289,6 +302,7 @@ class Archive:
         """调用上游之前提交 started；生成阶段额外受任务状态和唯一索引双重保护。"""
         request_id = uuid4()
         with self._db() as db:
+            attempt = 0
             if job_id is not None:
                 job = db.execute(
                     self._sql("SELECT * FROM {schema}.jobs WHERE id=%s FOR UPDATE"),
@@ -302,17 +316,28 @@ class Archive:
                     and payload.get("prompt") != job["reviewed_prompt"]
                 ):
                     raise ArchiveError("生成提示词与已审核的草稿不一致。")
-                if stage == "generate" and payload.get(
-                    "reference_sha256", []
-                ) != self._reference_hashes(db, job_id):
-                    raise ArchiveError("生成参考图与已审核的草稿不一致。")
+                if stage == "generate":
+                    attempt = job["generation_attempt"]
+                    if payload.get("reference_sha256", []) != self._reference_hashes(
+                        db, job_id
+                    ):
+                        raise ArchiveError("生成参考图与已审核的草稿不一致。")
             elif stage not in {"quota_check", "quota_poll"}:
                 raise ArchiveError("图片与审核请求必须属于一个持久任务。")
             db.execute(
                 self._sql(
-                    "INSERT INTO {schema}.requests(id,job_id,provider,stage,model,request_payload) VALUES (%s,%s,%s,%s,%s,%s)"
+                    "INSERT INTO {schema}.requests(id,job_id,provider,stage,model,request_payload,generation_attempt) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s)"
                 ),
-                (request_id, job_id, provider, stage, model, Jsonb(sanitized(payload))),
+                (
+                    request_id,
+                    job_id,
+                    provider,
+                    stage,
+                    model,
+                    Jsonb(sanitized(payload)),
+                    attempt,
+                ),
             )
         return request_id
 
@@ -457,6 +482,84 @@ class Archive:
             self._event(db, job_id, "confirmed", {"digest": row["approval_digest"]})
             return row
 
+    def claim_retry(self, job_id: UUID, owner: Scope, source_id: str) -> dict:
+        """原子领取一次手动重试；只接受已确认且收到 HTTP 错误的生成失败。
+
+        不受草稿有效期限制：沿用已经确认的内容，不重新审核或改变参数。
+        同一条 QQ 命令即使在再次失败后重放，也不能增加一次生成。
+        """
+        if not source_id:
+            raise ArchiveError("重试命令缺少可靠消息来源。")
+        with self._db() as db:
+            job = db.execute(
+                self._sql(
+                    "SELECT * FROM {schema}.jobs WHERE id=%s AND account=%s AND room_id=%s "
+                    "AND (%s::bigint IS NULL OR sender_id=%s) FOR UPDATE"
+                ),
+                (job_id, owner[0], owner[1], owner[2], owner[2]),
+            ).fetchone()
+            if job is None:
+                raise ArchiveError("未找到属于你的当前群任务。")
+            if job["state"] != "failed" or not job["approval_digest"]:
+                raise ArchiveError(
+                    "只能重试已确认且明确失败的生图任务；进行中、已成功或结果不确定的任务不重试。"
+                )
+            previous = db.execute(
+                self._sql(
+                    "SELECT id,state,http_status,error_code,response_payload->'error'->>'code' AS upstream_error_code "
+                    "FROM {schema}.requests "
+                    "WHERE job_id=%s AND stage='generate' AND generation_attempt=%s"
+                ),
+                (job_id, job["generation_attempt"]),
+            ).fetchone()
+            # 旧版本把上游审核拒绝也归为 HTTP 错误，重试历史记录时同样要识别。
+            if previous and (
+                previous["error_code"] == "CONTENT_REJECTED"
+                or previous["upstream_error_code"] == "moderation_blocked"
+            ):
+                raise ArchiveError(
+                    "任务未通过上游内容审核，请调整描述后重新发起，不能重试。"
+                )
+            if (
+                previous is None
+                or previous["state"] != "failed"
+                or previous["http_status"] is None
+                or not 400 <= previous["http_status"] <= 599
+            ):
+                raise ArchiveError(
+                    "本次生成没有明确的 HTTP 失败记录，结果可能不确定，不能重试。"
+                )
+            replay = db.execute(
+                self._sql(
+                    "SELECT 1 FROM {schema}.events WHERE job_id=%s AND kind='generation_retry' "
+                    "AND details->>'source_message_id'=%s LIMIT 1"
+                ),
+                (job_id, source_id),
+            ).fetchone()
+            if replay is not None:
+                raise ArchiveError(
+                    "这条重试命令已经处理过；如需再次重试，请发送一条新命令。"
+                )
+            row = db.execute(
+                self._sql(
+                    "UPDATE {schema}.jobs SET state='generating',generation_attempt=generation_attempt+1,"
+                    "updated_at=now() WHERE id=%s RETURNING *"
+                ),
+                (job_id,),
+            ).fetchone()
+            self._event(
+                db,
+                job_id,
+                "generation_retry",
+                {
+                    "previous_request": str(previous["id"]),
+                    "attempt": row["generation_attempt"],
+                    "source_message_id": source_id,
+                    "digest": row["approval_digest"],
+                },
+            )
+            return row
+
     def cancel(self, job_id: UUID, owner: Scope) -> None:
         """取消不代表上游未执行；保留所有请求，后续结果仍须归档但不能自动回图。"""
         with self._db() as db:
@@ -464,7 +567,7 @@ class Archive:
                 self._sql(
                     "UPDATE {schema}.jobs SET state='cancelled',updated_at=now() WHERE id=%s AND account=%s "
                     "AND room_id=%s AND (%s::bigint IS NULL OR sender_id=%s) "
-                    "AND state IN ('reviewing','awaiting_confirmation','generating') RETURNING id"
+                    "AND state IN ('reviewing','awaiting_confirmation','generating','failed') RETURNING id"
                 ),
                 (job_id, owner[0], owner[1], owner[2], owner[2]),
             ).fetchone()

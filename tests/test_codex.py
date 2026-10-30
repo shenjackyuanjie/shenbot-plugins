@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import yaml
+
 from plugins import codex
 
 NOW = 1_800_000_000
@@ -179,6 +180,7 @@ class CommandTests(unittest.TestCase):
             "/codex set --quality high",
             "/codex direct 一只猫",
             "/codex attach",
+            "/codex retry abcdef12",
         ):
             self.thread.reset_mock()
             self.msg.content = command
@@ -189,6 +191,15 @@ class CommandTests(unittest.TestCase):
             self.assertEqual(
                 self.thread.call_args.kwargs["args"][1], command.split()[1], command
             )
+
+        # retry 必须指定失败任务，不能猜测待确认草稿；带 image 前缀同样进入重试。
+        self.thread.reset_mock()
+        self.msg.content = "/codex retry"
+        codex.on_ica_message(self.msg, self.client)
+        self.thread.assert_not_called()
+        self.msg.content = "/codex image retry abcdef12"
+        codex.on_ica_message(self.msg, self.client)
+        self.assertEqual(self.thread.call_args.kwargs["args"][1:2], ("retry",))
 
     def test_help_is_local_during_query_and_respects_group_boundary(self):
         self.msg.content = "/codex help"

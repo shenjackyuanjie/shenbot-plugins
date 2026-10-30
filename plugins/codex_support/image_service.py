@@ -135,7 +135,9 @@ class ImageService:
         if self._archive is None:
             if not self.settings.pg_connection:
                 raise ImageError("尚未配置 PostgreSQL 连接，生图功能不可用。")
-            self._archive = Archive(self.settings.pg_connection)
+            archive = Archive(self.settings.pg_connection)
+            archive.initialize()
+            self._archive = archive
         return self._archive
 
     def owner(self, msg) -> tuple[int, int, int]:
@@ -183,6 +185,7 @@ class ImageService:
                 result.body,
                 http_status=result.status,
                 error_code=str(error),
+                upstream_id=result.request_id,
             )
             self.log(
                 "request rejected",
@@ -304,9 +307,11 @@ class ImageService:
             code = getattr(error, "code", None) or str(error)
             archive.finish_job(job, "failed")
             self.log("review failed", level="warn", job=short, code=code)
+            upstream = getattr(error, "upstream_message", "")
             raise ImageError(
-                f"任务 {short} 的提示词处理失败（{code}）："
-                f"可用 /codex image status {short} 查看记录，或稍后重新发起。"
+                f"任务 {short} 的提示词处理失败（{code}）。"
+                + (f"\n上游返回：{upstream}" if upstream else "")
+                + f"\n可用 /codex status {short} 查看记录，或稍后手动重新发起。"
             ) from None
         self.log("draft ready", job=short)
         if direct:
@@ -332,25 +337,31 @@ class ImageService:
         if not accepted:
             self.log("receipt not accepted", job=short)
 
-    def confirm(self, msg, client, prefix: str | None) -> None:
-        """确认后只发起一次收费生成；先回执再回图，失败抛出可展示错误。"""
+    def confirm(self, msg, client, prefix: str | None, *, retry: bool = False) -> None:
+        """确认或显式重试后只生成一次；两者共用归档、回执与回图流程。"""
+        if retry and not prefix:
+            raise ImageError("重试请指定任务：/codex retry <8 位任务编号>。")
         archive = self.archive
         owner = self.scope(msg)
         job = archive.resolve_job(prefix, owner)
         short = str(job["id"])[:8]
-        delegated = job["sender_id"] != msg.sender_id
         login = self.login_provider()
-        # 参数只从任务读取：确认命令不接受尺寸等选项，避免预览与生成不一致。
+        if retry:
+            job = archive.claim_retry(job["id"], owner, msg.id)
+        else:
+            job = archive.claim_confirmation(job["id"], owner)
+        delegated = job["sender_id"] != msg.sender_id
+        # 使用原子领取时的快照，参数、提示词与参考图都沿用原来已确认的内容。
         params = job.get("image_params") or {}
-        archive.claim_confirmation(job["id"], owner)
         images = archive.images(job["id"], "reference")
-        self.log("confirmed", job=short, references=len(images))
+        self.log("retry" if retry else "confirmed", job=short, references=len(images))
         # 生成是分钟级操作，先回执再发请求，避免确认后群里长时间没有任何反馈。
         self._receipt(
             client,
             msg,
             f"{'管理员代办：' if delegated else ''}"
-            f"任务 {short} 已确认，正在生成图片，通常需要 1–2 分钟。",
+            f"任务 {short} {'已开始重试（会再次消耗生成额度）' if retry else '已确认'}，"
+            "正在生成图片，通常需要 1–2 分钟。",
             short,
         )
         try:
@@ -366,14 +377,40 @@ class ImageService:
             self._call(call, job["id"], threading.Event())
         except (ProviderError, TransportError, ArchiveError) as error:
             code = getattr(error, "code", None) or str(error)
-            state = "unknown" if "UNCERTAIN" in code else "failed"
+            state = (
+                "blocked"
+                if code == "CONTENT_REJECTED"
+                else ("unknown" if "UNCERTAIN" in code else "failed")
+            )
             archive.finish_job(job["id"], state)
             self.log("generate failed", level="warn", job=short, state=state, code=code)
+            http_status = getattr(error, "http_status", None)
+            upstream = getattr(error, "upstream_message", "")
+            detail = (
+                f"任务 {short} 生成失败（"
+                + (f"HTTP {http_status}，" if http_status else "")
+                + f"{code}）。"
+            )
+            if upstream:
+                detail += f"\n上游返回：{upstream}"
+            if code == "CONTENT_REJECTED":
+                raise ImageError(
+                    detail + "\n已停止；上游内容审核拒绝，请调整描述后手动重新发起。"
+                ) from None
+            if http_status is not None and 400 <= http_status <= 599:
+                raise ImageError(
+                    detail
+                    + f"\n发送 /codex retry {short} 可按原提示词、参数和参考图再生成一次，"
+                    "会再次消耗额度；不会自动重试。"
+                ) from None
             raise ImageError(
-                f"生成未完成（{code}）。结果不确定时不会自动重试，"
-                f"请用 /codex image status {short} 查看记录。"
+                detail
+                + f"\n结果可能不确定，已停止且不重试；用 /codex status {short} 查看记录。"
             ) from None
-        archive.finish_job(job["id"], "succeeded")
+        if not archive.finish_job(job["id"], "succeeded"):
+            # 取消终态优先；迟到结果已经归档，但不再自动回图。
+            self.log("generation stopped", job=short)
+            return
         data = archive.image(job["id"], "original")
         if data is None:
             self.log("image missing", level="warn", job=short)

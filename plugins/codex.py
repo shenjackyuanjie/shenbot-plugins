@@ -32,7 +32,7 @@ if TYPE_CHECKING:
     from ica_typing import IcaClient, IcaNewMessage
     from shenbot_api import IcaConnectionState, IcaConnectionWatch
 
-VERSION = "0.5.1"
+VERSION = "0.5.2"
 POLL_SECONDS = 120
 THRESHOLD_STEP = 5
 COMMAND = "/codex"
@@ -50,6 +50,7 @@ HELP_TEXT = (
     "/codex image attach <编号>：确认前追加参考图（引用含图片的消息）。\n"
     "/codex image set <编号>：确认前调整尺寸、质量与背景。\n"
     "/codex image confirm|cancel|status <编号>：确认生成、取消或查看任务。\n"
+    "/codex retry <编号>：按原内容重试明确失败的生图任务，会再次消耗额度。\n"
     "/codex image help：生图帮助，含尺寸、质量、背景参数说明。\n"
     "生图子命令可以省略 image，例如直接发 /codex confirm、/codex cancel、/codex set。\n"
     f"自动提醒：每 {POLL_SECONDS // 60} 分钟检查，剩余额度跨过 95%、90%、85%……0% 时提醒；"
@@ -65,9 +66,11 @@ IMAGE_HELP = (
     "/codex image attach <编号>：引用含图片的消息，把图追加为参考图并重新审核。\n"
     "/codex image set <编号> [--size WxH] [--quality 级别] [--background 模式]：确认前调整参数。\n"
     "/codex image confirm [编号]：确认后生成并引用当前消息回图；只有一个待确认任务时可省略编号。\n"
-    "管理员可以用 confirm/cancel 直接处理本群其他人的任务。\n"
+    "/codex image retry <编号>：HTTP 失败后按原内容重试一次，会再次消耗额度；编号必填。\n"
+    "管理员可以用 confirm/cancel/retry 直接处理本群其他人的任务。\n"
     "/codex image cancel|status <编号>：取消或以查看任务状态。\n"
-    "草稿 10 分钟有效，确认只生效一次；结果不确定时不会自动重试。\n"
+    "草稿 10 分钟有效，确认只生效一次；重试沿用已确认内容，不受草稿有效期限制。\n"
+    "不会自动重试；超时、断线或成功响应解析失败等结果不确定的任务不能重试。\n"
     "参数可写在描述前后：--size 1024x1536（512–2048，或 auto）、"
     "--quality low/medium/high/xhigh/max、--background transparent/opaque，缺省均为 auto。\n"
     "auto 表示交给上游决定，不保证固定尺寸或比例。\n"
@@ -75,7 +78,9 @@ IMAGE_HELP = (
 )
 
 # 这些生图子命令可以省略 image 前缀，例如 /codex confirm 与 /codex image confirm。
-IMAGE_SHORTCUTS = frozenset({"confirm", "cancel", "status", "set", "attach", "direct"})
+IMAGE_SHORTCUTS = frozenset(
+    {"confirm", "cancel", "status", "set", "attach", "direct", "retry"}
+)
 
 IMAGE_QUALITIES = ("auto", "low", "medium", "high", "xhigh", "max")
 IMAGE_BACKGROUNDS = ("auto", "transparent", "opaque")
@@ -790,7 +795,9 @@ def on_unload() -> None:
     state.image_slots.close()
 
 
-def _run_generation(state: Runtime, msg, client, service, prefix: str) -> str:
+def _run_generation(
+    state: Runtime, msg, client, service, prefix: str | None, *, retry: bool = False
+) -> str | None:
     """收费生成只在名额池里执行：满员排队，队列满则拒绝，未确认的草稿不受影响。"""
     slots = state.image_slots
     running, waiting = slots.snapshot()
@@ -806,12 +813,13 @@ def _run_generation(state: Runtime, msg, client, service, prefix: str) -> str:
             stopping = state.stopped
         if stopping:
             return ""
-        return (
-            f"生成队列已满（最多 {slots.max_waiting} 个排队），"
-            "请稍后再确认；草稿在有效期内仍可确认。"
+        return f"生成队列已满（最多 {slots.max_waiting} 个排队），" + (
+            "请稍后再发送重试命令。"
+            if retry
+            else "请稍后再确认；草稿在有效期内仍可确认。"
         )
     try:
-        return service.confirm(msg, client, prefix)
+        return service.confirm(msg, client, prefix, retry=retry)
     finally:
         slots.release()
 
@@ -880,8 +888,10 @@ def _image_worker(
             text = service.attach(msg, client, value)
         elif action == "set":
             text = service.set_params(msg, value, options)
-        elif action == "confirm":
-            text = _run_generation(state, msg, client, service, value)
+        elif action in ("confirm", "retry"):
+            text = _run_generation(
+                state, msg, client, service, value, retry=action == "retry"
+            )
         elif action == "cancel":
             text = service.cancel(msg, value)
         else:
@@ -913,7 +923,17 @@ def _handle_image(
     action = parts[0]
     options: dict[str, str] = {}
     value: str | None = None
-    if action in ("confirm", "cancel", "status", "attach"):
+    if action == "retry":
+        if len(parts) != 2 or len(parts[1]) != 8:
+            _reply(
+                state,
+                msg,
+                client,
+                "用法：/codex retry <8 位任务编号>；会再次消耗生成额度。",
+            )
+            return
+        value = parts[1]
+    elif action in ("confirm", "cancel", "status", "attach"):
         if len(parts) == 1:
             value = None
         elif len(parts) == 2 and len(parts[1]) == 8:

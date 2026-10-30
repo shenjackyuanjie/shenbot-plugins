@@ -8,17 +8,25 @@ import hashlib
 import os
 import re
 import secrets
+import threading
+import time
 import tomllib
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 import psycopg
 from PIL import Image
 from psycopg import sql
 
+from plugins import codex
 from plugins.codex_support.archive import Archive, ArchiveError
+from plugins.codex_support.image_service import ImageError, ImageService, ImageSettings
+from plugins.codex_support.providers import Call
+from plugins.codex_support.transport import HTTPResult
 
 
 @unittest.skipUnless(
@@ -208,6 +216,224 @@ class ArchiveFlowTests(unittest.TestCase):
             ).fetchall()
             self.assertNotIn("must-not-persist", repr(rows))
             self.assertGreaterEqual(len(rows), 4)
+
+    def test_old_http_failure_retries_atomically_and_replayed_command_cannot_regenerate(
+        self,
+    ):
+        """复现 HTTP 400 后任务无法恢复；同时保护迁移、并发及消息重放不重复收费。"""
+        owner = (10001, -10002, 10003)
+        params = {"size": "1024x1536", "quality": "high", "background": "opaque"}
+        job = self.archive.create_job(
+            owner, "fixture-retry-original", "一只纸鹤", params
+        )
+        stream = BytesIO()
+        Image.new("RGB", (2, 2), "blue").save(stream, "PNG")
+        image = stream.getvalue()
+        digest = self.archive.put_image(job, "reference", image)
+        pre = self._review(job, "pre_review", "pass", "一只纸鹤", [digest])
+        post = self._review(job, "post_review", "pass", "蓝色纸鹤", [digest])
+        self.archive.prepare_draft(job, "蓝色纸鹤", pre, post)
+        service = ImageService(
+            ImageSettings(),
+            lambda: SimpleNamespace(
+                access="fixture-access", account_id="fixture-account"
+            ),
+            owner[0],
+            archive=self.archive,
+        )
+        msg = SimpleNamespace(
+            id="fixture-confirm",
+            room_id=owner[1],
+            sender_id=owner[2],
+            reply_with=lambda text: SimpleNamespace(set_img=lambda *args: None),
+        )
+        client = Mock()
+        with (
+            patch.object(
+                Call, "send", return_value=HTTPResult(400, {"error": {}}, b"")
+            ),
+            self.assertRaises(ImageError),
+        ):
+            service.confirm(msg, client, str(job)[:8])
+        frozen = self.archive.owned_job(job, owner)
+        # 在隔离 schema 中还原 v3 布局，验证旧失败任务与图片可无损升级后恢复。
+        with self.archive._db() as db:
+            db.execute(
+                self.archive._sql(
+                    "DROP INDEX {schema}.one_generation_per_attempt;"
+                    "ALTER TABLE {schema}.jobs DROP COLUMN generation_attempt;"
+                    "ALTER TABLE {schema}.requests DROP COLUMN generation_attempt;"
+                    "CREATE UNIQUE INDEX one_generation_per_job ON {schema}.requests(job_id) WHERE stage='generate';"
+                    "UPDATE {schema}.schema_version SET version=3"
+                )
+            )
+            db.execute(
+                self.archive._sql(
+                    "UPDATE {schema}.jobs SET expires_at=now()-interval '1 hour' WHERE id=%s"
+                ),
+                (job,),
+            )
+        self.archive.initialize()
+        self.archive.initialize()
+        with self.assertRaises(ArchiveError):
+            self.archive.claim_retry(job, (10001, -10004, None), "fixture-wrong-room")
+        with self.assertRaises(ArchiveError):
+            self.archive.claim_retry(
+                job, (10001, -10002, 10004), "fixture-wrong-sender"
+            )
+        msg.id = "fixture-retry-first"
+        with patch.object(
+            Call, "send", return_value=HTTPResult(503, {"error": {}}, b"")
+        ) as send:
+            with self.assertRaises(ImageError):
+                service.confirm(msg, client, str(job)[:8], retry=True)
+            with self.assertRaises(ArchiveError):
+                service.confirm(msg, client, str(job)[:8], retry=True)
+            self.assertEqual(send.call_count, 1)
+        retried = self.archive.owned_job(job, owner)
+        self.assertEqual(retried["reviewed_prompt"], frozen["reviewed_prompt"])
+        self.assertEqual(retried["approval_digest"], frozen["approval_digest"])
+        self.assertEqual(retried["image_params"], params)
+        self.assertEqual(self.archive.images(job, "reference"), [image])
+
+        def retry():
+            try:
+                return self.archive.claim_retry(job, owner, "fixture-retry-second")
+            except ArchiveError:
+                return None
+
+        with ThreadPoolExecutor(max_workers=2) as workers:
+            claims = list(workers.map(lambda _: retry(), range(2)))
+        self.assertEqual(sum(row is not None for row in claims), 1)
+        payload = {"prompt": frozen["reviewed_prompt"], "reference_sha256": [digest]}
+        request = self.archive.begin_request(
+            job, "codex", "generate", "fixture-image", payload
+        )
+        with self.assertRaises(ArchiveError):
+            self.archive.begin_request(
+                job, "codex", "generate", "fixture-image", payload
+            )
+        self.archive.finish_request(request, "unknown", error_code="TIMEOUT_UNCERTAIN")
+        self.archive.finish_job(job, "unknown")
+        restarted = Archive(self.connection, schema=self.schema)
+        with self.assertRaises(ArchiveError):
+            restarted.claim_retry(job, owner, "fixture-retry-uncertain")
+        with self.archive._db() as db:
+            rows = db.execute(
+                self.archive._sql(
+                    "SELECT generation_attempt,state,http_status FROM {schema}.requests "
+                    "WHERE job_id=%s AND stage='generate' ORDER BY generation_attempt"
+                ),
+                (job,),
+            ).fetchall()
+        self.assertEqual(
+            [
+                (row["generation_attempt"], row["state"], row["http_status"])
+                for row in rows
+            ],
+            [(0, "failed", 400), (1, "failed", 503), (2, "unknown", None)],
+        )
+
+    def _failed_generation(self, source, response):
+        """构造经双审核且实际收到上游拒绝的任务，不向真实模型发请求。"""
+        owner = (10001, -10002, 10003)
+        job = self.archive.create_job(owner, source, "一只纸鹤")
+        pre = self._review(job, "pre_review", "pass", "一只纸鹤")
+        post = self._review(job, "post_review", "pass", "一只纸鹤")
+        self.archive.prepare_draft(job, "一只纸鹤", pre, post)
+        service = ImageService(
+            ImageSettings(),
+            lambda: SimpleNamespace(
+                access="fixture-access", account_id="fixture-account"
+            ),
+            owner[0],
+            archive=self.archive,
+        )
+        msg = SimpleNamespace(
+            id=source + "-confirm",
+            room_id=owner[1],
+            sender_id=owner[2],
+            reply_with=lambda text: SimpleNamespace(set_img=lambda *args: None),
+        )
+        with (
+            patch.object(Call, "send", return_value=response),
+            self.assertRaises(ImageError) as failure,
+        ):
+            service.confirm(msg, Mock(), str(job)[:8])
+        upstream = response.body.get("error", {}).get("message")
+        if upstream:
+            self.assertIn(upstream, str(failure.exception))
+        return job, owner, service, msg
+
+    def test_content_rejection_is_not_retryable_including_legacy_http_errors(self):
+        # 防止把上游内容拒绝误报为暂时故障，并对旧版本留下的 generic 错误反复重试。
+        job, owner, _, _ = self._failed_generation(
+            "fixture-content-rejected",
+            HTTPResult(
+                400,
+                {
+                    "error": {
+                        "code": "moderation_blocked",
+                        "message": "fixture upstream rejection",
+                    }
+                },
+                b"",
+            ),
+        )
+        self.assertEqual(self.archive.owned_job(job, owner)["state"], "blocked")
+        with self.archive._db() as db:
+            db.execute(
+                self.archive._sql(
+                    "UPDATE {schema}.jobs SET state='failed' WHERE id=%s"
+                ),
+                (job,),
+            )
+            db.execute(
+                self.archive._sql(
+                    "UPDATE {schema}.requests SET error_code='UPSTREAM_HTTP_ERROR' WHERE job_id=%s AND stage='generate'"
+                ),
+                (job,),
+            )
+        with self.assertRaises(ArchiveError):
+            self.archive.claim_retry(job, owner, "fixture-retry-legacy-content")
+
+    def test_queued_retry_can_be_cancelled_before_any_generation_is_sent(self):
+        # 防止用户已取消排队重试，出队后仍被发起一次收费请求。
+        job, owner, service, msg = self._failed_generation(
+            "fixture-queued-retry",
+            HTTPResult(400, {"error": {}}, b""),
+        )
+        state = codex.Runtime(codex.Settings())
+        state.image_slots = codex.GenerationSlots(concurrency=1, max_waiting=1)
+        self.assertTrue(state.image_slots.acquire())
+        rejected = []
+
+        def run():
+            try:
+                codex._run_generation(
+                    state, msg, Mock(), service, str(job)[:8], retry=True
+                )
+            except ArchiveError:
+                rejected.append(True)
+
+        worker = threading.Thread(target=run, daemon=True)
+        with patch.object(Call, "send") as send:
+            worker.start()
+            try:
+                deadline = time.monotonic() + 2
+                while (
+                    state.image_slots.snapshot()[1] == 0 and time.monotonic() < deadline
+                ):
+                    time.sleep(0.01)
+                self.assertEqual(state.image_slots.snapshot(), (1, 1))
+                service.cancel(msg, str(job)[:8])
+            finally:
+                state.image_slots.release()
+            worker.join(2)
+            self.assertFalse(worker.is_alive())
+            send.assert_not_called()
+        self.assertEqual(rejected, [True])
+        self.assertEqual(self.archive.owned_job(job, owner)["state"], "cancelled")
 
 
 if __name__ == "__main__":

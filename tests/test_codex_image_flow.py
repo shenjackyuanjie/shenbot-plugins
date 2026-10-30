@@ -147,6 +147,49 @@ class ImageFlowTests(unittest.TestCase):
         with self.assertRaises(image_service.ArchiveError):
             service.confirm(message(), client, "abcdef12")
 
+    def test_http_failure_can_retry_the_frozen_generation_without_rewriting(self):
+        # 防止失败后无法恢复，或恢复时重新润色/丢参数与参考图；防重由真实 PG 验证。
+        archive = FakeArchive()
+        archive.job["image_params"] = {"quality": "high", "size": "1024x1536"}
+        archive.claim_retry = Mock(return_value=archive.job)
+        service = self.service(archive)
+        calls = []
+
+        def generate(call, job, stopped):
+            calls.append(call)
+            if len(calls) == 1:
+                raise image_service.ProviderError(
+                    "UPSTREAM_HTTP_ERROR", http_status=400
+                )
+            return "request", SimpleNamespace(value={})
+
+        service._call = Mock(side_effect=generate)
+        msg, client = message(), Mock()
+        with self.assertRaises(ImageError):
+            service.confirm(msg, client, "abcdef12")
+        msg.id = "fixture-retry"
+        service.confirm(msg, client, "abcdef12", retry=True)
+        archive.claim_retry.assert_called_once_with(
+            archive.job["id"], service.scope(msg), msg.id
+        )
+        self.assertEqual([call.stage for call in calls], ["generate", "generate"])
+        self.assertEqual(calls[1].payload, calls[0].payload)
+        self.assertTrue(archive.generated)
+
+    def test_cancel_during_generation_does_not_deliver_late_result(self):
+        archive = FakeArchive()
+        service = self.service(archive)
+
+        def complete_after_cancel(call, job, stopped):
+            archive.finish_job = Mock(return_value=False)
+            return "request", SimpleNamespace(value={})
+
+        service._call = Mock(side_effect=complete_after_cancel)
+        client = Mock()
+        service.confirm(message(), client, "abcdef12")
+        # 只有生成前回执；取消后迟到的结果不再自动回图。
+        self.assertEqual(client.send_message.call_count, 1)
+
     def test_direct_skips_rewrite_but_keeps_both_reviews(self):
         archive = FakeArchive()
         service = self.service(archive)

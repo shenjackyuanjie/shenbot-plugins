@@ -16,6 +16,8 @@ CREATE TABLE {schema}.jobs (
     approval_digest text,
     -- 创建任务时冻结的生成参数（尺寸、质量、背景），确认阶段只读不写。
     image_params jsonb NOT NULL DEFAULT '{{}}'::jsonb,
+    -- 0 为首次确认，只有领取新的显式重试时才递增。
+    generation_attempt integer NOT NULL DEFAULT 0,
     state text NOT NULL DEFAULT 'reviewing' CHECK (state IN
         ('reviewing','awaiting_confirmation','generating','succeeded','blocked','failed','unknown','cancelled','expired')),
     created_at timestamptz NOT NULL DEFAULT now(),
@@ -29,6 +31,7 @@ CREATE TABLE {schema}.requests (
     provider text NOT NULL,
     stage text NOT NULL,
     model text NOT NULL,
+    generation_attempt integer NOT NULL DEFAULT 0,
     request_payload jsonb NOT NULL,
     response_payload jsonb,
     state text NOT NULL DEFAULT 'started' CHECK (state IN ('started','succeeded','failed','unknown')),
@@ -39,8 +42,8 @@ CREATE TABLE {schema}.requests (
     started_at timestamptz NOT NULL DEFAULT now(),
     finished_at timestamptz
 );
--- 重复确认、断线恢复和不确定结果都不能自动产生第二次收费生成。
-CREATE UNIQUE INDEX one_generation_per_job ON {schema}.requests(job_id) WHERE stage = 'generate';
+-- 每次明确确认或重试只允许一次收费生成，重复消息及断线恢复不能重发。
+CREATE UNIQUE INDEX one_generation_per_attempt ON {schema}.requests(job_id, generation_attempt) WHERE stage = 'generate';
 CREATE INDEX requests_by_job ON {schema}.requests(job_id, started_at);
 CREATE TABLE {schema}.assets (
     sha256 text PRIMARY KEY CHECK (sha256 ~ '^[0-9a-f]{{64}}$'),
@@ -73,4 +76,4 @@ COMMENT ON TABLE {schema}.jobs IS 'QQ 生图任务及确认状态；只存命令
 COMMENT ON TABLE {schema}.requests IS '每次外部模型/额度请求；外发前提交 started，禁止保存认证头';
 COMMENT ON TABLE {schema}.assets IS '参考图、原图与发送副本实际二进制，按 SHA-256 去重';
 COMMENT ON TABLE {schema}.events IS '确认、取消、回图及恢复事件；Bridge 受理不等于 QQ 最终送达';
-INSERT INTO {schema}.schema_version(version) VALUES (3);
+INSERT INTO {schema}.schema_version(version) VALUES (4);
