@@ -482,8 +482,15 @@ class Archive:
             self._event(db, job_id, "confirmed", {"digest": row["approval_digest"]})
             return row
 
-    def claim_retry(self, job_id: UUID, owner: Scope, source_id: str) -> dict:
-        """原子领取一次手动重试；只接受已确认且收到 HTTP 错误的生成失败。
+    def claim_retry(
+        self,
+        job_id: UUID,
+        owner: Scope,
+        source_id: str,
+        *,
+        operator_id: int | None = None,
+    ) -> dict:
+        """原子领取一次手动重试；宿主管理员可强制重试已确认的上游审核拒绝。
 
         不受草稿有效期限制：沿用已经确认的内容，不重新审核或改变参数。
         同一条 QQ 命令即使在再次失败后重放，也不能增加一次生成。
@@ -500,11 +507,12 @@ class Archive:
             ).fetchone()
             if job is None:
                 raise ArchiveError("未找到属于你的当前群任务。")
-            if job["state"] == "blocked":
+            administrator = owner[2] is None
+            if job["state"] == "blocked" and not administrator:
                 raise ArchiveError(
-                    "任务已因审核未通过而停止，不能重试；请调整描述或参考图后手动重新发起。"
+                    "该任务被上游审核拒绝，只允许宿主管理员手动强制重试。"
                 )
-            if job["state"] != "failed" or not job["approval_digest"]:
+            if job["state"] not in {"failed", "blocked"} or not job["approval_digest"]:
                 raise ArchiveError(
                     "只能重试已确认且明确失败的生图任务；进行中、已成功或结果不确定的任务不重试。"
                 )
@@ -517,12 +525,20 @@ class Archive:
                 (job_id, job["generation_attempt"]),
             ).fetchone()
             # 旧版本把上游审核拒绝也归为 HTTP 错误，重试历史记录时同样要识别。
-            if previous and (
-                previous["error_code"] == "CONTENT_REJECTED"
-                or previous["upstream_error_code"] == "moderation_blocked"
-            ):
+            rejected = bool(
+                previous
+                and (
+                    previous["error_code"] == "CONTENT_REJECTED"
+                    or previous["upstream_error_code"] == "moderation_blocked"
+                )
+            )
+            if rejected and (not administrator or not operator_id):
                 raise ArchiveError(
-                    "任务未通过上游内容审核，请调整描述后重新发起，不能重试。"
+                    "该任务被上游审核拒绝，只允许宿主管理员手动强制重试。"
+                )
+            if job["state"] == "blocked" and not rejected:
+                raise ArchiveError(
+                    "本任务没有可强制重试的上游生成拒绝记录，不能跳过提示词审核。"
                 )
             if (
                 previous is None
@@ -560,8 +576,11 @@ class Archive:
                     "attempt": row["generation_attempt"],
                     "source_message_id": source_id,
                     "digest": row["approval_digest"],
+                    "forced": rejected,
+                    "operator_id": operator_id or owner[2],
                 },
             )
+            row["forced_retry"] = rejected
             return row
 
     def cancel(self, job_id: UUID, owner: Scope) -> None:
@@ -571,7 +590,7 @@ class Archive:
                 self._sql(
                     "UPDATE {schema}.jobs SET state='cancelled',updated_at=now() WHERE id=%s AND account=%s "
                     "AND room_id=%s AND (%s::bigint IS NULL OR sender_id=%s) "
-                    "AND state IN ('reviewing','awaiting_confirmation','generating','failed') RETURNING id"
+                    "AND state IN ('reviewing','awaiting_confirmation','generating','failed','blocked') RETURNING id"
                 ),
                 (job_id, owner[0], owner[1], owner[2], owner[2]),
             ).fetchone()

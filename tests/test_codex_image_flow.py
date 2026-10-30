@@ -172,7 +172,7 @@ class ImageFlowTests(unittest.TestCase):
         msg.id = "fixture-retry"
         service.confirm(msg, client, "abcdef12", retry=True)
         archive.claim_retry.assert_called_once_with(
-            archive.job["id"], service.scope(msg), msg.id
+            archive.job["id"], service.scope(msg), msg.id, operator_id=msg.sender_id
         )
         self.assertEqual([call.stage for call in calls], ["generate", "generate"])
         self.assertEqual(calls[1].payload, calls[0].payload)

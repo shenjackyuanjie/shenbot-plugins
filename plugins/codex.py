@@ -32,7 +32,7 @@ if TYPE_CHECKING:
     from ica_typing import IcaClient, IcaNewMessage
     from shenbot_api import IcaConnectionState, IcaConnectionWatch
 
-VERSION = "0.5.3"
+VERSION = "0.5.4"
 POLL_SECONDS = 120
 THRESHOLD_STEP = 5
 COMMAND = "/codex"
@@ -67,7 +67,7 @@ IMAGE_HELP = (
     "/codex image set <编号> [--size WxH] [--quality 级别] [--background 模式]：确认前调整参数。\n"
     "/codex image confirm [编号]：确认后生成并引用当前消息回图；只有一个待确认任务时可省略编号。\n"
     "/codex image retry <编号>：HTTP 失败后按原内容重试一次，会再次消耗额度；编号必填。\n"
-    "管理员可以用 confirm/cancel/retry 直接处理本群其他人的任务。\n"
+    "管理员可以用 confirm/cancel/retry 直接处理本群其他人的任务；retry 还能强制重试已确认的上游审核拒绝。\n"
     "/codex image cancel|status <编号>：取消或以查看任务状态。\n"
     "草稿 10 分钟有效，确认只生效一次；重试沿用已确认内容，不受草稿有效期限制。\n"
     "不会自动重试；超时、断线或成功响应解析失败等结果不确定的任务不能重试。\n"

@@ -19,7 +19,7 @@ CODE_HINTS = {
     "insufficient_quota": QUOTA_HINT,
     "moderation_blocked": (
         "上游内容审核未通过",
-        "调整描述或参考图后手动重新发起；原任务保持停止。",
+        "普通用户请调整描述或参考图后重新发起；宿主管理员可手动强制重试。",
     ),
     "credit_balance_exhausted": (
         "上游账户预付余额已用完",

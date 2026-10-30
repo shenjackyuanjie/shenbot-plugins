@@ -95,6 +95,14 @@ class ArchiveFlowTests(unittest.TestCase):
         with self.assertRaises(ArchiveError):
             self.archive.prepare_draft(blocked, "不能生成", pre, post)
         self.archive.finish_job(blocked, "blocked")
+        # 强制只针对已经确认并实际生成过的上游拒绝，不能越过本地双审核。
+        with self.assertRaises(ArchiveError):
+            self.archive.claim_retry(
+                blocked,
+                (owner[0], owner[1], None),
+                "fixture-force-review",
+                operator_id=10004,
+            )
 
         job = self.archive.create_job(owner, "fixture-success", "一只纸鹤")
         self.assertEqual(
@@ -318,6 +326,13 @@ class ArchiveFlowTests(unittest.TestCase):
         restarted = Archive(self.connection, schema=self.schema)
         with self.assertRaises(ArchiveError):
             restarted.claim_retry(job, owner, "fixture-retry-uncertain")
+        with self.assertRaises(ArchiveError):
+            restarted.claim_retry(
+                job,
+                (owner[0], owner[1], None),
+                "fixture-admin-force-uncertain",
+                operator_id=10004,
+            )
         with self.archive._db() as db:
             rows = db.execute(
                 self.archive._sql(
@@ -365,44 +380,109 @@ class ArchiveFlowTests(unittest.TestCase):
             self.assertIn(upstream, str(failure.exception))
         return job, owner, service, msg
 
-    def test_content_rejection_is_not_retryable_including_legacy_http_errors(self):
-        # 防止把上游内容拒绝误报为暂时故障，并对旧版本留下的 generic 错误反复重试。
-        job, owner, _, _ = self._failed_generation(
-            "fixture-content-rejected",
-            HTTPResult(
-                400,
-                {
-                    "error": {
-                        "code": "moderation_blocked",
-                        "message": "fixture upstream rejection",
-                    }
-                },
-                b"",
-            ),
+    def test_only_admin_can_force_rejected_generation_including_legacy_errors(self):
+        # 普通用户不能强制；管理员手动放行仍受来源防重、账号/群隔离及停止终态保护。
+        rejected = HTTPResult(
+            400,
+            {
+                "error": {
+                    "code": "moderation_blocked",
+                    "message": "fixture upstream rejection",
+                }
+            },
+            b"",
+        )
+        job, owner, original_service, msg = self._failed_generation(
+            "fixture-content-rejected", rejected
         )
         self.assertEqual(self.archive.owned_job(job, owner)["state"], "blocked")
-        with self.archive._db() as db:
-            db.execute(
-                self.archive._sql(
-                    "UPDATE {schema}.jobs SET state='failed' WHERE id=%s"
-                ),
-                (job,),
-            )
-            db.execute(
-                self.archive._sql(
-                    "UPDATE {schema}.requests SET error_code='UPSTREAM_HTTP_ERROR' WHERE job_id=%s AND stage='generate'"
-                ),
-                (job,),
+        with self.assertRaises(ArchiveError):
+            self.archive.claim_retry(
+                job, owner, "fixture-ordinary-force", operator_id=owner[2]
             )
         with self.assertRaises(ArchiveError):
-            self.archive.claim_retry(job, owner, "fixture-retry-legacy-content")
+            self.archive.claim_retry(
+                job,
+                (owner[0], -10004, None),
+                "fixture-cross-room-force",
+                operator_id=10004,
+            )
+        with self.assertRaises(ArchiveError):
+            self.archive.claim_retry(
+                job,
+                (10005, owner[1], None),
+                "fixture-cross-account-force",
+                operator_id=10004,
+            )
+        admin = ImageService(
+            ImageSettings(),
+            original_service.login_provider,
+            owner[0],
+            archive=self.archive,
+            admins=frozenset({10004}),
+        )
+        msg.sender_id, msg.id = 10004, "fixture-admin-force-first"
+        client = Mock()
+        with patch.object(Call, "send", return_value=rejected) as send:
+            with self.assertRaises(ImageError):
+                admin.confirm(msg, client, str(job)[:8], retry=True)
+            # 再次被上游拒绝后，重放同一条强制命令也不能重复消耗额度。
+            with self.assertRaises(ArchiveError):
+                admin.confirm(msg, client, str(job)[:8], retry=True)
+            self.assertEqual(send.call_count, 1)
+            # 旧版本的普通 failed + generic HTTP 错误仍只允许管理员强制。
+            with self.archive._db() as db:
+                db.execute(
+                    self.archive._sql(
+                        "UPDATE {schema}.jobs SET state='failed' WHERE id=%s"
+                    ),
+                    (job,),
+                )
+                db.execute(
+                    self.archive._sql(
+                        "UPDATE {schema}.requests SET error_code='UPSTREAM_HTTP_ERROR' WHERE job_id=%s AND stage='generate'"
+                    ),
+                    (job,),
+                )
+            with self.assertRaises(ArchiveError):
+                self.archive.claim_retry(
+                    job, owner, "fixture-ordinary-legacy-force", operator_id=owner[2]
+                )
+            msg.id = "fixture-admin-force-legacy"
+            with self.assertRaises(ImageError):
+                admin.confirm(msg, client, str(job)[:8], retry=True)
+            self.assertEqual(send.call_count, 2)
+            admin.cancel(msg, str(job)[:8])
+            msg.id = "fixture-admin-force-cancelled"
+            with self.assertRaises(ArchiveError):
+                admin.confirm(msg, client, str(job)[:8], retry=True)
+            self.assertEqual(send.call_count, 2)
+        with self.archive._db() as db:
+            events = db.execute(
+                self.archive._sql(
+                    "SELECT details FROM {schema}.events WHERE job_id=%s AND kind='generation_retry' ORDER BY id"
+                ),
+                (job,),
+            ).fetchall()
+        self.assertEqual(
+            [row["details"]["operator_id"] for row in events], [10004, 10004]
+        )
+        self.assertTrue(all(row["details"]["forced"] for row in events))
 
     def test_queued_retry_can_be_cancelled_before_any_generation_is_sent(self):
         # 防止用户已取消排队重试，出队后仍被发起一次收费请求。
-        job, owner, service, msg = self._failed_generation(
+        job, owner, original_service, msg = self._failed_generation(
             "fixture-queued-retry",
-            HTTPResult(400, {"error": {}}, b""),
+            HTTPResult(400, {"error": {"code": "moderation_blocked"}}, b""),
         )
+        service = ImageService(
+            ImageSettings(),
+            original_service.login_provider,
+            owner[0],
+            archive=self.archive,
+            admins=frozenset({10004}),
+        )
+        msg.sender_id = 10004
         state = codex.Runtime(codex.Settings())
         state.image_slots = codex.GenerationSlots(concurrency=1, max_waiting=1)
         self.assertTrue(state.image_slots.acquire())

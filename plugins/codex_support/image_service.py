@@ -346,19 +346,27 @@ class ImageService:
         short = str(job["id"])[:8]
         login = self.login_provider()
         if retry:
-            job = archive.claim_retry(job["id"], owner, msg.id)
+            job = archive.claim_retry(
+                job["id"], owner, msg.id, operator_id=msg.sender_id
+            )
         else:
             job = archive.claim_confirmation(job["id"], owner)
         delegated = job["sender_id"] != msg.sender_id
+        forced = retry and job.get("forced_retry", False)
         # 使用原子领取时的快照，参数、提示词与参考图都沿用原来已确认的内容。
         params = job.get("image_params") or {}
         images = archive.images(job["id"], "reference")
-        self.log("retry" if retry else "confirmed", job=short, references=len(images))
+        self.log(
+            "retry" if retry else "confirmed",
+            job=short,
+            references=len(images),
+            forced=forced,
+        )
         # 生成是分钟级操作，先回执再发请求，避免确认后群里长时间没有任何反馈。
         self._receipt(
             client,
             msg,
-            f"{'管理员代办：' if delegated else ''}"
+            f"{'管理员强制重试：' if forced else ('管理员代办：' if delegated else '')}"
             f"任务 {short} {'已开始重试（会再次消耗生成额度）' if retry else '已确认'}，"
             "正在生成图片，通常需要 1–2 分钟。",
             short,
@@ -386,7 +394,10 @@ class ImageService:
             http_status = getattr(error, "http_status", None)
             detail = f"任务 {short} 生成失败\n{format_error(error)}"
             if code == "CONTENT_REJECTED":
-                raise ImageError(detail + "\n已停止，不会自动重试。") from None
+                raise ImageError(
+                    detail
+                    + f"\n已停止，不会自动重试；宿主管理员可手动发送 /codex retry {short} 强制再试一次，可能再次消耗额度。"
+                ) from None
             if http_status is not None and 400 <= http_status <= 599:
                 raise ImageError(
                     detail
