@@ -12,7 +12,8 @@ from io import BytesIO
 import httpx2
 from PIL import Image
 
-from plugins.codex_support.providers import codex_call, deepseek_call
+from plugins.codex_support.error_messages import format_error
+from plugins.codex_support.providers import ProviderError, codex_call, deepseek_call
 from plugins.codex_support.review import ReviewError
 from plugins.codex_support.transport import HTTPResult, post_json
 
@@ -151,6 +152,50 @@ class SDKFlowTests(unittest.TestCase):
             http_client=failing,
         )
         self.assertEqual((result.status, len(attempts)), (503, 1))
+
+    def test_error_codes_distinguish_quota_causes_and_preserve_unknown_errors(self):
+        # 同样的 HTTP 429/insufficient_quota 也可能是余额耗尽或项目支出上限，不能一律提示稍后重试。
+        call = codex_call("fixture prompt", "fixture-access", "fixture-account")
+
+        def render(status, body):
+            with self.assertRaises(ProviderError) as failure:
+                call.parse(HTTPResult(status, body, b""))
+            return format_error(failure.exception)
+
+        credit = render(
+            429,
+            {
+                "error": {
+                    "code": "credit_balance_exhausted",
+                    "type": "insufficient_quota",
+                }
+            },
+        )
+        project = render(
+            429,
+            {
+                "error": {
+                    "code": "project_spend_limit_exceeded",
+                    "type": "insufficient_quota",
+                }
+            },
+        )
+        self.assertNotEqual(credit.splitlines()[0], project.splitlines()[0])
+        # 旧额度码即使配有宽泛的 rate_limit_error，仍必须优先按额度解释。
+        legacy_quota = render(
+            429, {"error": {"code": "insufficient_quota", "type": "rate_limit_error"}}
+        )
+        rate_limit = render(429, {"error": {"type": "rate_limit_error"}})
+        self.assertNotEqual(legacy_quota.splitlines()[0], rate_limit.splitlines()[0])
+        future = {
+            "error": {
+                "code": "fixture_future_code",
+                "message": "fixture future explanation",
+            }
+        }
+        unknown = render(520, future)
+        self.assertIn(future["error"]["code"], unknown)
+        self.assertIn(future["error"]["message"], unknown)
 
 
 if __name__ == "__main__":

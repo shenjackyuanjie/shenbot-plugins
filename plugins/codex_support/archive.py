@@ -500,6 +500,10 @@ class Archive:
             ).fetchone()
             if job is None:
                 raise ArchiveError("未找到属于你的当前群任务。")
+            if job["state"] == "blocked":
+                raise ArchiveError(
+                    "任务已因审核未通过而停止，不能重试；请调整描述或参考图后手动重新发起。"
+                )
             if job["state"] != "failed" or not job["approval_digest"]:
                 raise ArchiveError(
                     "只能重试已确认且明确失败的生图任务；进行中、已成功或结果不确定的任务不重试。"

@@ -13,6 +13,8 @@ from PIL import Image
 
 from plugins.codex_support import image_service
 from plugins.codex_support.image_service import ImageError, ImageService, ImageSettings
+from plugins.codex_support.providers import Call
+from plugins.codex_support.transport import HTTPResult
 
 
 class FakeArchive:
@@ -175,6 +177,39 @@ class ImageFlowTests(unittest.TestCase):
         self.assertEqual([call.stage for call in calls], ["generate", "generate"])
         self.assertEqual(calls[1].payload, calls[0].payload)
         self.assertTrue(archive.generated)
+
+    def test_upstream_rejection_shows_structured_details_and_keeps_stopped(self):
+        archive = FakeArchive()
+        service = self.service(archive)
+        message_text = "fixture upstream rejection"
+        body = {
+            "error": {
+                "code": "moderation_blocked",
+                "type": "image_generation_user_error",
+                "message": message_text,
+                "moderation_details": {
+                    "moderation_stage": "output",
+                    "categories": ["violence", "fixture-category"],
+                },
+            }
+        }
+        with patch.object(
+            Call, "send", return_value=HTTPResult(400, body, b"", "fixture-request-id")
+        ) as send:
+            with self.assertRaises(ImageError) as failure:
+                service.confirm(message(), Mock(), "abcdef12")
+            send.assert_called_once()
+        text = str(failure.exception)
+        for value in (
+            message_text,
+            body["error"]["code"],
+            body["error"]["type"],
+            "fixture-request-id",
+            "fixture-category",
+        ):
+            self.assertIn(value, text)
+        self.assertTrue(archive.blocked)
+        self.assertFalse(archive.generated)
 
     def test_cancel_during_generation_does_not_deliver_late_result(self):
         archive = FakeArchive()

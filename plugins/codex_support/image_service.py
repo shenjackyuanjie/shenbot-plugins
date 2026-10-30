@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 import requests
 
 from .archive import Archive, ArchiveError
+from .error_messages import format_error
 from .providers import ProviderError, codex_call, deepseek_call
 from .transport import TransportError
 
@@ -307,11 +308,9 @@ class ImageService:
             code = getattr(error, "code", None) or str(error)
             archive.finish_job(job, "failed")
             self.log("review failed", level="warn", job=short, code=code)
-            upstream = getattr(error, "upstream_message", "")
             raise ImageError(
-                f"任务 {short} 的提示词处理失败（{code}）。"
-                + (f"\n上游返回：{upstream}" if upstream else "")
-                + f"\n可用 /codex status {short} 查看记录，或稍后手动重新发起。"
+                f"任务 {short} 的提示词处理失败\n{format_error(error)}"
+                + f"\n已停止；可用 /codex status {short} 查看记录。"
             ) from None
         self.log("draft ready", job=short)
         if direct:
@@ -385,18 +384,9 @@ class ImageService:
             archive.finish_job(job["id"], state)
             self.log("generate failed", level="warn", job=short, state=state, code=code)
             http_status = getattr(error, "http_status", None)
-            upstream = getattr(error, "upstream_message", "")
-            detail = (
-                f"任务 {short} 生成失败（"
-                + (f"HTTP {http_status}，" if http_status else "")
-                + f"{code}）。"
-            )
-            if upstream:
-                detail += f"\n上游返回：{upstream}"
+            detail = f"任务 {short} 生成失败\n{format_error(error)}"
             if code == "CONTENT_REJECTED":
-                raise ImageError(
-                    detail + "\n已停止；上游内容审核拒绝，请调整描述后手动重新发起。"
-                ) from None
+                raise ImageError(detail + "\n已停止，不会自动重试。") from None
             if http_status is not None and 400 <= http_status <= 599:
                 raise ImageError(
                     detail

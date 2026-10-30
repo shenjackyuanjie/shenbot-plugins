@@ -102,7 +102,7 @@ HTTP/Socket.IO 受理仅记为 submitted，不能伪称 QQ 最终送达。
 
 ## 失败后重试
 
-生成收到 HTTP 错误时，回执展示任务号、HTTP 状态与上游错误的 code/type/param/message 原字段，过长内容截断到 1500 字。不会展示认证头、请求体或图片数据。普通 HTTP 400、429、5xx 等失败会附手动重试命令：
+生成收到 HTTP 错误时，回执按中文原因、HTTP 状态、错误码、错误类型、相关参数、请求 ID、上游原文和建议分行展示，不再直接拼接 JSON。原文最多 1500 字；不会展示认证头、请求体或图片数据。普通 HTTP 400、429、5xx 等失败会附手动重试命令：
 
 ~~~text
 /codex retry <8 位任务编号>
@@ -116,6 +116,27 @@ HTTP/Socket.IO 受理仅记为 submitted，不能伪称 QQ 最终送达。
 生成中、已成功、已取消、上游内容审核拒绝（`moderation_blocked`），以及超时/断线/成功响应解析失败等结果不确定的任务不能重试。旧版本归档为普通 HTTP 错误的内容拒绝也会识别并停止。
 HTTP 错误不保证换一次就成功；401/403 应先处理登录或权限，429 应先等待额度或限流恢复，
 持续 400 则需检查生成参数或上游限制。程序不自动重试，不把重放旧命令当作新的生成授权。
+
+### 错误映射依据
+
+依据 [OpenAI 错误指南](https://developers.openai.com/api/docs/guides/error-codes)、[图片生成错误处理](https://developers.openai.com/api/docs/guides/image-generation#handling-blocked-requests-and-other-errors) 与 [官方 ResponseError 枚举](https://developers.openai.com/api/reference/resources/responses/methods/retrieve)，优先使用稳定的上游 code，不根据英文句子猜错误类别。仅将返回的错误翻译为说明，不套用其他 API 的自动恢复流程。
+
+| 上游 code / 类型 | 中文原因与建议 |
+| --- | --- |
+| moderation_blocked | 上游内容审核未通过；修改描述或参考图后重新发起 |
+| credit_balance_exhausted | 预付余额耗尽；先处理余额 |
+| organization_spend_limit_exceeded / project_spend_limit_exceeded | 组织 / 项目支出上限；请账号管理员检查限制 |
+| organization_usage_limit_exceeded | 组织用量上限；检查或申请提高限制 |
+| slow_down | 请求速率增长过快；降低频率后手动操作 |
+| server_is_overloaded | 模型暂时过载；稍后手动操作 |
+| insufficient_quota / rate_limit_error | 分别提示余额/用量不足、频率限制；兼容旧版把 insufficient_quota 放在 code 的形式 |
+| invalid_api_key / model_not_found / unsupported_country_region_territory | 登录凭据、模型/资源和地区访问条件 |
+| invalid_prompt、invalid_image / invalid_image_format / invalid_base64_image 等图片错误 | 分别说明描述、格式、编码、地址、尺寸、色彩模式、文件大小/为空、下载或文件缺失等问题 |
+| 其他 / 未知错误 | 按 type 或 HTTP 状态提供一般说明，同时保留未知码与上游原文 |
+
+覆盖 HTTP 400、401、403、404、408、409、413、415、422、429、500、502、503、504 的常见说明，其他 5xx 使用服务端错误兜底。公共 API 的余额/组织/项目错误只在上游确实返回时解释，不能把订阅接口的 429 一律认作公共 API 欠费。
+
+当上游提供 moderation_details 时，显示公开类别 harassment / self-harm / sexual / violence 的中文名称，以及 moderation_stage=input/output/unknown。未知类别保留原名。旧订阅响应只有 message 中的 safety_violations=[...] 时只解析这个明确机器字段；没有字段就不猜。界面标为“上游标记”，不等同于程序确认用户内容有问题。
 
 ## 并发与排队
 

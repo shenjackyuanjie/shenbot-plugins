@@ -50,36 +50,57 @@ REWRITE_CREATE_SYSTEM = (
 )
 
 
-def _upstream_error(result: HTTPResult) -> str:
-    """仅展示错误字段，不把响应中的图片、认证头或整份请求体带入群聊。"""
+def _upstream_error(result: HTTPResult) -> dict:
+    """提取结构化错误用于展示；不携带认证头、请求体或图片字段。"""
     body = result.body or {}
     error = body.get("error", body.get("detail", body.get("message")))
     if isinstance(error, dict):
         fields = {
             key: error[key]
-            for key in ("code", "type", "param", "message")
+            for key in (
+                "code",
+                "type",
+                "param",
+                "message",
+                "moderation_details",
+                "request_id",
+            )
             if error.get(key) is not None
         }
-        text = json.dumps(fields, ensure_ascii=False) if fields else ""
-    elif isinstance(error, str):
-        text = error
-    elif result.body is None:
-        text = result.raw.decode("utf-8", errors="replace")
     else:
-        text = ""
+        text = (
+            error
+            if isinstance(error, str)
+            else (
+                result.raw.decode("utf-8", errors="replace")
+                if result.body is None
+                else ""
+            )
+        )
+        fields = {"message": text}
+    text = str(fields.get("message", ""))
     text = "".join(char for char in text if char.isprintable() or char == "\n").strip()
-    return text[:1500] + ("…（已截断）" if len(text) > 1500 else "")
+    fields["message"] = text[:1500] + ("…（已截断）" if len(text) > 1500 else "")
+    return fields
 
 
 class ProviderError(RuntimeError):
     """归档仍使用固定分类；错误正文单独用于向发起者展示，不混入日志分类码。"""
 
     def __init__(
-        self, code: str, *, http_status: int | None = None, upstream_message: str = ""
+        self,
+        code: str,
+        *,
+        http_status: int | None = None,
+        upstream_message: str = "",
+        details: dict | None = None,
+        request_id: str | None = None,
     ):
         super().__init__(code)
         self.http_status = http_status
-        self.upstream_message = upstream_message
+        self.details = details or {}
+        self.upstream_message = upstream_message or self.details.get("message", "")
+        self.request_id = request_id
 
 
 @dataclass(frozen=True)
@@ -126,14 +147,16 @@ class Call:
                 raise ProviderError(
                     "CONTENT_REJECTED",
                     http_status=result.status,
-                    upstream_message=_upstream_error(result),
+                    details=_upstream_error(result),
+                    request_id=result.request_id,
                 )
             raise ProviderError(
                 {401: "AUTH_EXPIRED", 403: "ACCESS_REFUSED", 429: "RATE_LIMITED"}.get(
                     result.status, "UPSTREAM_HTTP_ERROR"
                 ),
                 http_status=result.status,
-                upstream_message=_upstream_error(result),
+                details=_upstream_error(result),
+                request_id=result.request_id,
             )
         if result.body is None:
             raise ProviderError("INVALID_JSON")
