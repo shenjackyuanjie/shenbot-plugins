@@ -660,9 +660,10 @@ def fetch_openai_costs(settings: Settings, now: float | None = None) -> dict:
     return parsed if isinstance(parsed, dict) else {}
 
 
-def _money(value: float) -> str:
+def _money(value: float, currency: str) -> str:
     amount = f"{value:.2f}" if value >= 0.01 else f"{value:.4f}"
-    return "$" + amount
+    code = (currency or "usd").upper()
+    return "$" + amount if code == "USD" else f"{code} {amount}"
 
 
 def format_openai_costs(payload: dict) -> str:
@@ -672,6 +673,7 @@ def format_openai_costs(payload: dict) -> str:
         raise UsageError("用量响应缺少 data 字段")
     days: list[tuple[float, float]] = []
     total = 0.0
+    currency = ""
     for bucket in buckets:
         if not isinstance(bucket, dict):
             raise UsageError("用量响应格式异常")
@@ -679,15 +681,23 @@ def format_openai_costs(payload: dict) -> str:
         for item in bucket.get("results") or []:
             money = item.get("amount") if isinstance(item, dict) else None
             value = money.get("value") if isinstance(money, dict) else None
-            if isinstance(value, (int, float)):
-                amount += float(value)
+            if value is None:
+                continue
+            # 上游金额可能是数字或字符串；解析失败必须报错，不能静默按 0 处理。
+            try:
+                amount += float(Decimal(str(value)))
+            except (InvalidOperation, ValueError):
+                raise UsageError("用量金额格式异常") from None
+            code = money.get("currency")
+            if not currency and isinstance(code, str) and code.strip():
+                currency = code.strip()
         started = bucket.get("start_time")
         if isinstance(started, (int, float)):
             days.append((float(started), amount))
         total += amount
     lines = [
         "OpenAI API 用量（最近 7 天，已花费估算，不是余额）",
-        f"合计：{_money(total)}",
+        f"合计：{_money(total, currency)}",
     ]
     spent = [(started, amount) for started, amount in days if amount > 0]
     for started, amount in list(reversed(spent))[:2]:
@@ -695,7 +705,7 @@ def format_openai_costs(payload: dict) -> str:
             stamp = datetime.fromtimestamp(started, DISPLAY_ZONE).strftime("%m-%d")
         except (ValueError, OverflowError, OSError):
             stamp = "未知日期"
-        lines.append(f"{stamp}：{_money(amount)}")
+        lines.append(f"{stamp}：{_money(amount, currency)}")
     if not spent:
         lines.append("最近 7 天没有已记录的花费")
     lines.append("余额与账单请到 OpenAI 控制台查看")
@@ -1305,8 +1315,12 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
         try:
             try:
                 result = query_subscription(state.settings)
-                # 用量查询失败不影响订阅额度展示，只在追加段给简短原因。
-                usage = openai_usage_section(state.settings)
+                # 用量异常只影响追加段，绝不能吞掉已经拿到的订阅额度。
+                try:
+                    usage = openai_usage_section(state.settings)
+                except Exception as error:
+                    client.warn(f"codex：用量查询异常（{type(error).__name__}）")
+                    usage = "OpenAI API 用量：本轮查询失败"
                 if usage:
                     result = result + "\n\n" + usage
             except QueryError as error:

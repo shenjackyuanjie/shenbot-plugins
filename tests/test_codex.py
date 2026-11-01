@@ -235,7 +235,8 @@ class UsageTests(unittest.TestCase):
                 },
                 {
                     "start_time": NOW + 86400,
-                    "results": [{"amount": {"value": 0.05, "currency": "usd"}}],
+                    # 上游金额既可能是数字也可能是字符串，都要按金额解析。
+                    "results": [{"amount": {"value": "0.05", "currency": "usd"}}],
                 },
                 {
                     "start_time": NOW + 2 * 86400,
@@ -250,6 +251,23 @@ class UsageTests(unittest.TestCase):
         self.assertIn("合计：$0.12", text)
         self.assertLessEqual(len(text.splitlines()), 5)
         self.assertNotIn("fixture-usage", text)
+
+        # 非 usd 币种显示原币种代码，且非法金额不能被当成 0。
+        euro = codex.format_openai_costs(
+            {
+                "data": [
+                    {
+                        "start_time": NOW,
+                        "results": [{"amount": {"value": "0.12", "currency": "eur"}}],
+                    }
+                ]
+            }
+        )
+        self.assertIn("EUR 0.12", euro)
+        with self.assertRaises(codex.UsageError):
+            codex.format_openai_costs(
+                {"data": [{"results": [{"amount": {"value": "not-a-number"}}]}]}
+            )
 
     def test_missing_usage_scope_gives_actionable_hint(self):
         """403 缺 api.usage.read 时只给一行可执行提示，不整段抛 403。"""
@@ -408,6 +426,20 @@ class CommandTests(unittest.TestCase):
             self.finish()
             query.assert_called_once()
         self.assertIn("虚构订阅额度", self.client.send_message.call_args.args[0])
+
+    def test_usage_failure_does_not_swallow_subscription_result(self):
+        """用量段异常只能追加一行失败，订阅额度结果必须照常回给群。"""
+        with (
+            patch.object(codex, "query_subscription", return_value="虚构订阅额度"),
+            patch.object(
+                codex, "openai_usage_section", side_effect=RuntimeError("boom")
+            ),
+        ):
+            codex.on_ica_message(self.msg, self.client)
+            self.finish()
+        text = self.client.send_message.call_args.args[0]
+        self.assertIn("虚构订阅额度", text)
+        self.assertIn("OpenAI API 用量：本轮查询失败", text)
 
     def test_help_is_local_during_query_and_respects_group_boundary(self):
         self.msg.content = "/codex help"

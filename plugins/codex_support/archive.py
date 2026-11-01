@@ -41,7 +41,6 @@ _SECRET_MARKERS = (
     "api_key",
     "api-key",
     "apikey",
-    "token",
     "secret",
     "password",
     "cookie",
@@ -51,13 +50,17 @@ _SECRET_MARKERS = (
     "pg_connection",
     "dsn",
 )
+# token 只按整名或后缀识别，避免把 input_tokens 等费用计数一起脱敏。
+_SECRET_TOKEN_SUFFIXES = ("_token", "-token")
 
 
 def _is_secret_key(name: str) -> bool:
     lowered = str(name).lower()
-    return lowered in _SECRET_KEYS or any(
-        marker in lowered for marker in _SECRET_MARKERS
-    )
+    if lowered in _SECRET_KEYS or lowered == "token":
+        return True
+    if lowered.endswith(_SECRET_TOKEN_SUFFIXES):
+        return True
+    return any(marker in lowered for marker in _SECRET_MARKERS)
 
 
 def sanitized(value):

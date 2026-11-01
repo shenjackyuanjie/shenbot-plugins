@@ -48,6 +48,23 @@ class SanitizeTests(unittest.TestCase):
                 "prompt": "保留",
             },
         )
+        # token 计数是费用口径数据，不能被当成凭据剔除。
+        usage = {
+            "input_tokens": 10,
+            "output_tokens": 20,
+            "total_tokens": 30,
+            "output_tokens_details": {"image_tokens": 100, "cached_tokens": 5},
+            "access_token": "fixture-access",
+            "set-cookie": "fixture-cookie",
+        }
+        cleaned = sanitized(usage)
+        self.assertEqual(cleaned["input_tokens"], 10)
+        self.assertEqual(cleaned["output_tokens"], 20)
+        self.assertEqual(cleaned["total_tokens"], 30)
+        self.assertEqual(cleaned["output_tokens_details"]["image_tokens"], 100)
+        self.assertEqual(cleaned["output_tokens_details"]["cached_tokens"], 5)
+        self.assertEqual(cleaned["access_token"], "[已剔除]")
+        self.assertEqual(cleaned["set-cookie"], "[已剔除]")
 
 
 @unittest.skipUnless(
