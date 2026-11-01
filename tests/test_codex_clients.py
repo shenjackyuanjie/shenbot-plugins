@@ -13,9 +13,15 @@ import httpx2
 from PIL import Image
 
 from plugins.codex_support.error_messages import format_error
-from plugins.codex_support.providers import ProviderError, codex_call, deepseek_call
+from plugins.codex_support.providers import (
+    ProviderError,
+    codex_call,
+    deepseek_call,
+    openai_image_call,
+    openai_text_call,
+)
 from plugins.codex_support.review import ReviewError
-from plugins.codex_support.transport import HTTPResult, post_json
+from plugins.codex_support.transport import HTTPResult, post_json, post_multipart
 
 
 def verdict(name):
@@ -152,6 +158,91 @@ class SDKFlowTests(unittest.TestCase):
             http_client=failing,
         )
         self.assertEqual((result.status, len(attempts)), (503, 1))
+
+    def test_openai_image_edit_uploads_multipart_while_generation_stays_json(self):
+        """官方 images/edits 只接受表单上传；改图退回 JSON 会被上游拒绝。"""
+        stream = BytesIO()
+        Image.new("RGB", (2, 2), "green").save(stream, "PNG")
+        image = stream.getvalue()
+        seen = []
+
+        def handle(request):
+            seen.append(request)
+            return httpx2.Response(
+                200,
+                json={"data": [{"b64_json": base64.b64encode(image).decode()}]},
+            )
+
+        client = httpx2.Client(
+            transport=httpx2.MockTransport(handle), follow_redirects=False
+        )
+        edit = openai_image_call(
+            "改图", "fixture-key", base_url="https://api.openai.com/v1", images=(image,)
+        )
+        result = post_multipart(
+            edit.url,
+            edit.headers,
+            edit.payload,
+            list(edit.files),
+            timeout=1,
+            maximum_bytes=100000,
+            stopped=threading.Event(),
+            http_client=client,
+        )
+        edit.parse(result)
+        request = seen[0]
+        self.assertIn("multipart/form-data", request.headers["content-type"])
+        for expected in (b'name="image[]"', b'name="model"', b"reference-1.png"):
+            self.assertIn(expected, request.content)
+
+        # 文生图仍是 JSON，不引入 multipart。
+        generate = openai_image_call(
+            "画图", "fixture-key", base_url="https://api.openai.com/v1"
+        )
+        self.assertEqual(generate.files, ())
+        self.assertNotIn("images", generate.payload)
+
+    def test_openai_api_rejections_are_explicit_and_never_retry_or_switch_model(self):
+        """防止 API 模式把 401/429/模型不可用悄悄重发、换模型或给出模棱两可的回执。"""
+        call = openai_text_call(
+            "https://api.openai.com/v1",
+            "fixture-key",
+            "gpt-6-luna",
+            "pre_review",
+            "纸鹤",
+        )
+        for status, code, kind, expected in (
+            (401, "invalid_api_key", "invalid_request_error", "认证失败"),
+            (429, "rate_limit_exceeded", "rate_limit_error", "频率"),
+            (404, "model_not_found", "invalid_request_error", "模型不存在"),
+        ):
+            attempts = []
+            reply = {"error": {"code": code, "type": kind, "message": "fixture"}}
+
+            def handle(request, status=status, reply=reply, attempts=attempts):
+                attempts.append(request)
+                return httpx2.Response(status, json=reply)
+
+            client = httpx2.Client(
+                transport=httpx2.MockTransport(handle), follow_redirects=False
+            )
+            result = post_json(
+                call.url,
+                call.headers,
+                call.payload,
+                timeout=1,
+                maximum_bytes=100000,
+                stopped=threading.Event(),
+                http_client=client,
+            )
+            with self.assertRaises(ProviderError) as failure:
+                call.parse(result)
+            text = format_error(failure.exception)
+            # 一次拒绝只发一次请求，且请求仍是配置的模型，没有自动回退。
+            self.assertEqual(len(attempts), 1)
+            self.assertEqual(json.loads(attempts[0].content)["model"], call.model)
+            self.assertIn(expected, text)
+            self.assertIn(code, text)
 
     def test_error_codes_distinguish_quota_causes_and_preserve_unknown_errors(self):
         # 同样的 HTTP 429/insufficient_quota 也可能是余额耗尽或项目支出上限，不能一律提示稍后重试。

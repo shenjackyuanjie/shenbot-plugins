@@ -1,4 +1,4 @@
-"""DeepSeek 与 Codex 的请求/响应协议，不负责登录、任务确认、存档或 QQ 发送。
+"""OpenAI、DeepSeek 与 Codex 的请求/响应协议，不负责登录、任务确认、存档或 QQ 发送。
 
 认证只存在于 Call.headers，归档正文由独立字段提供，不能把整个 Call 对象写日志。
 创建 Call 不会联网；外层服务先持久登记请求，再使用同一请求 ID 执行一次发送。
@@ -12,15 +12,24 @@ import copy
 import hashlib
 import json
 import threading
-from dataclasses import dataclass, field
+from dataclasses import InitVar, dataclass, field
 from io import BytesIO
 from uuid import UUID
 
 from PIL import Image
 
-from .review import parse_verdict, review_payload
-from .transport import HTTPResult, post_json
+from .review import (
+    ReviewError,
+    completed_response_output,
+    parse_responses_verdict,
+    parse_verdict,
+    responses_review_payload,
+    review_payload,
+)
+from .transport import HTTPResult, post_json, post_multipart
 
+TEXT_MODEL = "gpt-6-luna"
+OPENAI_BASE_URL = "https://api.openai.com/v1"
 IMAGE_MODEL = "gpt-image-2.5-flare"
 IMAGE_GENERATION_URL = "https://chatgpt.com/backend-api/codex/images/generations"
 IMAGE_EDIT_URL = "https://chatgpt.com/backend-api/codex/images/edits"
@@ -95,12 +104,16 @@ class ProviderError(RuntimeError):
         upstream_message: str = "",
         details: dict | None = None,
         request_id: str | None = None,
+        response: dict | None = None,
+        raw: bytes = b"",
     ):
         super().__init__(code)
         self.http_status = http_status
         self.details = details or {}
         self.upstream_message = upstream_message or self.details.get("message", "")
         self.request_id = request_id
+        self.response = response
+        self.raw = raw
 
 
 @dataclass(frozen=True)
@@ -119,30 +132,70 @@ class Call:
     archive_payload: dict = field(repr=False)
     headers: dict = field(repr=False)
     timeout: float = 90
+    # 仅 API 模式可显式配置；代理地址可能含凭据，不参与 repr。
+    proxy: str | None = field(default=None, repr=False)
+    # 官方 images/edits 只接受 multipart 上传；有文件时走表单通道，其余仍走 JSON。
+    files: tuple[tuple[str, tuple[str, bytes, str]], ...] = field(
+        default=(), repr=False
+    )
 
     def send(self, request_id: UUID, stopped: threading.Event) -> HTTPResult:
         """外层登记完成后才发送；无重试、无候选模型回退。"""
         headers = dict(self.headers)
         if self.provider == "codex":
             headers["x-codex-image-turn-id"] = str(request_id)
+        maximum_bytes = (
+            72 * 1024 * 1024 if self.stage == "generate" else 2 * 1024 * 1024
+        )
+        if self.files:
+            return post_multipart(
+                self.url,
+                headers,
+                self.payload,
+                list(self.files),
+                timeout=self.timeout,
+                maximum_bytes=maximum_bytes,
+                stopped=stopped,
+                proxy=self.proxy,
+            )
         return post_json(
             self.url,
             headers,
             self.payload,
             timeout=self.timeout,
-            maximum_bytes=72 * 1024 * 1024
-            if self.provider == "codex"
-            else 2 * 1024 * 1024,
+            maximum_bytes=maximum_bytes,
             stopped=stopped,
+            proxy=self.proxy,
         )
 
     def parse(self, result: HTTPResult) -> Parsed:
+        try:
+            return self._parse(result)
+        except ProviderError as error:
+            error.response, error.raw = result.body, result.raw
+            error.http_status = result.status
+            error.request_id = result.request_id
+            raise
+        except ReviewError as error:
+            if self.provider != "openai":
+                raise
+            raise ProviderError(
+                "INVALID_REVIEW",
+                http_status=result.status,
+                upstream_message=str(error),
+                request_id=result.request_id,
+                response=result.body,
+                raw=result.raw,
+            ) from None
+
+    def _parse(self, result: HTTPResult) -> Parsed:
         if result.status != 200:
             error = (result.body or {}).get("error")
             if (
-                self.provider == "codex"
+                self.stage == "generate"
                 and isinstance(error, dict)
-                and error.get("code") == "moderation_blocked"
+                and error.get("code")
+                in {"moderation_blocked", "content_policy_violation"}
             ):
                 raise ProviderError(
                     "CONTENT_REJECTED",
@@ -161,8 +214,19 @@ class Call:
         if result.body is None:
             raise ProviderError("INVALID_JSON")
         body = result.body
-        if self.provider == "codex":
-            return parse_image(body)
+        if self.stage == "generate":
+            return parse_image(body, requested_model=self.model)
+        if self.provider == "openai":
+            if self.stage in {"pre_review", "post_review"}:
+                verdict = parse_responses_verdict(body)
+                return Parsed(
+                    {
+                        "decision": verdict.decision,
+                        "reason": verdict.reason,
+                        "response": body,
+                    }
+                )
+            return _parse_responses_rewrite(body)
         if self.stage in {"pre_review", "post_review"}:
             verdict = parse_verdict(body)
             return Parsed(
@@ -190,10 +254,12 @@ class Call:
             raise ProviderError("INVALID_REWRITE") from None
 
 
-def _references(images: tuple[bytes, ...]) -> tuple[list[str], list[tuple[str, str]]]:
-    """校验每张参考图，返回摘要和 data URL；顺序就是命令里引用的顺序。"""
+def _references(
+    images: tuple[bytes, ...],
+) -> tuple[list[str], list[tuple[str, str, bytes]]]:
+    """校验每张参考图，返回摘要、data URL 与原始字节；顺序就是引用顺序。"""
     hashes: list[str] = []
-    pictures: list[tuple[str, str]] = []
+    pictures: list[tuple[str, str, bytes]] = []
     for data in images:
         if not 0 < len(data) <= 8 * 1024 * 1024:
             raise ProviderError("REFERENCE_TOO_LARGE")
@@ -217,6 +283,7 @@ def _references(images: tuple[bytes, ...]) -> tuple[list[str], list[tuple[str, s
                 + media_type
                 + ";base64,"
                 + base64.b64encode(data).decode("ascii"),
+                data,
             )
         )
     return hashes, pictures
@@ -240,7 +307,7 @@ def deepseek_call(
         {"待执行描述": prompt, "原始要求": original or prompt}, ensure_ascii=False
     )
     content = [{"type": "text", "text": text}]
-    for _, image_url in pictures:
+    for _, image_url, _ in pictures:
         content.append({"type": "image_url", "image_url": {"url": image_url}})
     if stage == "rewrite":
         payload = {
@@ -275,16 +342,18 @@ def deepseek_call(
                     "sha256": digest,
                     "media_type": media_type,
                 }
-                for digest, (media_type, _) in zip(references, pictures)
+                for digest, (media_type, _, _) in zip(references, pictures)
             ],
         ]
     return Call(
         "deepseek",
         stage,
         model,
-        base_url.rstrip("/") + "/v1/chat/completions",
+        base_url.rstrip("/").removesuffix("/v1") + "/v1/chat/completions",
         payload,
         {
+            "api_endpoint": base_url.rstrip("/").removesuffix("/v1")
+            + "/v1/chat/completions",
             "prompt": prompt,
             "original_prompt": original or prompt,
             "reference_sha256": references,
@@ -303,6 +372,7 @@ def codex_call(
     access: str,
     account_id: str,
     *,
+    model: str = IMAGE_MODEL,
     images: tuple[bytes, ...] = (),
     size: str = "auto",
     quality: str = "auto",
@@ -317,25 +387,30 @@ def codex_call(
     references, pictures = _references(images)
     payload = {
         "prompt": prompt,
-        "model": IMAGE_MODEL,
+        "model": model,
         "quality": quality,
         "size": size,
         "background": background,
     }
     archived_body = copy.deepcopy(payload)
     if pictures:
-        payload["images"] = [{"image_url": url} for _, url in pictures]
+        payload["images"] = [{"image_url": url} for _, url, _ in pictures]
         archived_body["images"] = [
             {"sha256": digest, "media_type": media_type}
-            for digest, (media_type, _) in zip(references, pictures)
+            for digest, (media_type, _, _) in zip(references, pictures)
         ]
     return Call(
         "codex",
         "generate",
-        IMAGE_MODEL,
+        model,
         IMAGE_EDIT_URL if pictures else IMAGE_GENERATION_URL,
         payload,
-        {"prompt": prompt, "reference_sha256": references, "body": archived_body},
+        {
+            "api_endpoint": IMAGE_EDIT_URL if pictures else IMAGE_GENERATION_URL,
+            "prompt": prompt,
+            "reference_sha256": references,
+            "body": archived_body,
+        },
         {
             "Authorization": "Bearer " + access,
             "chatgpt-account-id": account_id,
@@ -348,7 +423,7 @@ def codex_call(
     )
 
 
-def parse_image(body: dict) -> Parsed:
+def parse_image(body: dict, *, requested_model: str = IMAGE_MODEL) -> Parsed:
     """只接受一张严格 Base64 PNG，不访问上游返回的任意下载 URL。"""
     try:
         entries = body["data"]
@@ -369,7 +444,7 @@ def parse_image(body: dict) -> Parsed:
         metadata["data"][0]["sha256"] = digest
         return Parsed(
             {
-                "requested_model": IMAGE_MODEL,
+                "requested_model": requested_model,
                 "reported_model": body.get("model"),
                 "response": metadata,
                 "image_sha256": digest,
@@ -378,3 +453,264 @@ def parse_image(body: dict) -> Parsed:
         )
     except (KeyError, TypeError, IndexError, binascii.Error, ValueError):
         raise ProviderError("INVALID_IMAGE_DATA") from None
+
+
+def _openai_base_url(base_url: str) -> str:
+    if base_url.rstrip("/") not in {"https://api.openai.com", OPENAI_BASE_URL}:
+        raise ProviderError("INVALID_API_URL")
+    return OPENAI_BASE_URL
+
+
+def _openai_headers(api_key: str, model: str, timeout: float) -> dict:
+    if not api_key.strip() or not model.strip() or timeout <= 0:
+        raise ProviderError("INVALID_OPENAI_CONFIGURATION")
+    return {
+        "Authorization": "Bearer " + api_key.strip(),
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+
+
+@dataclass(frozen=True)
+class OpenAITextClient:
+    """只构造 Responses 请求；凭据仅保存在不参与 repr 的 headers 中。"""
+
+    base_url: str
+    api_key: InitVar[str]
+    model: str = TEXT_MODEL
+    reasoning_effort: str = field(default="high", kw_only=True)
+    timeout: float = field(default=90, kw_only=True)
+    proxy: str = field(default="", kw_only=True)
+    headers: dict = field(init=False, repr=False)
+
+    def __post_init__(self, api_key: str) -> None:
+        object.__setattr__(self, "base_url", _openai_base_url(self.base_url))
+        object.__setattr__(
+            self, "headers", _openai_headers(api_key, self.model, self.timeout)
+        )
+        if self.reasoning_effort not in {
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+        }:
+            raise ProviderError("INVALID_OPENAI_CONFIGURATION")
+
+    def prepare(
+        self,
+        stage: str,
+        prompt: str,
+        *,
+        original: str | None = None,
+        images: tuple[bytes, ...] = (),
+    ) -> Call:
+        """前审与后审各自全新 input，不传 previous_response_id 或前次裁决。"""
+        if stage not in {"pre_review", "rewrite", "post_review"} or not prompt.strip():
+            raise ProviderError("INVALID_OPENAI_CONFIGURATION")
+        references, pictures = _references(images)
+        content = [
+            {
+                "type": "input_text",
+                "text": json.dumps(
+                    {"待执行描述": prompt, "原始要求": original or prompt},
+                    ensure_ascii=False,
+                ),
+            },
+            *[{"type": "input_image", "image_url": url} for _, url, _ in pictures],
+        ]
+        if stage == "rewrite":
+            payload = {
+                "model": self.model,
+                "instructions": REWRITE_EDIT_SYSTEM
+                if pictures
+                else REWRITE_CREATE_SYSTEM,
+                "input": [{"role": "user", "content": content}],
+                "reasoning": {"effort": self.reasoning_effort},
+                "stream": False,
+                "store": False,
+                "max_output_tokens": 10000,
+            }
+        else:
+            payload = responses_review_payload(
+                self.model, content, self.reasoning_effort
+            )
+        archived_body = copy.deepcopy(payload)
+        if pictures:
+            archived_body["input"][0]["content"] = [
+                copy.deepcopy(content[0]),
+                *[
+                    {
+                        "type": "image_reference",
+                        "sha256": digest,
+                        "media_type": media_type,
+                    }
+                    for digest, (media_type, _, _) in zip(references, pictures)
+                ],
+            ]
+        endpoint = self.base_url + "/responses"
+        return Call(
+            "openai",
+            stage,
+            self.model,
+            endpoint,
+            payload,
+            {
+                "api_endpoint": endpoint,
+                "prompt": prompt,
+                "original_prompt": original or prompt,
+                "reference_sha256": references,
+                "body": archived_body,
+            },
+            dict(self.headers),
+            timeout=self.timeout,
+            proxy=self.proxy or None,
+        )
+
+
+@dataclass(frozen=True)
+class OpenAIImageClient:
+    """官方计费图片 API；generations 用 JSON、edits 用 multipart，均只发送一次。"""
+
+    base_url: str
+    api_key: InitVar[str]
+    model: str = IMAGE_MODEL
+    timeout: float = field(default=300, kw_only=True)
+    proxy: str = field(default="", kw_only=True)
+    headers: dict = field(init=False, repr=False)
+
+    def __post_init__(self, api_key: str) -> None:
+        object.__setattr__(self, "base_url", _openai_base_url(self.base_url))
+        object.__setattr__(
+            self, "headers", _openai_headers(api_key, self.model, self.timeout)
+        )
+
+    def prepare(
+        self,
+        prompt: str,
+        *,
+        images: tuple[bytes, ...] = (),
+        size: str = "auto",
+        quality: str = "auto",
+        background: str = "auto",
+    ) -> Call:
+        if not prompt.strip():
+            raise ProviderError("INVALID_OPENAI_CONFIGURATION")
+        references, pictures = _references(images)
+        payload = {
+            "model": self.model,
+            "prompt": prompt,
+            "n": 1,
+            "output_format": "png",
+            "size": size,
+            "quality": quality,
+            "background": background,
+        }
+        archived_body = copy.deepcopy(payload)
+        files = ()
+        if pictures:
+            # 官方 edits 只接受 multipart 上传；文件名带序号，便于上游定位哪张参考图。
+            files = tuple(
+                (
+                    "image[]",
+                    (
+                        f"reference-{position}.{media_type.removeprefix('image/')}",
+                        data,
+                        media_type,
+                    ),
+                )
+                for position, (media_type, _, data) in enumerate(pictures, start=1)
+            )
+            archived_body["images"] = [
+                {"sha256": digest, "media_type": media_type}
+                for digest, (media_type, _, _) in zip(references, pictures)
+            ]
+        endpoint = self.base_url + (
+            "/images/edits" if pictures else "/images/generations"
+        )
+        return Call(
+            "openai",
+            "generate",
+            self.model,
+            endpoint,
+            payload,
+            {
+                "api_endpoint": endpoint,
+                "prompt": prompt,
+                "reference_sha256": references,
+                "body": archived_body,
+            },
+            dict(self.headers),
+            timeout=self.timeout,
+            proxy=self.proxy or None,
+            files=files,
+        )
+
+
+def openai_text_call(
+    base_url: str,
+    api_key: str,
+    model: str,
+    stage: str,
+    prompt: str,
+    *,
+    original: str | None = None,
+    images: tuple[bytes, ...] = (),
+    reasoning_effort: str = "high",
+    proxy: str = "",
+) -> Call:
+    return OpenAITextClient(
+        base_url, api_key, model, reasoning_effort=reasoning_effort, proxy=proxy
+    ).prepare(stage, prompt, original=original, images=images)
+
+
+def openai_image_call(
+    prompt: str,
+    api_key: str,
+    *,
+    model: str = IMAGE_MODEL,
+    base_url: str = OPENAI_BASE_URL,
+    images: tuple[bytes, ...] = (),
+    size: str = "auto",
+    quality: str = "auto",
+    background: str = "auto",
+    proxy: str = "",
+) -> Call:
+    return OpenAIImageClient(base_url, api_key, model, proxy=proxy).prepare(
+        prompt, images=images, size=size, quality=quality, background=background
+    )
+
+
+def _parse_responses_rewrite(body: dict) -> Parsed:
+    try:
+        output = completed_response_output(body)
+        messages = [item for item in output if item.get("type") != "reasoning"]
+        if len(messages) != 1:
+            raise ProviderError("INVALID_REWRITE")
+        message = messages[0]
+        content = message.get("content")
+        if (
+            message.get("type") != "message"
+            or message.get("role") != "assistant"
+            or message.get("refusal")
+            or not isinstance(content, list)
+            or not content
+        ):
+            raise ProviderError("INVALID_REWRITE")
+        text = []
+        for part in content:
+            if (
+                not isinstance(part, dict)
+                or part.get("type") != "output_text"
+                or not isinstance(part.get("text"), str)
+            ):
+                raise ProviderError("INVALID_REWRITE")
+            text.append(part["text"])
+        prompt = "".join(text).strip()
+        if not 0 < len(prompt) <= 8000:
+            raise ProviderError("INVALID_REWRITE")
+        return Parsed({"prompt": prompt, "response": body})
+    except ReviewError:
+        raise ProviderError("INVALID_REWRITE") from None

@@ -1,4 +1,4 @@
-"""v41f 原生工具审核：required 只保证至少一次调用，放行仍由本地严格校验。
+"""原生工具审核：required 只保证至少一次调用，放行仍由本地严格校验。
 
 前后两次审核共享协议，不共享对话上下文或上一次结论。审核工具只表达裁决，
 不具有生图、网络、文件等执行能力；普通正文、截断结果与矛盾调用都不能放行。
@@ -98,10 +98,92 @@ def parse_verdict(response: dict) -> Verdict:
             or len(arguments) > 4096
         ):
             raise ReviewError("审核工具或参数不符合约定。")
+        # 只取 reason；模型多带 confidence 等字段时忽略，不为额外字段判失败。
         args = json.loads(arguments)
-        if not isinstance(args, dict) or set(args) != {"reason"}:
+        if not isinstance(args, dict):
             raise ReviewError("审核参数不符合约定。")
-        reason = args["reason"]
+        reason = args.get("reason")
+        if not isinstance(reason, str) or not 0 < len(reason.strip()) <= 240:
+            raise ReviewError("审核缺少有效裁决原因。")
+        return Verdict(name, reason.strip())
+    except (KeyError, TypeError, ValueError):
+        raise ReviewError("无法解析审核工具裁决，已停止后续操作。") from None
+
+
+def responses_review_payload(
+    model: str, content: list, reasoning_effort: str = "high"
+) -> dict:
+    """Responses 工具定义平铺，严格 schema 与禁止并行都不能代替本地裁决校验。"""
+    return {
+        "model": model,
+        "instructions": REVIEW_SYSTEM,
+        "input": [{"role": "user", "content": content}],
+        "reasoning": {"effort": reasoning_effort},
+        "tools": [
+            {"type": "function", **copy.deepcopy(tool["function"]), "strict": True}
+            for tool in REVIEW_TOOLS
+        ],
+        "tool_choice": "required",
+        "parallel_tool_calls": False,
+        "stream": False,
+        "store": False,
+        "max_output_tokens": 10000,
+    }
+
+
+def completed_response_output(response: dict) -> list[dict]:
+    """只接收完整 Responses 回包；推理项可省略 status，其余输出必须完整。"""
+    if (
+        response.get("status") != "completed"
+        or response.get("error") is not None
+        or response.get("incomplete_details") is not None
+        or response.get("refusal")
+    ):
+        raise ReviewError("Responses 未完整结束，已停止后续操作。")
+    output = response.get("output")
+    if not isinstance(output, list) or not output:
+        raise ReviewError("Responses 没有完整输出。")
+    for item in output:
+        if not isinstance(item, dict):
+            raise ReviewError("Responses 输出项无效。")
+        # 个别输出项会显式返回 status=null；截断与未完成仍由顶层 status/incomplete_details 把关。
+        if (item.get("status") or "completed") != "completed":
+            raise ReviewError("Responses 输出未完成。")
+    return output
+
+
+def parse_responses_verdict(response: dict) -> Verdict:
+    """只认唯一的 pass/nsfw function_call；正文、未知工具与多调用都不能裁决。
+
+    上游输出形态变化（多一个 message 项、多带 confidence 字段）不应误杀审核，
+    但裁决来源、唯一调用与工具名三条约束保持不变。
+    """
+    try:
+        output = completed_response_output(response)
+        calls = [item for item in output if item.get("type") == "function_call"]
+        if len(calls) != 1:
+            raise ReviewError("审核必须恰好调用一个裁决工具。")
+        # 出现裁决之外的正文时，无法确认模型没有用自然语言覆盖工具结论。
+        for item in output:
+            if item.get("type") in {"reasoning", "function_call"}:
+                continue
+            if item.get("content") or item.get("text"):
+                raise ReviewError("审核返回了裁决之外的内容。")
+        call = calls[0]
+        if not isinstance(call.get("call_id"), str) or not call["call_id"].strip():
+            raise ReviewError("审核工具调用无效。")
+        name, arguments = call.get("name"), call.get("arguments")
+        if (
+            not isinstance(name, str)
+            or name not in {"pass", "nsfw"}
+            or not isinstance(arguments, str)
+            or len(arguments) > 4096
+        ):
+            raise ReviewError("审核工具或参数不符合约定。")
+        args = json.loads(arguments)
+        if not isinstance(args, dict):
+            raise ReviewError("审核参数不符合约定。")
+        reason = args.get("reason")
         if not isinstance(reason, str) or not 0 < len(reason.strip()) <= 240:
             raise ReviewError("审核缺少有效裁决原因。")
         return Verdict(name, reason.strip())

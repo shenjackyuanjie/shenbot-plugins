@@ -11,7 +11,7 @@ import re
 # 兼容旧响应把 insufficient_quota 放在 code、新响应作为宽泛 type 的两种形式。
 QUOTA_HINT = (
     "上游余额或用量额度不足",
-    "先检查对应账号的余额和额度；订阅额度可用 /codex check 查询。",
+    "先检查对应账号的余额和额度；订阅额度可用 /codex check 查询，API 计费以 OpenAI 控制台为准。",
 )
 
 # 优先使用服务端稳定 code，避免把所有 HTTP 429 都误报成请求频率过高。
@@ -54,7 +54,7 @@ TYPE_HINTS = {
     ),
     "authentication_error": (
         "上游身份认证失败",
-        "检查对应服务凭据；Codex 登录请在 DSH 中刷新。",
+        "检查对应服务凭据；订阅模式在 DSH 中刷新登录，API 模式检查本机密钥文件。",
     ),
     "permission_error": (
         "当前账号没有访问权限",
@@ -131,6 +131,18 @@ LOCAL_HINTS = {
         "生成请求配置无效",
         "检查当前图片模型及尺寸、质量、背景参数。",
     ),
+    "INVALID_REVIEW": (
+        "审核返回内容不可用",
+        "已停止；查看任务记录后手动重新发起。",
+    ),
+    "INVALID_OPENAI_CONFIGURATION": (
+        "OpenAI API 配置无效",
+        "检查 openai_base_url、模型名与 reasoning effort 配置。",
+    ),
+    "INVALID_HTTP_CLIENT": (
+        "HTTP 客户端配置无效",
+        "检查 openai_proxy 是否为可用的 HTTP(S) 代理地址。",
+    ),
     "INVALID_CREDENTIAL": TYPE_HINTS["authentication_error"],
     "INVALID_API_URL": ("模型接口地址不在支持范围内", "检查插件接口配置。"),
     "RESPONSE_TOO_LARGE": (
@@ -142,6 +154,10 @@ LOCAL_HINTS = {
 CODE_HINTS.update(
     {
         "invalid_api_key": TYPE_HINTS["authentication_error"],
+        "missing_scope": (
+            "该 Key 没有当前接口权限",
+            "检查是否把审核 Key 用于生图或反之：两把 Key 必须按用途分开。",
+        ),
         "model_not_found": HTTP_HINTS[404],
         "unsupported_country_region_territory": (
             "当前所在地区不受上游支持",
@@ -257,7 +273,8 @@ def format_error(error: Exception) -> str:
         stage = moderation.get("moderation_stage")
         if isinstance(stage, str):
             lines.append("审核阶段：" + STAGE_NAMES.get(stage, _text(stage)))
-    if status is not None:
+    # 本地归类错误的 http_status 可能沿用响应码（如解析失败时的 200），只在真实 HTTP 失败时展示。
+    if isinstance(status, int) and 400 <= status <= 599:
         lines.append(f"HTTP：{status}")
     lines.append("错误码：" + _text(code or local_code))
     if kind:

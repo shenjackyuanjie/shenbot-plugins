@@ -10,7 +10,6 @@ from __future__ import annotations
 import json
 import threading
 from dataclasses import dataclass, field
-from urllib.parse import urlsplit
 
 import httpx2
 from openai import (
@@ -21,10 +20,15 @@ from openai import (
     OpenAI,
 )
 
-# 群命令只能触达这两个订阅图片路径，不能把任意相对路径交给 SDK。
+# 精确匹配官方端点，拒绝自定义主机、query、重定向及同名非官方路径。
 IMAGE_ENDPOINTS = {
     "https://chatgpt.com/backend-api/codex/images/generations": "/images/generations",
     "https://chatgpt.com/backend-api/codex/images/edits": "/images/edits",
+}
+OPENAI_ENDPOINTS = {
+    "https://api.openai.com/v1/responses": "/responses",
+    "https://api.openai.com/v1/images/generations": "/images/generations",
+    "https://api.openai.com/v1/images/edits": "/images/edits",
 }
 
 
@@ -53,6 +57,59 @@ def post_json(
     maximum_bytes: int,
     stopped: threading.Event,
     http_client: httpx2.Client | None = None,
+    proxy: str | None = None,
+) -> HTTPResult:
+    """JSON 通道；外层先登记请求，再发一次，收费请求不静默重复。"""
+    return _post(
+        url,
+        headers,
+        payload,
+        None,
+        timeout=timeout,
+        maximum_bytes=maximum_bytes,
+        stopped=stopped,
+        http_client=http_client,
+        proxy=proxy,
+    )
+
+
+def post_multipart(
+    url: str,
+    headers: dict,
+    fields: dict,
+    files: list[tuple[str, tuple[str, bytes, str]]],
+    *,
+    timeout: float,
+    maximum_bytes: int,
+    stopped: threading.Event,
+    http_client: httpx2.Client | None = None,
+    proxy: str | None = None,
+) -> HTTPResult:
+    """multipart 通道：官方 images/edits 只接受表单上传，文件不能在 JSON 里传。"""
+    return _post(
+        url,
+        headers,
+        fields,
+        files,
+        timeout=timeout,
+        maximum_bytes=maximum_bytes,
+        stopped=stopped,
+        http_client=http_client,
+        proxy=proxy,
+    )
+
+
+def _post(
+    url: str,
+    headers: dict,
+    payload: dict | None,
+    files: list[tuple[str, tuple[str, bytes, str]]] | None,
+    *,
+    timeout: float,
+    maximum_bytes: int,
+    stopped: threading.Event,
+    http_client: httpx2.Client | None,
+    proxy: str | None,
 ) -> HTTPResult:
     """外层先登记请求，再发一次；显式关闭 SDK 重试和重定向，收费请求不静默重复。"""
     if stopped.is_set():
@@ -64,27 +121,41 @@ def post_json(
     extra_headers = {
         key: value for key, value in headers.items() if key.lower() != "authorization"
     }
-    if (
-        url.endswith("/chat/completions")
-        and urlsplit(url).hostname == "api.deepseek.com"
-    ):
+    if files:
+        # SDK 依据该头把字段序列化为表单，并由 httpx 生成带 boundary 的最终头。
+        extra_headers["Content-Type"] = "multipart/form-data"
+    if url == "https://api.deepseek.com/v1/chat/completions":
         base_url, path = "https://api.deepseek.com/v1", "/chat/completions"
+    elif url in OPENAI_ENDPOINTS:
+        base_url, path = "https://api.openai.com/v1", OPENAI_ENDPOINTS[url]
     elif url in IMAGE_ENDPOINTS:
         base_url, path = "https://chatgpt.com/backend-api/codex", IMAGE_ENDPOINTS[url]
     else:
         raise TransportError("INVALID_API_URL")
     # SDK 的 close() 也会关闭传入的传输，因此外部注入时由调用方管理生命周期。
-    client = OpenAI(
-        api_key=authorization[7:],
-        base_url=base_url,
-        default_headers=extra_headers,
-        max_retries=0,
-        timeout=timeout,
-        http_client=http_client or DefaultHttpx2Client(follow_redirects=False),
-    )
+    owned = http_client is None
+    try:
+        if owned:
+            # 代理只按显式配置注入，未配置时沿用环境变量等既有行为。
+            http_client = DefaultHttpx2Client(
+                follow_redirects=False, **({"proxy": proxy} if proxy else {})
+            )
+        client = OpenAI(
+            api_key=authorization[7:],
+            base_url=base_url,
+            default_headers=extra_headers,
+            max_retries=0,
+            timeout=timeout,
+            http_client=http_client,
+        )
+    except (ValueError, TypeError, ImportError):
+        # 非法或不支持的代理地址等构造错误属于本地配置问题，不能卡住任务状态。
+        raise TransportError("INVALID_HTTP_CLIENT") from None
     try:
         try:
-            response = client.post(path, cast_to=httpx2.Response, body=payload)
+            response = client.post(
+                path, cast_to=httpx2.Response, body=payload, files=files or None
+            )
         except APIStatusError as error:
             response = error.response
         data = response.content
@@ -110,5 +181,5 @@ def post_json(
     except APIConnectionError:
         raise TransportError("NETWORK_UNCERTAIN") from None
     finally:
-        if http_client is None:
+        if owned:
             client.close()
