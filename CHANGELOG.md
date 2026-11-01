@@ -5,7 +5,7 @@
 ## 2026-11-01 Codex 密钥改为内联配置
 
 - 两把 OpenAI Key 从独立文件改为直接写在 `config/codex.toml` 的 `openai_text_api_key`（外审/润色）与 `openai_image_api_key`（生图）；删除 `openai_key_file` 配置项与文件读取路径，不保留双通道。`config*` 已被 gitignore，Key 仍不进入提交、日志、异常文本、PG 存档或回执。
-- 所选后端为 openai 但对应 Key 为空时，插件加载即报错并指出字段名；测试改为断言内联 Key 生效、缺 Key 报错、repr 与日志不含 Key。
+- 所选后端为 openai 但对应 Key 为空时只在日志告警并指出字段名，插件照常加载，`/codex check` 与额度提醒不受影响；真正调用 API 时才在消费确认前报明确错误。测试改为断言内联 Key 生效、缺 Key 仅告警、repr 与日志不含 Key，以及默认订阅 + DeepSeek 不配任何 OpenAI Key 也能正常加载。
 
 ## 2026-11-01 Codex check 始终查询订阅额度
 

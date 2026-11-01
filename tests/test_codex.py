@@ -179,8 +179,8 @@ class InlineKeyTests(unittest.TestCase):
             self.assertNotIn("fixture-text", line)
             self.assertNotIn("fixture-image", line)
 
-    def test_missing_inline_key_names_the_config_field(self):
-        """缺 Key 时直接指出配置字段，不把加载失败说成文件问题。"""
+    def test_missing_inline_key_only_warns_so_check_stays_available(self):
+        """缺 Key 不能挡住插件加载：check 与额度提醒要照常可用，告警指出字段名。"""
         for values, field in (
             (
                 {"image_backend": "openai", "openai_text_api_key": "fixture-text"},
@@ -191,11 +191,23 @@ class InlineKeyTests(unittest.TestCase):
                 "openai_text_api_key",
             ),
         ):
-            with self.subTest(field=field), self.assertRaises(ValueError) as failure:
-                self.load(**values)
-            self.assertIn(field, str(failure.exception))
-            self.assertNotIn("fixture", str(failure.exception))
-            self.assertNotIn(".toml", str(failure.exception))
+            with self.subTest(field=field):
+                settings, emitted = self.load(**values)
+                self.assertEqual(getattr(settings, field), "")
+                self.assertTrue(any(field in line for line in emitted))
+                for line in emitted:
+                    self.assertNotIn("fixture-text", line)
+                    self.assertNotIn("fixture-image", line)
+
+    def test_subscription_defaults_load_without_any_openai_key(self):
+        """默认订阅 + DeepSeek 不需要 OpenAI Key，加载不应报错或告警。"""
+        settings, emitted = self.load()
+        self.assertEqual(
+            (settings.image_backend, settings.text_backend), ("codex", "deepseek")
+        )
+        self.assertEqual(settings.openai_text_api_key, "")
+        self.assertEqual(settings.openai_image_api_key, "")
+        self.assertEqual(emitted, [])
 
 
 class CommandTests(unittest.TestCase):

@@ -800,7 +800,7 @@ def on_load() -> None:
     }.items():
         image[name] = cfg.get_value(name) or default
     if any(not isinstance(value, str) for value in image.values()):
-        raise ValueError("codex：生图连接、密钥文件与模型配置必须为字符串")
+        raise ValueError("codex：生图连接、密钥与模型配置必须为字符串")
     if image["image_backend"] not in {"codex", "openai"} or image[
         "text_backend"
     ] not in {"deepseek", "openai"}:
@@ -841,14 +841,17 @@ def on_load() -> None:
             raise ValueError("codex：openai_proxy 需为带端口的 HTTP(S) 代理地址")
     image["openai_proxy"] = proxy
     image["deepseek_api_key"] = image["deepseek_api_key"].strip()
-    # 两把 Key 直接来自本地配置；所选后端缺 Key 时在加载阶段就报出字段名。
+    # 两把 Key 直接来自本地配置。缺 Key 只告警：check 与额度提醒必须继续可用，
+    # 真正调用 API 时由生图服务在消费确认前报出具体字段。
     image["openai_text_api_key"] = image["openai_text_api_key"].strip()
     image["openai_image_api_key"] = image["openai_image_api_key"].strip()
     if image["text_backend"] == "openai" and not image["openai_text_api_key"]:
-        raise ValueError("codex：text_backend 为 openai 时必须配置 openai_text_api_key")
+        warn(
+            "codex：text_backend 为 openai 但 openai_text_api_key 未配置，提示词处理不可用"
+        )
     if image["image_backend"] == "openai" and not image["openai_image_api_key"]:
-        raise ValueError(
-            "codex：image_backend 为 openai 时必须配置 openai_image_api_key"
+        warn(
+            "codex：image_backend 为 openai 但 openai_image_api_key 未配置，生图不可用"
         )
     timeout = cfg.get_value("timeout_seconds")
     cooldown = cfg.get_value("cooldown_seconds")

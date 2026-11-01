@@ -34,32 +34,37 @@ class ArchiveError(RuntimeError):
     """固定的用户可见错误；不透传可能包含连接信息的驱动异常。"""
 
 
-_SECRET_KEYS = {
-    "access",
-    "refresh",
-    "token",
-    "dsn",
-    "authorization",
+# 只按整名匹配的短字段；其余凭据字段按下面的片段识别。
+_SECRET_KEYS = {"access", "refresh"}
+# 名称含这些片段即视为凭据，避免新增内联密钥字段（如 openai_text_api_key）被顺手存档。
+_SECRET_MARKERS = (
     "api_key",
+    "api-key",
     "apikey",
-    "access_token",
-    "refresh_token",
+    "token",
+    "secret",
     "password",
-    "connectionstring",
-    "connection_string",
-    "pg_connection",
     "cookie",
-    "set-cookie",
-    "x-api-key",
-    "x-dsh-auth-token",
-}
+    "authorization",
+    "connection_string",
+    "connectionstring",
+    "pg_connection",
+    "dsn",
+)
+
+
+def _is_secret_key(name: str) -> bool:
+    lowered = str(name).lower()
+    return lowered in _SECRET_KEYS or any(
+        marker in lowered for marker in _SECRET_MARKERS
+    )
 
 
 def sanitized(value):
     """递归剔除认证字段；正文、工具裁决和 usage 按用户要求原样归档。"""
     if isinstance(value, dict):
         return {
-            key: "[已剔除]" if str(key).lower() in _SECRET_KEYS else sanitized(item)
+            key: "[已剔除]" if _is_secret_key(key) else sanitized(item)
             for key, item in value.items()
         }
     if isinstance(value, list):

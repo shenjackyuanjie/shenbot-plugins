@@ -54,7 +54,7 @@ TYPE_HINTS = {
     ),
     "authentication_error": (
         "上游身份认证失败",
-        "检查对应服务凭据；订阅模式在 DSH 中刷新登录，API 模式检查本机密钥文件。",
+        "检查对应服务凭据；订阅模式在 DSH 中刷新登录，API 模式检查 openai_text_api_key / openai_image_api_key。",
     ),
     "permission_error": (
         "当前账号没有访问权限",

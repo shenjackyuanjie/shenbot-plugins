@@ -23,10 +23,31 @@ from PIL import Image
 from psycopg import sql
 
 from plugins import codex
-from plugins.codex_support.archive import Archive, ArchiveError
+from plugins.codex_support.archive import Archive, ArchiveError, sanitized
 from plugins.codex_support.image_service import ImageError, ImageService, ImageSettings
 from plugins.codex_support.providers import Call
 from plugins.codex_support.transport import HTTPResult
+
+
+class SanitizeTests(unittest.TestCase):
+    def test_secret_like_field_names_are_removed_before_archiving(self):
+        """防止以后新增内联密钥字段被顺手写进请求存档或回执。"""
+        self.assertEqual(
+            sanitized(
+                {
+                    "openai_text_api_key": "fixture-text",
+                    "openai_image_api_key": "fixture-image",
+                    "nested": {"management_secret": "fixture-secret"},
+                    "prompt": "保留",
+                }
+            ),
+            {
+                "openai_text_api_key": "[已剔除]",
+                "openai_image_api_key": "[已剔除]",
+                "nested": {"management_secret": "[已剔除]"},
+                "prompt": "保留",
+            },
+        )
 
 
 @unittest.skipUnless(
