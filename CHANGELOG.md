@@ -2,6 +2,11 @@
 
 宿主版本对应 [shenbot_api.py](shenbot_api.py) 的 `__version__`；ICA/Tailchat API 与各插件的 `VERSION` 分别管理。
 
+## 2026-11-01 Codex 密钥改为内联配置
+
+- 两把 OpenAI Key 从独立文件改为直接写在 `config/codex.toml` 的 `openai_text_api_key`（外审/润色）与 `openai_image_api_key`（生图）；删除 `openai_key_file` 配置项与文件读取路径，不保留双通道。`config*` 已被 gitignore，Key 仍不进入提交、日志、异常文本、PG 存档或回执。
+- 所选后端为 openai 但对应 Key 为空时，插件加载即报错并指出字段名；测试改为断言内联 Key 生效、缺 Key 报错、repr 与日志不含 Key。
+
 ## 2026-11-01 Codex check 始终查询订阅额度
 
 - 修正 0.6.0 中「切到 API 后端就停止查询订阅额度」的行为：`/codex check` 在两种后端下都走原有订阅查询、缓存与冷却逻辑，输出与订阅模式一致；每两分钟的额度提醒也恢复只按 `alert_groups` 判断，不再看 `image_backend`。
@@ -11,7 +16,7 @@
 ## 2026-11-01 Codex 支持订阅 / OpenAI API 双后端
 
 - [codex](plugins/codex.py) **0.5.5 → 0.6.0**：新增 `image_backend`（codex/openai）与 `text_backend`（deepseek/openai），生图与文本外审/润色可分别切到 OpenAI 官方 API（独立计费）；默认值保持原订阅 + DeepSeek 行为。API 模式外审/润色用 gpt-6-luna 且 reasoning.effort=high，生图继续用 gpt-image-2.5-flare。
-- 新增 `openai_key_file`：两把用途独立的 Key（`openai_check_key` 外审/润色、`openai_image_key` 生图）只写本地被忽略的 TOML，插件启动时读取；Key 不进入日志、异常文本、PG 存档、回执与测试快照。新增 `openai_proxy` 支持显式 HTTP 代理（本机直连 api.openai.com 会超时），订阅额度查询链路不受影响。
+- 新增 `openai_text_api_key` 与 `openai_image_api_key`：两把用途独立的 Key 直接写在本地被忽略的 `config/codex.toml`，插件加载时读取并校验；Key 不进入日志、异常文本、PG 存档、回执与测试快照。新增 `openai_proxy` 支持显式 HTTP 代理（本机直连 api.openai.com 会超时），订阅额度查询链路不受影响。
 - API 模式的审核改用 Responses function 工具：严格解析唯一的 `pass`/`nsfw` function_call（arguments 为 JSON 字符串，不读 output_text），`parallel_tool_calls=false` 与本地严格校验都保留；direct 仍只前审一次，润色模式仍是前审 → 润色 → 后审。API 模式参数范围更窄：质量仅 auto/low/medium/high，尺寸宽高需能被 16 整除，创建或调整时直接拒绝。
 - `codex` schema 结构版本 4 → 5：新增 `jobs.execution_config`，任务创建时冻结后端、模型、端点与推理强度，确认与手动重试只按冻结值执行，配置热重载只影响新任务；外发前核对请求的 provider/模型/端点，防止串到另一条计费通道。历史任务保持空快照并沿用原 Codex/DeepSeek 路径。
 - `/codex check` 与额度提醒始终查询 Codex 订阅额度，不受生图/文本后端选择影响；API 费用在 OpenAI 控制台核对，插件不查询 API 余额。帮助文本说明模式切换、冻结语义与费用归属。补充 401 missing_scope、404 model_not_found 等错误说明，不自动重试或换模型。

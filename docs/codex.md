@@ -42,9 +42,9 @@ HTTP 请求拒绝重定向，避免向其他服务转发认证。支持系统和
 | `image_backend` | `codex`：Codex 订阅图片接口，消耗订阅额度 | `openai`：api.openai.com 图片接口，按 API 计费 |
 | `text_backend` | `deepseek`：DeepSeek，前审/润色/后审 | `openai`：gpt-6-luna，reasoning.effort=high |
 
-- 两把 Key 严格分用途：`openai_check_key` 只用于外审与润色，`openai_image_key` 只用于生图，互不借用。
-  它们写在本地 `openai_api_key.toml`（`.git/info/exclude` 已忽略），配置项 `openai_key_file` 只保存路径；
-  启动时读取一次，Key 不进入日志、异常文本、PG 存档或回执。
+- 两把 Key 严格分用途：`openai_text_api_key` 只用于外审与润色，`openai_image_api_key` 只用于生图，互不借用。
+  它们直接写在本地 `config/codex.toml`（`config*` 已被 gitignore），插件加载时读取；
+  Key 不进入日志、异常文本、PG 存档或回执。
 - 本机直连 api.openai.com 会超时，API 模式需要 `openai_proxy`（例如 `http://127.0.0.1:7897`）；
   留空则不使用代理。订阅额度查询链路不受该代理配置影响。
 - 切换后端只影响新任务：任务创建时把后端、模型、端点与推理强度冻结进 `jobs.execution_config`，
@@ -79,8 +79,9 @@ cooldown_seconds = 15
 image_backend = "codex"
 text_backend = "deepseek"
 codex_image_model = "gpt-image-2.5-flare"
-# API 模式专用；密钥只写本地文件路径，不要内联到配置。
-openai_key_file = "openai_api_key.toml"
+# API 模式专用：两把用途独立的 Key 直接写在本地配置里，不要提交。
+openai_text_api_key = "sk-...（外审与润色）"
+openai_image_api_key = "sk-...（生图）"
 openai_base_url = "https://api.openai.com/v1"
 openai_text_model = "gpt-6-luna"
 openai_image_model = "gpt-image-2.5-flare"

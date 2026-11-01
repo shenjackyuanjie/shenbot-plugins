@@ -138,28 +138,64 @@ class QueryTests(unittest.TestCase):
         self.assertEqual(error.exception.retry_after, 120)
 
 
-class KeyFileTests(unittest.TestCase):
-    def test_two_purpose_keys_load_separately_and_fail_without_echoing_content(self):
-        """防止两把 Key 互借，或密钥文件内容随解析异常进入日志。"""
-        with tempfile.TemporaryDirectory() as temp:
-            path = Path(temp, "openai_api_key.toml")
-            path.write_text(
-                'openai_check_key = "fixture-check"\nopenai_image_key = "fixture-image"\n',
-                encoding="utf-8",
-            )
-            self.assertEqual(
-                codex.load_openai_keys(str(path)), ("fixture-check", "fixture-image")
-            )
-            # 只配置一把时另一把保持为空，不能拿外审 Key 去生图。
-            path.write_text('openai_check_key = "fixture-check"\n', encoding="utf-8")
-            self.assertEqual(codex.load_openai_keys(str(path)), ("fixture-check", ""))
-            self.assertEqual(
-                codex.load_openai_keys(str(Path(temp, "missing.toml"))), ("", "")
-            )
-            path.write_text('openai_check_key = "fixture-secret\n', encoding="utf-8")
-            with self.assertRaises(ValueError) as failure:
-                codex.load_openai_keys(str(path))
-            self.assertNotIn("fixture-secret", str(failure.exception))
+class InlineKeyTests(unittest.TestCase):
+    def load(self, **values):
+        """按宿主配置形状加载一次插件，返回设置与本次日志。"""
+        values.setdefault("allowed_groups", [123456])
+        values.setdefault("timeout_seconds", 15)
+        values.setdefault("cooldown_seconds", 15)
+        values.setdefault("image_concurrency", 3)
+        values.setdefault("image_queue_limit", 5)
+        values.setdefault("alert_groups", [])
+        config = Mock()
+        config.get_value.side_effect = lambda name: values.get(name)
+        with (
+            patch.object(
+                codex.PLUGIN_MANIFEST, "config_unchecked", return_value=config
+            ),
+            patch.object(codex, "_schedule_poll"),
+            patch.object(codex, "_runtime", codex.Runtime(codex.Settings())),
+            patch.object(codex, "warn") as warn,
+            patch.object(codex, "info") as info,
+        ):
+            codex.on_load()
+            settings = codex._runtime.settings
+            emitted = [str(call) for call in warn.call_args_list + info.call_args_list]
+        return settings, emitted
+
+    def test_inline_keys_are_read_from_config_and_never_rendered(self):
+        """防止 Key 退回文件路径，或出现在 repr 与日志里。"""
+        settings, emitted = self.load(
+            image_backend="openai",
+            text_backend="openai",
+            openai_text_api_key="  fixture-text  ",
+            openai_image_api_key="fixture-image",
+        )
+        self.assertEqual(settings.openai_text_api_key, "fixture-text")
+        self.assertEqual(settings.openai_image_api_key, "fixture-image")
+        self.assertNotIn("fixture-text", repr(settings))
+        self.assertNotIn("fixture-image", repr(settings))
+        for line in emitted:
+            self.assertNotIn("fixture-text", line)
+            self.assertNotIn("fixture-image", line)
+
+    def test_missing_inline_key_names_the_config_field(self):
+        """缺 Key 时直接指出配置字段，不把加载失败说成文件问题。"""
+        for values, field in (
+            (
+                {"image_backend": "openai", "openai_text_api_key": "fixture-text"},
+                "openai_image_api_key",
+            ),
+            (
+                {"text_backend": "openai", "openai_image_api_key": "fixture-image"},
+                "openai_text_api_key",
+            ),
+        ):
+            with self.subTest(field=field), self.assertRaises(ValueError) as failure:
+                self.load(**values)
+            self.assertIn(field, str(failure.exception))
+            self.assertNotIn("fixture", str(failure.exception))
+            self.assertNotIn(".toml", str(failure.exception))
 
 
 class CommandTests(unittest.TestCase):

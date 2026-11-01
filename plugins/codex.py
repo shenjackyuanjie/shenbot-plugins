@@ -41,8 +41,6 @@ USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
 MAX_FILE_BYTES = 4 * 1024 * 1024
 MAX_RESPONSE_BYTES = 1024 * 1024
 DISPLAY_ZONE = timezone(timedelta(hours=8))
-# 两把用途独立的 OpenAI API Key 只放在这个本地文件，配置项仅记录路径。
-DEFAULT_OPENAI_KEY_FILE = "openai_api_key.toml"
 LOGIN_HELP = "请启动 DSH，在「设置 → Codex 订阅」刷新额度或重新登录后再试。"
 HELP_TEXT = (
     "Codex 帮助\n"
@@ -149,38 +147,6 @@ def _split_image_options(parts: list[str]) -> tuple[dict[str, str], str, str | N
     return options, " ".join(rest).strip(), None
 
 
-def load_openai_keys(path: str) -> tuple[str, str]:
-    """读取外审/润色与生图两把独立 Key；文件缺失等同未配置，内容不回显。
-
-    相对路径按插件所在仓库根解析；解析失败只报固定文案，不把文件内容或
-    解析异常带进异常文本，避免 Key 随错误一起进入日志与群聊。
-    """
-    if not path.strip():
-        return "", ""
-    source = Path(path).expanduser()
-    if not source.is_absolute():
-        source = Path(__file__).resolve().parent.parent / source
-    if not source.is_file():
-        return "", ""
-    try:
-        import tomllib
-    except ModuleNotFoundError:  # 宿主可能仍在 3.10，依赖里已有 tomli
-        import tomli as tomllib
-
-    try:
-        with source.open("rb") as file:
-            parsed = tomllib.load(file)
-    except (OSError, ValueError):
-        raise ValueError("codex：OpenAI 密钥文件无法解析，请检查 TOML 格式。") from None
-    keys = []
-    for name in ("openai_check_key", "openai_image_key"):
-        value = parsed.get(name, "")
-        if not isinstance(value, str):
-            raise TypeError(f"codex：密钥文件字段 {name} 必须为字符串。")
-        keys.append(value.strip())
-    return keys[0], keys[1]
-
-
 PLUGIN_MANIFEST = PluginManifest(
     plugin_id="codex",
     name="Codex 订阅与生图",
@@ -202,8 +168,9 @@ PLUGIN_MANIFEST = PluginManifest(
             image_backend="codex",
             text_backend="deepseek",
             codex_image_model="gpt-image-2.5-flare",
-            # 密钥文件只记录路径，两把 Key 在插件加载时读取。
-            openai_key_file=DEFAULT_OPENAI_KEY_FILE,
+            # 两把用途独立的 Key 直接写在本地被忽略配置里，不进入提交与日志。
+            openai_text_api_key="",
+            openai_image_api_key="",
             openai_base_url="https://api.openai.com/v1",
             openai_text_model="gpt-6-luna",
             openai_image_model="gpt-image-2.5-flare",
@@ -240,8 +207,7 @@ class Settings:
     image_backend: str = "codex"
     text_backend: str = "deepseek"
     codex_image_model: str = "gpt-image-2.5-flare"
-    openai_key_file: str = DEFAULT_OPENAI_KEY_FILE
-    # 运行期从密钥文件读入，只用于请求头，不参与 repr、日志或存档。
+    # 只用于请求头，不参与 repr、日志或存档。
     openai_text_api_key: str = field(default="", repr=False)
     openai_image_api_key: str = field(default="", repr=False)
     openai_base_url: str = "https://api.openai.com/v1"
@@ -824,7 +790,8 @@ def on_load() -> None:
         "image_backend": "codex",
         "text_backend": "deepseek",
         "codex_image_model": "gpt-image-2.5-flare",
-        "openai_key_file": DEFAULT_OPENAI_KEY_FILE,
+        "openai_text_api_key": "",
+        "openai_image_api_key": "",
         "openai_base_url": "https://api.openai.com/v1",
         "openai_text_model": "gpt-6-luna",
         "openai_image_model": "gpt-image-2.5-flare",
@@ -874,14 +841,15 @@ def on_load() -> None:
             raise ValueError("codex：openai_proxy 需为带端口的 HTTP(S) 代理地址")
     image["openai_proxy"] = proxy
     image["deepseek_api_key"] = image["deepseek_api_key"].strip()
-    # 两把 Key 只在这里读一次；缺失时保持空串，由使用方给出明确错误。
-    check_key, image_key = load_openai_keys(image["openai_key_file"])
-    image["openai_text_api_key"] = check_key
-    image["openai_image_api_key"] = image_key
-    if image["text_backend"] == "openai" and not check_key:
-        warn("codex：OpenAI 外审/润色 Key 未配置，API 文本后端的审核与润色不可用")
-    if image["image_backend"] == "openai" and not image_key:
-        warn("codex：OpenAI 生图 Key 未配置，API 图片后端不可用")
+    # 两把 Key 直接来自本地配置；所选后端缺 Key 时在加载阶段就报出字段名。
+    image["openai_text_api_key"] = image["openai_text_api_key"].strip()
+    image["openai_image_api_key"] = image["openai_image_api_key"].strip()
+    if image["text_backend"] == "openai" and not image["openai_text_api_key"]:
+        raise ValueError("codex：text_backend 为 openai 时必须配置 openai_text_api_key")
+    if image["image_backend"] == "openai" and not image["openai_image_api_key"]:
+        raise ValueError(
+            "codex：image_backend 为 openai 时必须配置 openai_image_api_key"
+        )
     timeout = cfg.get_value("timeout_seconds")
     cooldown = cfg.get_value("cooldown_seconds")
     if not isinstance(home, str):

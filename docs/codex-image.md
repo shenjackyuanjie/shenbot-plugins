@@ -208,22 +208,16 @@ openai_base_url = "https://api.openai.com/v1"
 openai_text_model = "gpt-6-luna"
 openai_image_model = "gpt-image-2.5-flare"
 openai_reasoning_effort = "high"
-# 只记录密钥文件路径；两把 Key 写在文件里，插件启动时读取。
-openai_key_file = "openai_api_key.toml"
+# 两把用途独立的 Key 直接写在本地配置里（config* 已被 gitignore），插件加载时读取。
+openai_text_api_key = "sk-...（外审与润色专用，不提交）"
+openai_image_api_key = "sk-...（生图专用，不提交）"
 # 本机直连 api.openai.com 会超时，按需配置 HTTP 代理；留空则不用代理。
 openai_proxy = "http://127.0.0.1:7897"
 ~~~
 
-密钥文件（已被 `.git/info/exclude` 忽略）只放两把用途独立的 Key，不使用内联配置：
-
-~~~toml
-openai_check_key = "sk-...（外审与润色专用，不提交）"
-openai_image_key = "sk-...（生图专用，不提交）"
-~~~
-
-相对路径按插件所在仓库根解析，建议直接写绝对路径。文件缺失等同未配置：插件照常加载，
-执行到 API 后端时给出“尚未配置 Key”的明确提示；Key 只进入请求头，不进入日志、异常文本、
-PG 存档、回执或测试快照。缺少连接时，生图命令会明确提示不可用，其他额度查询功能不受影响。
+Key 只进入请求头，不进入日志、异常文本、PG 存档、回执或测试快照。所选后端缺 Key 时插件加载即失败，
+错误信息直接指出配置字段名（`openai_text_api_key` / `openai_image_api_key`），不会退化成运行时模糊报错。
+缺少连接时，生图命令会明确提示不可用，其他额度查询功能不受影响。
 
 
 普通测试不读取真实连接。显式执行 PG 业务验证时，在插件仓库中运行：

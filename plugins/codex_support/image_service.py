@@ -314,7 +314,7 @@ class ImageService:
             execution["image_backend"] == "openai"
             and not self.settings.openai_image_api_key
         ):
-            raise ImageError("尚未配置 OpenAI 图片专用 Key，生图功能不可用。")
+            raise ImageError("尚未配置 openai_image_api_key，生图功能不可用。")
         images = reference_images(client, msg)
         archive = self.archive
         # 缺省项一律按 auto 补齐：预览展示的参数就是确认后真正发给上游的参数。
@@ -428,11 +428,11 @@ class ImageService:
     def _text_key(self, execution: dict) -> str:
         """文本和图片密钥不互借，包括其中一把尚未配置的情况。"""
         if execution.get("text_backend", "deepseek") == "openai":
-            key, name = self.settings.openai_text_api_key, "OpenAI 审核/润色专用"
+            key, name = self.settings.openai_text_api_key, "openai_text_api_key"
         else:
-            key, name = self.settings.deepseek_api_key, "DeepSeek"
+            key, name = self.settings.deepseek_api_key, "deepseek_api_key"
         if not key:
-            raise ImageError(f"尚未配置 {name} Key，提示词处理不可用。")
+            raise ImageError(f"尚未配置 {name}，提示词处理不可用。")
         return key
 
     def _receipt(self, client, msg, text: str, short: str) -> None:
@@ -460,7 +460,7 @@ class ImageService:
         if execution.get("image_backend", "codex") == "openai":
             if not self.settings.openai_image_api_key:
                 raise ImageError(
-                    "尚未配置 OpenAI 图片专用 Key；未消费确认，请配置后重试。"
+                    "尚未配置 openai_image_api_key；未消费确认，请在配置里填写后重试。"
                 )
         else:
             login = self.login_provider()
