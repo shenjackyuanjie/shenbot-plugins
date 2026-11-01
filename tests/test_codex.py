@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import calendar
 import io
 import json
 import sys
@@ -14,6 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, PropertyMock, patch
+from urllib.parse import parse_qs
 
 import yaml
 
@@ -263,22 +265,45 @@ class UsageTests(unittest.TestCase):
         self.assertLessEqual(len(text.splitlines()), 5)
         self.assertNotIn("fixture-usage", text)
 
-        # 非 usd 币种显示原币种代码，且非法金额不能被当成 0。
-        euro = codex.format_openai_costs(
-            {
-                "data": [
-                    {
-                        "start_time": NOW,
-                        "results": [{"amount": {"value": "0.12", "currency": "eur"}}],
-                    }
-                ]
-            }
-        )
-        self.assertIn("EUR 0.12", euro)
+        # 非法金额不能被当成 0。
         with self.assertRaises(codex.UsageError):
             codex.format_openai_costs(
                 {"data": [{"results": [{"amount": {"value": "not-a-number"}}]}]}
             )
+
+    def test_cross_currency_limit_does_not_invent_remaining(self):
+        """跨币种不能相减：只并列展示上限与已花费，同币种才给「剩余」。"""
+        costs = {
+            "data": [
+                {
+                    "start_time": NOW,
+                    "results": [{"amount": {"value": "0.12", "currency": "eur"}}],
+                }
+            ]
+        }
+        mixed = codex.format_openai_costs(costs, spend_limit=(100.0, "USD"))
+        self.assertIn("本月上限 $100.00", mixed)
+        self.assertIn("已花费估算 EUR 0.12", mixed)
+        self.assertNotIn("按上限剩余", mixed)
+
+        same = codex.format_openai_costs(costs, spend_limit=(100.0, "EUR"))
+        self.assertIn("按上限剩余（估算）EUR 99.88", same)
+
+    def test_month_window_starts_at_utc_month_and_caps_buckets(self):
+        """月初切换、闰年 2 月与分桶上限，决定查询窗口是否正确。"""
+        for label, moment, expected, days in (
+            ("月初当天", (2026, 12, 1, 0, 30), (2026, 12, 1), 1),
+            ("跨月最后一天", (2026, 12, 31, 23, 30), (2026, 12, 1), 31),
+            ("闰年 2 月 29 日", (2024, 2, 29, 12, 0), (2024, 2, 1), 29),
+        ):
+            now = calendar.timegm((*moment, 0, 0, 0, 0))
+            started = calendar.timegm((*expected, 0, 0, 0, 0, 0))
+            query = parse_qs(codex._cost_query(now))
+            with self.subTest(case=label):
+                self.assertEqual(codex._month_start(now), started)
+                self.assertEqual(int(query["start_time"][0]), started)
+                self.assertEqual(int(query["limit"][0]), days)
+                self.assertLessEqual(int(query["limit"][0]), 180)
 
     def test_monthly_limit_failures_do_not_hide_spend(self):
         """上限缺权限或其他失败只追加一行，已花费结果必须保留。"""

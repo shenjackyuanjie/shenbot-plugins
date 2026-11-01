@@ -750,12 +750,15 @@ def format_openai_costs(
     lines = ["OpenAI API 用量（本月至今，已花费估算，不是余额）"]
     if spend_limit is not None:
         limit, limit_currency = spend_limit
-        remaining = max(limit - total, 0.0)
-        lines.append(
-            f"本月上限 {_money(limit, limit_currency)} / "
-            f"已花费估算 {_money(total, currency)} / "
-            f"按上限剩余（估算）{_money(remaining, limit_currency)}"
-        )
+        parts = [
+            f"本月上限 {_money(limit, limit_currency)}",
+            f"已花费估算 {_money(total, currency)}",
+        ]
+        # 只有同一币种才能相减；跨币种并列展示金额，不给出「剩余」。
+        if (limit_currency or "usd").upper() == (currency or "usd").upper():
+            remaining = max(limit - total, 0.0)
+            parts.append(f"按上限剩余（估算）{_money(remaining, limit_currency)}")
+        lines.append(" / ".join(parts))
     else:
         lines.append(f"合计：{_money(total, currency)}")
     spent = [(started, amount) for started, amount in days if amount > 0]
