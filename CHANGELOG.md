@@ -2,6 +2,15 @@
 
 宿主版本对应 [shenbot_api.py](shenbot_api.py) 的 `__version__`；ICA/Tailchat API 与各插件的 `VERSION` 分别管理。
 
+## 2026-11-01 Codex 支持订阅 / OpenAI API 双后端
+
+- [codex](plugins/codex.py) **0.5.5 → 0.6.0**：新增 `image_backend`（codex/openai）与 `text_backend`（deepseek/openai），生图与文本外审/润色可分别切到 OpenAI 官方 API（独立计费）；默认值保持原订阅 + DeepSeek 行为。API 模式外审/润色用 gpt-6-luna 且 reasoning.effort=high，生图继续用 gpt-image-2.5-flare。
+- 新增 `openai_key_file`：两把用途独立的 Key（`openai_check_key` 外审/润色、`openai_image_key` 生图）只写本地被忽略的 TOML，插件启动时读取；Key 不进入日志、异常文本、PG 存档、回执与测试快照。新增 `openai_proxy` 支持显式 HTTP 代理（本机直连 api.openai.com 会超时），订阅额度查询链路不受影响。
+- API 模式的审核改用 Responses function 工具：严格解析唯一的 `pass`/`nsfw` function_call（arguments 为 JSON 字符串，不读 output_text），`parallel_tool_calls=false` 与本地严格校验都保留；direct 仍只前审一次，润色模式仍是前审 → 润色 → 后审。API 模式参数范围更窄：质量仅 auto/low/medium/high，尺寸宽高需能被 16 整除，创建或调整时直接拒绝。
+- `codex` schema 结构版本 4 → 5：新增 `jobs.execution_config`，任务创建时冻结后端、模型、端点与推理强度，确认与手动重试只按冻结值执行，配置热重载只影响新任务；外发前核对请求的 provider/模型/端点，防止串到另一条计费通道。历史任务保持空快照并沿用原 Codex/DeepSeek 路径。
+- `/codex check` 在 API 模式只显示当前后端，不查询订阅额度、也不冒充 API 余额；帮助文本说明模式切换、冻结语义与费用归属。补充 401 missing_scope、404 model_not_found 等错误说明，不自动重试或换模型。
+- 真实联调（low quality、共 2 次生图）：gpt-6-luna high 外审对普通描述返回 pass、对露骨描述返回 nsfw；gpt-image-2.5-flare 直出 1024x1024 与引用图改图均返回 PNG；两把 Key 分通道调用正常。
+
 ## 2026-11-01 Codex 直出只做一次前审
 
 - [codex](plugins/codex.py) **0.5.4 → 0.5.5**：`/codex direct` 不润色，只审核原始描述和参考图一次，通过后仍须手动确认；润色模式保留前审、润色、后审。

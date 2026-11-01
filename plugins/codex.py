@@ -1,4 +1,4 @@
-"""只读复用 DSH 当前 Codex 登录态；不登录、不刷新、不保存凭据。"""
+"""Codex 订阅查询及可切换订阅/OpenAI API 的图片任务；不刷新订阅凭据。"""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from decimal import Decimal, InvalidOperation
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 
 import yaml
 
@@ -32,7 +33,7 @@ if TYPE_CHECKING:
     from ica_typing import IcaClient, IcaNewMessage
     from shenbot_api import IcaConnectionState, IcaConnectionWatch
 
-VERSION = "0.5.5"
+VERSION = "0.6.0"
 POLL_SECONDS = 120
 THRESHOLD_STEP = 5
 COMMAND = "/codex"
@@ -40,10 +41,12 @@ USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
 MAX_FILE_BYTES = 4 * 1024 * 1024
 MAX_RESPONSE_BYTES = 1024 * 1024
 DISPLAY_ZONE = timezone(timedelta(hours=8))
+# 两把用途独立的 OpenAI API Key 只放在这个本地文件，配置项仅记录路径。
+DEFAULT_OPENAI_KEY_FILE = "openai_api_key.toml"
 LOGIN_HELP = "请启动 DSH，在「设置 → Codex 订阅」刷新额度或重新登录后再试。"
 HELP_TEXT = (
     "Codex 帮助\n"
-    "/codex check：查询 DSH 当前账号的套餐、剩余额度和重置时间。\n"
+    "/codex check：订阅模式查 DSH 额度；API 模式显示配置后端，不查询 API 余额。\n"
     "/codex 或 /codex help：显示本帮助，不联网，不占用查询冷却。\n"
     "/codex image <描述>：润色并审核后预览提示词，本人确认后生成图片；可引用图片改图。\n"
     "/codex image direct <描述>：跳过润色，直接按原描述生成。\n"
@@ -60,6 +63,8 @@ HELP_TEXT = (
 )
 IMAGE_HELP = (
     "Codex 生图帮助\n"
+    "后端由管理员配置：Codex 订阅或 OpenAI API（独立计费），任务预览显示并冻结所用后端。\n"
+    "不会自动换后端、换模型或重试；配置重载只影响新任务，旧任务沿用冻结后端。\n"
     "/codex image <描述>：先润色并做前后两次 NSFW 审核，展示提示词等待你确认。\n"
     "/codex image direct <描述>：跳过润色，只做一次前审，通过后等待确认并按原描述生成。\n"
     "引用图片时按改图处理，最多 5 张，按引用顺序一起作为参考；引用里没有图片会被拒绝。\n"
@@ -73,6 +78,7 @@ IMAGE_HELP = (
     "不会自动重试；超时、断线或成功响应解析失败等结果不确定的任务不能重试。\n"
     "参数可写在描述前后：--size 1024x1536（512–2048，或 auto）、"
     "--quality low/medium/high/xhigh/max、--background transparent/opaque，缺省均为 auto。\n"
+    "API 模式的质量仅 auto/low/medium/high，尺寸宽高需能被 16 整除；订阅模式仍支持 xhigh/max。\n"
     "auto 表示交给上游决定，不保证固定尺寸或比例。\n"
     "以上子命令都可以省略 image 前缀，例如 /codex confirm。"
 )
@@ -142,6 +148,38 @@ def _split_image_options(parts: list[str]) -> tuple[dict[str, str], str, str | N
     return options, " ".join(rest).strip(), None
 
 
+def load_openai_keys(path: str) -> tuple[str, str]:
+    """读取外审/润色与生图两把独立 Key；文件缺失等同未配置，内容不回显。
+
+    相对路径按插件所在仓库根解析；解析失败只报固定文案，不把文件内容或
+    解析异常带进异常文本，避免 Key 随错误一起进入日志与群聊。
+    """
+    if not path.strip():
+        return "", ""
+    source = Path(path).expanduser()
+    if not source.is_absolute():
+        source = Path(__file__).resolve().parent.parent / source
+    if not source.is_file():
+        return "", ""
+    try:
+        import tomllib
+    except ModuleNotFoundError:  # 宿主可能仍在 3.10，依赖里已有 tomli
+        import tomli as tomllib
+
+    try:
+        with source.open("rb") as file:
+            parsed = tomllib.load(file)
+    except (OSError, ValueError):
+        raise ValueError("codex：OpenAI 密钥文件无法解析，请检查 TOML 格式。") from None
+    keys = []
+    for name in ("openai_check_key", "openai_image_key"):
+        value = parsed.get(name, "")
+        if not isinstance(value, str):
+            raise TypeError(f"codex：密钥文件字段 {name} 必须为字符串。")
+        keys.append(value.strip())
+    return keys[0], keys[1]
+
+
 PLUGIN_MANIFEST = PluginManifest(
     plugin_id="codex",
     name="Codex 订阅与生图",
@@ -160,6 +198,17 @@ PLUGIN_MANIFEST = PluginManifest(
             deepseek_api_key="",
             deepseek_base_url="https://api.deepseek.com",
             deepseek_model="deepseek-flash",
+            image_backend="codex",
+            text_backend="deepseek",
+            codex_image_model="gpt-image-2.5-flare",
+            # 密钥文件只记录路径，两把 Key 在插件加载时读取。
+            openai_key_file=DEFAULT_OPENAI_KEY_FILE,
+            openai_base_url="https://api.openai.com/v1",
+            openai_text_model="gpt-6-luna",
+            openai_image_model="gpt-image-2.5-flare",
+            openai_reasoning_effort="high",
+            # 本机直连 api.openai.com 会超时，按需填写 HTTP 代理；留空则不使用代理。
+            openai_proxy="",
             # 留空时额度提醒沿用 allowed_groups；填写后只发这些群。
             alert_groups=[],
             image_concurrency=3,
@@ -187,6 +236,18 @@ class Settings:
     deepseek_api_key: str = field(default="", repr=False)
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-flash"
+    image_backend: str = "codex"
+    text_backend: str = "deepseek"
+    codex_image_model: str = "gpt-image-2.5-flare"
+    openai_key_file: str = DEFAULT_OPENAI_KEY_FILE
+    # 运行期从密钥文件读入，只用于请求头，不参与 repr、日志或存档。
+    openai_text_api_key: str = field(default="", repr=False)
+    openai_image_api_key: str = field(default="", repr=False)
+    openai_base_url: str = "https://api.openai.com/v1"
+    openai_text_model: str = "gpt-6-luna"
+    openai_image_model: str = "gpt-image-2.5-flare"
+    openai_reasoning_effort: str = "high"
+    openai_proxy: str = field(default="", repr=False)
     alert_groups: frozenset[int] = frozenset()
     # 生图只有收费生成需要排队；审核与润色不占这两个名额。
     image_concurrency: int = 3
@@ -705,7 +766,11 @@ def _start_poll(state: Runtime) -> None:
 
 def _schedule_poll(state: Runtime, delay: int = POLL_SECONDS) -> None:
     with state.lock:
-        if state.stopped or not state.settings.alert_groups:
+        if (
+            state.stopped
+            or not state.settings.alert_groups
+            or state.settings.image_backend == "openai"
+        ):
             return
 
     def tick() -> None:
@@ -758,8 +823,68 @@ def on_load() -> None:
         or "https://api.deepseek.com",
         "deepseek_model": cfg.get_value("deepseek_model") or "deepseek-flash",
     }
+    for name, default in {
+        "image_backend": "codex",
+        "text_backend": "deepseek",
+        "codex_image_model": "gpt-image-2.5-flare",
+        "openai_key_file": DEFAULT_OPENAI_KEY_FILE,
+        "openai_base_url": "https://api.openai.com/v1",
+        "openai_text_model": "gpt-6-luna",
+        "openai_image_model": "gpt-image-2.5-flare",
+        "openai_reasoning_effort": "high",
+        "openai_proxy": "",
+    }.items():
+        image[name] = cfg.get_value(name) or default
     if any(not isinstance(value, str) for value in image.values()):
-        raise ValueError("codex：生图连接、密钥与模型配置必须为字符串")
+        raise ValueError("codex：生图连接、密钥文件与模型配置必须为字符串")
+    if image["image_backend"] not in {"codex", "openai"} or image[
+        "text_backend"
+    ] not in {"deepseek", "openai"}:
+        raise ValueError(
+            "codex：image_backend 需为 codex/openai，text_backend 需为 deepseek/openai"
+        )
+    if image["openai_base_url"].rstrip("/") not in {
+        "https://api.openai.com",
+        "https://api.openai.com/v1",
+    }:
+        raise ValueError("codex：OpenAI 端点仅支持官方 https://api.openai.com/v1")
+    if image["openai_reasoning_effort"] not in {
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+    }:
+        raise ValueError("codex：OpenAI reasoning effort 配置无效")
+    proxy = image["openai_proxy"].strip()
+    if proxy:
+        try:
+            parsed = urlsplit(proxy)
+            # SOCKS 需要额外依赖 socksio，未安装时会在运行期才失败，这里只接受 HTTP(S)。
+            valid_proxy = (
+                parsed.scheme in {"http", "https"}
+                and parsed.hostname
+                and not parsed.query
+                and not parsed.fragment
+                and (parsed.port or 0) > 0
+            )
+        except ValueError:
+            valid_proxy = False
+        if not valid_proxy:
+            # 代理地址可能带凭据，报错不带原值。
+            raise ValueError("codex：openai_proxy 需为带端口的 HTTP(S) 代理地址")
+    image["openai_proxy"] = proxy
+    image["deepseek_api_key"] = image["deepseek_api_key"].strip()
+    # 两把 Key 只在这里读一次；缺失时保持空串，由使用方给出明确错误。
+    check_key, image_key = load_openai_keys(image["openai_key_file"])
+    image["openai_text_api_key"] = check_key
+    image["openai_image_api_key"] = image_key
+    if image["text_backend"] == "openai" and not check_key:
+        warn("codex：OpenAI 外审/润色 Key 未配置，API 文本后端的审核与润色不可用")
+    if image["image_backend"] == "openai" and not image_key:
+        warn("codex：OpenAI 生图 Key 未配置，API 图片后端不可用")
     timeout = cfg.get_value("timeout_seconds")
     cooldown = cfg.get_value("cooldown_seconds")
     if not isinstance(home, str):
@@ -775,7 +900,7 @@ def on_load() -> None:
             home,
             timeout,
             cooldown,
-            **(image | {"deepseek_api_key": image["deepseek_api_key"].strip()}),
+            **image,
             alert_groups=frozenset(abs(group) for group in alerts),
             image_concurrency=concurrency,
             image_queue_limit=queue_limit,
@@ -857,6 +982,16 @@ def _image_worker(
         deepseek_api_key=state.settings.deepseek_api_key,
         deepseek_base_url=state.settings.deepseek_base_url,
         deepseek_model=state.settings.deepseek_model,
+        image_backend=state.settings.image_backend,
+        text_backend=state.settings.text_backend,
+        codex_image_model=state.settings.codex_image_model,
+        openai_text_api_key=state.settings.openai_text_api_key,
+        openai_image_api_key=state.settings.openai_image_api_key,
+        openai_base_url=state.settings.openai_base_url,
+        openai_text_model=state.settings.openai_text_model,
+        openai_image_model=state.settings.openai_image_model,
+        openai_reasoning_effort=state.settings.openai_reasoning_effort,
+        openai_proxy=state.settings.openai_proxy,
     )
     # 消息对象不携带机器人账号；归属绑定必须使用当前连接的 self_id。
     try:
@@ -1018,6 +1153,18 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
         return
     if command in ([COMMAND], [COMMAND, "help"]):
         _reply(state, msg, client, HELP_TEXT)
+        return
+    if state.settings.image_backend == "openai":
+        _reply(
+            state,
+            msg,
+            client,
+            f"当前图片后端：OpenAI API / {state.settings.openai_image_model}（独立计费）。\n"
+            f"文本后端：{state.settings.text_backend}（"
+            f"{'OpenAI API' if state.settings.text_backend == 'openai' else 'DeepSeek'}）。\n"
+            "API 模式不查询订阅额度，也不读取 API 余额；费用与账单请到 OpenAI 控制台核对。\n"
+            "Key 只保存在本机密钥文件，插件不回显、不代管额度。",
+        )
         return
     with state.lock:
         if state.stopped:

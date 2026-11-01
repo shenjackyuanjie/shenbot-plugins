@@ -3,8 +3,10 @@
 ## 当前实施边界
 
 群命令已接入：`/codex image` 完成审核、润色、预览确认、生成与原群回图，`direct` 跳过润色。
-生图只走订阅图片后端，不启动 DSH、不改 profile、不创建 DSH 会话，也不调用公共计费接口。
-额度查询与生图共用同一份白名单和插件配置。
+生图与文本审核有两条后端：Codex 订阅（默认）与 OpenAI 官方 API（独立计费），由管理员按部署选择。
+订阅模式不启动 DSH、不改 profile、不创建 DSH 会话，也不调用公共计费接口；API 模式全部请求走
+api.openai.com，外审/润色与生图各用一把专用 Key，不使用订阅额度。
+额度查询与生图共用同一份白名单和插件配置；配置热重载只影响新任务。
 
 ## 连接与数据边界
 
@@ -14,7 +16,7 @@
 
 正式 schema 固定为 codex，初始化只创建本模块的表；发现同名 schema 有未知数据时拒绝接管。
 迁移在事务和迁移锁内执行，不修改其他 schema，不创建扩展或提升数据库用户权限。
-当前结构版本为 4：版本 1 补建 `jobs.image_params`，版本 2 给 `job_assets` 加 `position` 并把主键扩成 `(job_id, role, position)`；版本 3 给任务与请求增加 `generation_attempt`，生成唯一索引改为 `(job_id, generation_attempt)`。历史请求默认属于首次尝试（0），不覆盖旧结果；生图服务首次使用时在迁移锁内自动升级。
+当前结构版本为 5：版本 1 补建 `jobs.image_params`，版本 2 给 `job_assets` 加 `position` 并把主键扩成 `(job_id, role, position)`；版本 3 给任务与请求增加 `generation_attempt`，生成唯一索引改为 `(job_id, generation_attempt)`；版本 4 增加 `jobs.execution_config`，冻结任务所用后端、模型、端点与推理强度。历史请求默认属于首次尝试（0），历史任务保持空快照并沿用旧后端，不借迁移套用当前全局配置；生图服务首次使用时在迁移锁内自动升级。
 现有依赖已经包含 psycopg、Pillow，无需再引入 ORM 或独立数据库服务。
 
 ## 归档内容
@@ -22,21 +24,34 @@
 | 表 | 内容 |
 | --- | --- |
 | schema_version | 本模块结构版本，重复初始化不覆盖数据 |
-| jobs | 命令来源、账号/群/发起者、原始及润色提示词、确认摘要、生成参数（尺寸/质量/背景）、有效期和任务状态 |
+| jobs | 命令来源、账号/群/发起者、原始及润色提示词、确认摘要、生成参数（尺寸/质量/背景）、冻结执行配置、有效期和任务状态 |
 | requests | 每次前审、润色、后审、生图及额度请求的阶段、模型、请求正文、响应、HTTP 状态、上游请求 ID、usage 和时间 |
 | assets | 实际图片 bytea、SHA-256、MIME、大小与尺寸，按摘要去重 |
 | job_assets | 任务与参考图（可多张，按引用顺序）、生成原图、QQ 发送副本之间的关联 |
 | events | 草稿就绪、确认、取消、回图及恢复等审计事件 |
 
 参考图与原图都保存二进制，不只记录本地路径或临时 CDN URL。备份 codex schema 时包含图片数据；
-目前不自动删除或清理存档，也不复制群历史。认证头、API Key、Token、Cookie 和数据库连接信息不属于归档内容。
+目前不自动删除或清理存档，也不复制群历史。认证头、API Key、Token、Cookie 和数据库连接信息不属于归档内容；
+`execution_config` 只冻结后端、模型、端点与推理强度这类非秘密字段，密钥始终按用途从当前配置读取，不进入任务快照。
+
+## 执行配置冻结
+
+任务创建时把 `image_backend`、`image_model`、`image_base_url`、`text_backend`、`text_model`、
+`text_base_url`、`text_reasoning_effort` 写入 `jobs.execution_config` 并与任务一起返回。
+确认与手动重试都只读这份快照，配置热重载不会把已建任务从 API 计费切回订阅额度，或换掉审核/生图模型。
+归档层在每次外发前核对请求的 provider、模型与端点必须与冻结值一致，重放同一来源也不会改写快照。
+空快照表示历史任务，继续沿用 Codex 与 DeepSeek 路径。
 大图可能明显增加数据库及备份体积，后续按真实用量决定是否增加保留策略，不提前搭建对象存储。
 
 ## 审核和确认的不变量
 
 - direct 只发一次前审；润色模式按前审、润色、后审执行，前后审相互独立。审核请求只提供 pass、nsfw 两个函数工具。
-- 使用 Chat Completions 的 tool_choice=required，并关闭思考模式；程序仍要求恰好一个合法工具调用。
-  多个调用、缺少调用、参数异常、截断或请求失败均不放行，不降级成 auto 或从正文推断通过。
+- DeepSeek 文本后端使用 Chat Completions 的 tool_choice=required，并关闭思考模式；OpenAI 文本后端使用
+  Responses 的 function 工具（`strict`、`parallel_tool_calls=false`、`reasoning.effort` 取冻结值）。
+  两种后端都要求恰好一个合法工具调用：多个调用、缺少调用、参数异常、截断或请求失败均不放行，
+  不降级成 auto，也不从 `output_text` 或正文推断通过（Responses 的 function_call 参数是 JSON 字符串）。
+- API 模式下本地审核被拒绝的任务仍然只能由宿主管理员手动强制重试，与订阅模式一致；生成本身被上游
+  内容审核拒绝时同样只允许管理员强制重试，任何后端都不会自动换模型或换计费模式重发。
 - 润色是中间的独立调用，不提供审核工具；实际执行的审核工具调用和归一化 decision 都进入 requests。
 - direct 跳过润色与后审，只审核原始描述和当前参考图；通过后展示草稿，仍需手动确认才生图。
 - 一条消息最多引用 5 张图片，全部按引用顺序存档并一起送审、一起作为改图参考；摘要列表同样按位置比较，顺序变了就不算同一份草稿。
@@ -89,6 +104,9 @@ HTTP/Socket.IO 受理仅记为 submitted，不能伪称 QQ 最终送达。
 | --quality | auto/low/medium/high/xhigh/max | 上游渲染质量档位 |
 | --background | auto/transparent/opaque | 需要透明背景时指定 |
 
+API 模式对上表取值额外限制：质量只接受 auto/low/medium/high（`xhigh`/`max` 会被上游按参数拒绝），
+尺寸宽高必须能被 16 整除；违反时在创建任务或调整参数阶段直接拒绝，不会等确认后才被上游拒。
+
 参数在创建任务时写入 `jobs.image_params`，预览展示的就是确认后发给上游的值。
 确认前用 `/codex image set <编号> --quality high` 调整，只合并给出的键、不接受描述文本；
 确认命令本身不带参数，一经确认便不能再改。重放同一来源不会改写已记录参数。
@@ -132,11 +150,14 @@ HTTP 错误不保证换一次就成功；401/403 应先处理登录或权限，4
 | slow_down | 请求速率增长过快；降低频率后手动操作 |
 | server_is_overloaded | 模型暂时过载；稍后手动操作 |
 | insufficient_quota / rate_limit_error | 分别提示余额/用量不足、频率限制；兼容旧版把 insufficient_quota 放在 code 的形式 |
-| invalid_api_key / model_not_found / unsupported_country_region_territory | 登录凭据、模型/资源和地区访问条件 |
+| invalid_api_key / missing_scope / model_not_found / unsupported_country_region_territory | 登录凭据、Key 用途配对、模型/资源和地区访问条件；missing_scope 会提示检查两把 Key 是否用错通道 |
 | invalid_prompt、invalid_image / invalid_image_format / invalid_base64_image 等图片错误 | 分别说明描述、格式、编码、地址、尺寸、色彩模式、文件大小/为空、下载或文件缺失等问题 |
 | 其他 / 未知错误 | 按 type 或 HTTP 状态提供一般说明，同时保留未知码与上游原文 |
 
 覆盖 HTTP 400、401、403、404、408、409、413、415、422、429、500、502、503、504 的常见说明，其他 5xx 使用服务端错误兜底。公共 API 的余额/组织/项目错误只在上游确实返回时解释，不能把订阅接口的 429 一律认作公共 API 欠费。
+
+API 模式的 401/403/404/429 与订阅模式一样只停止并给出手动操作建议：程序不重发、不换 Key、不换模型、不切回订阅。
+API 余额与账单在 OpenAI 控制台核对；`/codex check` 在 API 模式下不查询订阅额度，也不冒充 API 余额。
 
 当上游提供 moderation_details 时，显示公开类别 harassment / self-harm / sexual / violence 的中文名称，以及 moderation_stage=input/output/unknown。未知类别保留原名。旧订阅响应只有 message 中的 safety_violations=[...] 时只解析这个明确机器字段；没有字段就不猜。界面标为“上游标记”，不等同于程序确认用户内容有问题。
 
@@ -152,12 +173,16 @@ HTTP 错误不保证换一次就成功；401/403 应先处理登录或权限，4
 
 ## 模型调用
 
-| 阶段 | 模型 | 思考 | 工具 |
-| --- | --- | --- | --- |
-| 前置审核 | deepseek-flash | 关闭 | 仅 pass/nsfw，tool_choice=required |
-| 润色 | deepseek-flash | 开启，reasoning_effort=high | 无 |
-| 后置审核 | deepseek-flash | 关闭 | 仅 pass/nsfw，tool_choice=required |
-| 生图 | gpt-image-2.5-flare | — | 订阅图片接口，尺寸/质量/背景取任务冻结值 |
+| 阶段 | 订阅 + DeepSeek（默认） | OpenAI API（独立计费） |
+| --- | --- | --- |
+| 前置审核 | deepseek-flash，关闭思考，tool_choice=required | gpt-6-luna，reasoning.effort=high，Responses function 工具 |
+| 润色 | deepseek-flash，reasoning_effort=high | gpt-6-luna，reasoning.effort=high，max_output_tokens=10000 |
+| 后置审核 | deepseek-flash，关闭思考，tool_choice=required | gpt-6-luna，reasoning.effort=high，Responses function 工具 |
+| 生图 | gpt-image-2.5-flare，订阅图片接口 | gpt-image-2.5-flare，/images/generations 或 /images/edits |
+
+生图参数（尺寸/质量/背景）取任务冻结值，两种后端共用同一套命令与确认流程。
+API 模式的 Responses 回包里只有 `function_call` 与 reasoning 项，不依赖 `output_text`；
+文本 Key 不能调用图片接口，图片 Key 也不能调用 Responses，插件始终按用途取 Key，不互相借用。
 
 审核关闭思考是使用 required 的前提；润色使用 high 思考是为了让提示词更完整。
 direct 记录一次前审，润色模式分别记录前后审；任何一步失败、超时或裁决异常都停在生图之前。
@@ -173,9 +198,31 @@ pg_connection = "postgresql://...（本地保密，不提交）"
 deepseek_api_key = "..."
 deepseek_base_url = "https://api.deepseek.com"
 deepseek_model = "deepseek-flash"
+
+# 生图与文本后端：codex/deepseek 用订阅与 DeepSeek，openai 用官方 API（独立计费）。
+image_backend = "openai"
+text_backend = "openai"
+codex_image_model = "gpt-image-2.5-flare"
+openai_base_url = "https://api.openai.com/v1"
+openai_text_model = "gpt-6-luna"
+openai_image_model = "gpt-image-2.5-flare"
+openai_reasoning_effort = "high"
+# 只记录密钥文件路径；两把 Key 写在文件里，插件启动时读取。
+openai_key_file = "openai_api_key.toml"
+# 本机直连 api.openai.com 会超时，按需配置 HTTP 代理；留空则不用代理。
+openai_proxy = "http://127.0.0.1:7897"
 ~~~
 
-缺少密钥或连接时，生图命令会明确提示不可用，其他额度查询功能不受影响。
+密钥文件（已被 `.git/info/exclude` 忽略）只放两把用途独立的 Key，不使用内联配置：
+
+~~~toml
+openai_check_key = "sk-...（外审与润色专用，不提交）"
+openai_image_key = "sk-...（生图专用，不提交）"
+~~~
+
+相对路径按插件所在仓库根解析，建议直接写绝对路径。文件缺失等同未配置：插件照常加载，
+执行到 API 后端时给出“尚未配置 Key”的明确提示；Key 只进入请求头，不进入日志、异常文本、
+PG 存档、回执或测试快照。缺少连接时，生图命令会明确提示不可用，其他额度查询功能不受影响。
 
 
 普通测试不读取真实连接。显式执行 PG 业务验证时，在插件仓库中运行：

@@ -1,6 +1,6 @@
 # Codex 订阅查询
 
-插件：[codex.py](../plugins/codex.py)，版本 **0.4.0**。
+插件：[codex.py](../plugins/codex.py)，版本 **0.6.0**。
 
 在白名单群中发送完整命令 `/codex check`，查询 **DSH 当前选中的 Codex 账号**：
 
@@ -15,6 +15,9 @@
 
 私聊、其他群、Bot 自己的消息不响应查询或帮助。白名单群内的成员均可使用，不额外要求 Bot 管理员。
 
+当生图后端切到 OpenAI API 时，`/codex check` 不查询订阅额度，也不冒充 API 余额，只显示当前图片与
+文本后端；API 费用和账单到 OpenAI 控制台核对。订阅模式下 `/codex check` 的行为保持不变。
+
 ## 复用方式
 
 插件每次只读 DSH_HOME 下已有的 `.credentials.yaml`，按
@@ -28,6 +31,26 @@
 
 只投影套餐、额度和时间，不向群或日志发送邮箱、账号标识、认证头、原始响应和错误正文。
 HTTP 请求拒绝重定向，避免向其他服务转发认证。支持系统和环境中的 HTTPS 代理。
+
+## 生图与文本后端：订阅 / OpenAI API
+
+生图（`/codex image`）与文本外审/润色的后端由管理员配置，两条链路可以分别选择：
+
+| 配置 | 订阅模式（默认） | OpenAI API 模式 |
+| --- | --- | --- |
+| `image_backend` | `codex`：Codex 订阅图片接口，消耗订阅额度 | `openai`：api.openai.com 图片接口，按 API 计费 |
+| `text_backend` | `deepseek`：DeepSeek，前审/润色/后审 | `openai`：gpt-6-luna，reasoning.effort=high |
+
+- 两把 Key 严格分用途：`openai_check_key` 只用于外审与润色，`openai_image_key` 只用于生图，互不借用。
+  它们写在本地 `openai_api_key.toml`（`.git/info/exclude` 已忽略），配置项 `openai_key_file` 只保存路径；
+  启动时读取一次，Key 不进入日志、异常文本、PG 存档或回执。
+- 本机直连 api.openai.com 会超时，API 模式需要 `openai_proxy`（例如 `http://127.0.0.1:7897`）；
+  留空则不使用代理。订阅额度查询链路不受该代理配置影响。
+- 切换后端只影响新任务：任务创建时把后端、模型、端点与推理强度冻结进 `jobs.execution_config`，
+  确认和手动重试都按冻结值执行，重载配置不会让已建任务改走另一条计费通道。
+- 不做自动重试、自动换模型或自动换后端；上游 401/403/404/429 只停止并按中文错误说明给手动操作建议。
+  本地审核拒绝的任务在任何模式下都不能被普通用户强制重试。
+- API 模式的参数范围更窄：质量只接受 auto/low/medium/high，尺寸宽高需能被 16 整除，创建或调整时即拒绝。
 
 ## 配置
 
@@ -50,6 +73,18 @@ alert_groups = [123456789]
 dsh_home = "D:/path/to/existing-dsh-home"
 timeout_seconds = 15
 cooldown_seconds = 15
+
+# 生图 / 文本后端：codex|openai、deepseek|openai。
+image_backend = "codex"
+text_backend = "deepseek"
+codex_image_model = "gpt-image-2.5-flare"
+# API 模式专用；密钥只写本地文件路径，不要内联到配置。
+openai_key_file = "openai_api_key.toml"
+openai_base_url = "https://api.openai.com/v1"
+openai_text_model = "gpt-6-luna"
+openai_image_model = "gpt-image-2.5-flare"
+openai_reasoning_effort = "high"
+openai_proxy = "http://127.0.0.1:7897"
 ```
 
 修改后通过宿主重载 `codex` 插件。真实群号与本机路径只放本地、Git 忽略的配置，

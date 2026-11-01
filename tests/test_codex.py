@@ -138,6 +138,30 @@ class QueryTests(unittest.TestCase):
         self.assertEqual(error.exception.retry_after, 120)
 
 
+class KeyFileTests(unittest.TestCase):
+    def test_two_purpose_keys_load_separately_and_fail_without_echoing_content(self):
+        """防止两把 Key 互借，或密钥文件内容随解析异常进入日志。"""
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp, "openai_api_key.toml")
+            path.write_text(
+                'openai_check_key = "fixture-check"\nopenai_image_key = "fixture-image"\n',
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                codex.load_openai_keys(str(path)), ("fixture-check", "fixture-image")
+            )
+            # 只配置一把时另一把保持为空，不能拿外审 Key 去生图。
+            path.write_text('openai_check_key = "fixture-check"\n', encoding="utf-8")
+            self.assertEqual(codex.load_openai_keys(str(path)), ("fixture-check", ""))
+            self.assertEqual(
+                codex.load_openai_keys(str(Path(temp, "missing.toml"))), ("", "")
+            )
+            path.write_text('openai_check_key = "fixture-secret\n', encoding="utf-8")
+            with self.assertRaises(ValueError) as failure:
+                codex.load_openai_keys(str(path))
+            self.assertNotIn("fixture-secret", str(failure.exception))
+
+
 class CommandTests(unittest.TestCase):
     def setUp(self):
         self.state = codex.Runtime(codex.Settings(frozenset({123456})))
@@ -247,6 +271,20 @@ class CommandTests(unittest.TestCase):
             archive.cancel.assert_called_once_with(
                 archive.resolve_job.return_value["id"], (10001, -123456, 10003)
             )
+
+    def test_api_mode_check_reports_backend_without_querying_subscription(self):
+        """防止 API 计费模式把订阅额度查询结果冒充余额，或白跑一次查询。"""
+        settings = codex.Settings(frozenset({123456}), image_backend="openai")
+        with (
+            patch.object(codex, "_runtime", codex.Runtime(settings)),
+            patch.object(codex, "query_subscription") as query,
+        ):
+            codex.on_ica_message(self.msg, self.client)
+            query.assert_not_called()
+        self.thread.assert_not_called()
+        self.assertIn(
+            settings.openai_image_model, self.client.send_message.call_args.args[0]
+        )
 
     def test_help_is_local_during_query_and_respects_group_boundary(self):
         self.msg.content = "/codex help"
