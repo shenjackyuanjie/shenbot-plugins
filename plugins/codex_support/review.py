@@ -152,6 +152,22 @@ def completed_response_output(response: dict) -> list[dict]:
     return output
 
 
+def _has_text(item: dict) -> bool:
+    """判断输出项是否带非空正文；空的 output_text 不算用正文覆盖工具裁决。"""
+    text = item.get("text")
+    if isinstance(text, str) and text.strip():
+        return True
+    content = item.get("content")
+    if not isinstance(content, list):
+        return False
+    return any(
+        isinstance(part, dict)
+        and isinstance(part.get("text"), str)
+        and part["text"].strip()
+        for part in content
+    )
+
+
 def parse_responses_verdict(response: dict) -> Verdict:
     """只认唯一的 pass/nsfw function_call；正文、未知工具与多调用都不能裁决。
 
@@ -163,11 +179,12 @@ def parse_responses_verdict(response: dict) -> Verdict:
         calls = [item for item in output if item.get("type") == "function_call"]
         if len(calls) != 1:
             raise ReviewError("审核必须恰好调用一个裁决工具。")
-        # 出现裁决之外的正文时，无法确认模型没有用自然语言覆盖工具结论。
+        # 出现裁决之外的正文时，无法确认模型没有用自然语言覆盖工具结论；
+        # 只有空 output_text 的 message 项不构成覆盖。
         for item in output:
             if item.get("type") in {"reasoning", "function_call"}:
                 continue
-            if item.get("content") or item.get("text"):
+            if _has_text(item):
                 raise ReviewError("审核返回了裁决之外的内容。")
         call = calls[0]
         if not isinstance(call.get("call_id"), str) or not call["call_id"].strip():

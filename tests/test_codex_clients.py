@@ -20,7 +20,7 @@ from plugins.codex_support.providers import (
     openai_image_call,
     openai_text_call,
 )
-from plugins.codex_support.review import ReviewError
+from plugins.codex_support.review import ReviewError, parse_responses_verdict
 from plugins.codex_support.transport import HTTPResult, post_json, post_multipart
 
 
@@ -201,6 +201,59 @@ class SDKFlowTests(unittest.TestCase):
         )
         self.assertEqual(generate.files, ())
         self.assertNotIn("images", generate.payload)
+
+    def test_responses_review_accepts_real_shape_and_rejects_incomplete_output(self):
+        """防止上游多带字段或空正文被误杀，也防止截断回包被当成裁决放行。"""
+        reasoning = {
+            "type": "reasoning",
+            "summary": [],
+            "encrypted_content": "fixture-reasoning",
+        }
+        call = {
+            "type": "function_call",
+            "name": "pass",
+            "call_id": "fixture-call",
+            "arguments": json.dumps(
+                {"reason": "普通宠物场景", "confidence": 0.99}, ensure_ascii=False
+            ),
+        }
+        empty_message = {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": ""}],
+        }
+        verdict = parse_responses_verdict(
+            {
+                "status": "completed",
+                "output_text": "",
+                "output": [reasoning, call, empty_message],
+            }
+        )
+        self.assertEqual((verdict.decision, verdict.reason), ("pass", "普通宠物场景"))
+
+        # 有真实正文时仍拒绝：正文不能覆盖工具裁决。
+        with self.assertRaises(ReviewError):
+            parse_responses_verdict(
+                {
+                    "status": "completed",
+                    "output": [
+                        {
+                            **empty_message,
+                            "content": [{"type": "output_text", "text": "通过"}],
+                        },
+                        call,
+                    ],
+                }
+            )
+        # 截断回包必须拒绝，即使工具调用看起来完整。
+        with self.assertRaises(ReviewError):
+            parse_responses_verdict(
+                {
+                    "status": "incomplete",
+                    "incomplete_details": {"reason": "max_output_tokens"},
+                    "output": [call],
+                }
+            )
 
     def test_openai_api_rejections_are_explicit_and_never_retry_or_switch_model(self):
         """防止 API 模式把 401/429/模型不可用悄悄重发、换模型或给出模棱两可的回执。"""
