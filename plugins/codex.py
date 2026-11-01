@@ -46,7 +46,7 @@ DEFAULT_OPENAI_KEY_FILE = "openai_api_key.toml"
 LOGIN_HELP = "请启动 DSH，在「设置 → Codex 订阅」刷新额度或重新登录后再试。"
 HELP_TEXT = (
     "Codex 帮助\n"
-    "/codex check：订阅模式查 DSH 额度；API 模式显示配置后端，不查询 API 余额。\n"
+    "/codex check：查询 DSH 当前 Codex 订阅的套餐、剩余额度和重置时间，与生图后端无关。\n"
     "/codex 或 /codex help：显示本帮助，不联网，不占用查询冷却。\n"
     "/codex image <描述>：润色并审核后预览提示词，本人确认后生成图片；可引用图片改图。\n"
     "/codex image direct <描述>：跳过润色，直接按原描述生成。\n"
@@ -59,6 +59,7 @@ HELP_TEXT = (
     f"自动提醒：每 {POLL_SECONDS // 60} 分钟检查，剩余额度跨过 95%、90%、85%……0% 时提醒；"
     "只发配置的提醒群。\n"
     "reset 警告：剩余额度比上次上涨时报告；上次不为 0% 时提示“浪费了xx%额度😭”。\n"
+    "订阅额度与 OpenAI API 费用分开：API 计费在 OpenAI 控制台查看，本插件不查询。\n"
     "仅白名单群可用；登录失效请在 DSH 中刷新。"
 )
 IMAGE_HELP = (
@@ -766,11 +767,7 @@ def _start_poll(state: Runtime) -> None:
 
 def _schedule_poll(state: Runtime, delay: int = POLL_SECONDS) -> None:
     with state.lock:
-        if (
-            state.stopped
-            or not state.settings.alert_groups
-            or state.settings.image_backend == "openai"
-        ):
+        if state.stopped or not state.settings.alert_groups:
             return
 
     def tick() -> None:
@@ -1154,18 +1151,7 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
     if command in ([COMMAND], [COMMAND, "help"]):
         _reply(state, msg, client, HELP_TEXT)
         return
-    if state.settings.image_backend == "openai":
-        _reply(
-            state,
-            msg,
-            client,
-            f"当前图片后端：OpenAI API / {state.settings.openai_image_model}（独立计费）。\n"
-            f"文本后端：{state.settings.text_backend}（"
-            f"{'OpenAI API' if state.settings.text_backend == 'openai' else 'DeepSeek'}）。\n"
-            "API 模式不查询订阅额度，也不读取 API 余额；费用与账单请到 OpenAI 控制台核对。\n"
-            "Key 只保存在本机密钥文件，插件不回显、不代管额度。",
-        )
-        return
+    # 订阅额度查询只依赖 DSH 登录态，与生图/文本后端选择无关。
     with state.lock:
         if state.stopped:
             return

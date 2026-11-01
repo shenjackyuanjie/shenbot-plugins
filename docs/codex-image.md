@@ -157,7 +157,8 @@ HTTP 错误不保证换一次就成功；401/403 应先处理登录或权限，4
 覆盖 HTTP 400、401、403、404、408、409、413、415、422、429、500、502、503、504 的常见说明，其他 5xx 使用服务端错误兜底。公共 API 的余额/组织/项目错误只在上游确实返回时解释，不能把订阅接口的 429 一律认作公共 API 欠费。
 
 API 模式的 401/403/404/429 与订阅模式一样只停止并给出手动操作建议：程序不重发、不换 Key、不换模型、不切回订阅。
-API 余额与账单在 OpenAI 控制台核对；`/codex check` 在 API 模式下不查询订阅额度，也不冒充 API 余额。
+API 余额与账单在 OpenAI 控制台核对，插件不查询 API 余额；`/codex check` 仍然查询 Codex 订阅额度，
+与生图后端选择无关。
 
 当上游提供 moderation_details 时，显示公开类别 harassment / self-harm / sexual / violence 的中文名称，以及 moderation_stage=input/output/unknown。未知类别保留原名。旧订阅响应只有 message 中的 safety_violations=[...] 时只解析这个明确机器字段；没有字段就不猜。界面标为“上游标记”，不等同于程序确认用户内容有问题。
 

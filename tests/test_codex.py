@@ -272,19 +272,20 @@ class CommandTests(unittest.TestCase):
                 archive.resolve_job.return_value["id"], (10001, -123456, 10003)
             )
 
-    def test_api_mode_check_reports_backend_without_querying_subscription(self):
-        """防止 API 计费模式把订阅额度查询结果冒充余额，或白跑一次查询。"""
+    def test_check_queries_subscription_even_when_image_backend_is_openai(self):
+        """后端切换不影响订阅额度查询：API 费用不在这里查，但额度仍要能看。"""
         settings = codex.Settings(frozenset({123456}), image_backend="openai")
         with (
             patch.object(codex, "_runtime", codex.Runtime(settings)),
-            patch.object(codex, "query_subscription") as query,
+            patch.object(
+                codex, "query_subscription", return_value="虚构订阅额度"
+            ) as query,
         ):
             codex.on_ica_message(self.msg, self.client)
-            query.assert_not_called()
-        self.thread.assert_not_called()
-        self.assertIn(
-            settings.openai_image_model, self.client.send_message.call_args.args[0]
-        )
+            self.assertEqual(self.thread.call_args.kwargs["name"], "codex-query")
+            self.finish()
+            query.assert_called_once()
+        self.assertIn("虚构订阅额度", self.client.send_message.call_args.args[0])
 
     def test_help_is_local_during_query_and_respects_group_boundary(self):
         self.msg.content = "/codex help"
