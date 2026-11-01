@@ -14,6 +14,7 @@ import warnings
 from contextlib import contextmanager
 from io import BytesIO
 from pathlib import Path
+from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
 import psycopg
@@ -22,7 +23,7 @@ from psycopg import sql
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 # 一个任务最多引用几张图；命令层与存档层共用同一个上限。
 MAX_REFERENCES = 5
 # 操作范围：机器人账号、来源群、发起者；发起者为 None 表示管理员代办，不限发送者。
@@ -64,6 +65,83 @@ def sanitized(value):
     if isinstance(value, list):
         return [sanitized(item) for item in value]
     return value
+
+
+_EXECUTION_FIELDS = (
+    "image_backend",
+    "image_model",
+    "image_base_url",
+    "text_backend",
+    "text_model",
+    "text_base_url",
+    "text_reasoning_effort",
+)
+
+
+def _execution_snapshot(config: dict | None) -> dict:
+    """只冻结白名单字符串；认证字段与任意嵌套配置完全不进入任务快照。"""
+    if config is None or config == {}:
+        return {}
+    if not isinstance(config, dict):
+        raise ArchiveError("执行配置必须是完整的非秘密配置对象。")
+    snapshot = {key: config[key] for key in _EXECUTION_FIELDS if key in config}
+    if len(snapshot) != len(_EXECUTION_FIELDS) or any(
+        not isinstance(value, str) or not value or any(c.isspace() for c in value)
+        for value in snapshot.values()
+    ):
+        raise ArchiveError("执行配置缺少有效的后端、模型、端点或推理强度。")
+    if snapshot["image_backend"] not in {"openai", "codex"} or snapshot[
+        "text_backend"
+    ] not in {"openai", "deepseek"}:
+        raise ArchiveError("执行配置的模型后端不受支持。")
+    for key in ("image_base_url", "text_base_url"):
+        try:
+            endpoint = urlsplit(snapshot[key])
+            valid = (
+                endpoint.scheme in {"https", "http"}
+                and endpoint.hostname
+                and endpoint.username is None
+                and endpoint.password is None
+                and not endpoint.query
+                and not endpoint.fragment
+            )
+            _ = endpoint.port  # 同时拒绝格式错误的端口，异常不带入配置值。
+        except ValueError:
+            valid = False
+        if not valid:
+            raise ArchiveError("执行端点必须是无认证、查询参数和片段的 HTTP 地址。")
+        snapshot[key] = snapshot[key].rstrip("/")
+    if snapshot["text_backend"] == "deepseek":
+        snapshot["text_base_url"] = snapshot["text_base_url"].removesuffix("/v1")
+    return snapshot
+
+
+def _validate_execution_request(
+    config: dict, provider: str, stage: str, model: str, payload: dict
+) -> None:
+    """新任务的协议身份必须与冻结配置一致；历史空快照保留原路径。"""
+    if not config:
+        return
+    if stage == "generate":
+        prefix = "image"
+        suffix = (
+            "/images/edits"
+            if payload.get("reference_sha256")
+            else "/images/generations"
+        )
+    elif stage in {"pre_review", "rewrite", "post_review"}:
+        prefix = "text"
+        suffix = (
+            "/responses"
+            if config["text_backend"] == "openai"
+            else "/v1/chat/completions"
+        )
+    else:
+        raise ArchiveError("执行配置不允许此模型请求阶段。")
+    if provider != config[prefix + "_backend"] or model != config[prefix + "_model"]:
+        raise ArchiveError("模型请求与任务冻结的后端或模型不一致。")
+    if payload.get("api_endpoint") != config[prefix + "_base_url"] + suffix:
+        raise ArchiveError("模型请求端点与任务冻结的执行端点不一致。")
 
 
 def _image_meta(data: bytes) -> tuple[str, str, int, int]:
@@ -189,6 +267,18 @@ class Archive:
                         )
                     )
                     version = 4
+                if version == 4:
+                    # 4 → 5：历史任务保持空快照，不借迁移套用当前全局后端。
+                    db.execute(
+                        self._sql(
+                            "ALTER TABLE {schema}.jobs ADD COLUMN "
+                            "execution_config jsonb NOT NULL DEFAULT '{{}}'::jsonb"
+                        )
+                    )
+                    db.execute(
+                        self._sql("UPDATE {schema}.schema_version SET version=5")
+                    )
+                    version = 5
                 if version != SCHEMA_VERSION:
                     raise ArchiveError("codex 存档版本不兼容，停止初始化。")
                 return
@@ -203,21 +293,32 @@ class Archive:
         source_id: str,
         prompt: str,
         params: dict | None = None,
+        *,
+        execution_config: dict | None = None,
     ) -> UUID:
         """同一平台来源只建立一个任务；生成过的旧来源不会因重放变成新任务。
 
-        params 在创建时冻结尺寸、质量与背景；重放同一来源不会改写已记录的参数。
+        params 在创建时冻结尺寸、质量与背景；execution_config 只冻结白名单非秘密配置。
+        重放同一来源不会改写原描述、参数或执行配置；空快照沿用历史后端路径。
         """
         if not source_id or not prompt.strip():
             raise ArchiveError("任务缺少可靠来源或图片描述。")
+        snapshot = _execution_snapshot(execution_config)
         with self._db() as db:
             row = db.execute(
                 self._sql(
-                    "INSERT INTO {schema}.jobs(id,account,room_id,sender_id,source_message_id,original_prompt,image_params) "
-                    "VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(account,room_id,source_message_id) "
+                    "INSERT INTO {schema}.jobs(id,account,room_id,sender_id,source_message_id,original_prompt,image_params,execution_config) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(account,room_id,source_message_id) "
                     "DO NOTHING RETURNING id"
                 ),
-                (uuid4(), *owner, source_id, prompt, Jsonb(sanitized(params or {}))),
+                (
+                    uuid4(),
+                    *owner,
+                    source_id,
+                    prompt,
+                    Jsonb(sanitized(params or {})),
+                    Jsonb(snapshot),
+                ),
             ).fetchone()
             if row is None:
                 row = db.execute(
@@ -311,6 +412,9 @@ class Archive:
                 expected = "generating" if stage == "generate" else "reviewing"
                 if job is None or job["state"] != expected:
                     raise ArchiveError("任务状态不允许发起本次模型请求。")
+                _validate_execution_request(
+                    job["execution_config"], provider, stage, model, payload
+                )
                 if (
                     stage == "generate"
                     and payload.get("prompt") != job["reviewed_prompt"]

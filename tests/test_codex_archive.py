@@ -87,6 +87,181 @@ class ArchiveFlowTests(unittest.TestCase):
         )
         return request
 
+    def test_execution_snapshot_is_secret_free_frozen_and_guards_paid_endpoint(self):
+        """防止全局切换、来源重放或协议串用把已审核任务送往另一计费端点。"""
+        owner = (10001, -10002, 10003)
+        prompt = "保留纸鹤，只改背景"
+        frozen = {
+            "image_backend": "openai",
+            "image_model": "gpt-image-2.5-flare",
+            "image_base_url": "https://api.openai.com/v1",
+            "text_backend": "openai",
+            "text_model": "gpt-6-luna",
+            "text_base_url": "https://api.openai.com/v1",
+            "text_reasoning_effort": "high",
+        }
+        with self.assertRaises(ArchiveError):
+            self.archive.create_job(
+                owner,
+                "fixture-execution-frozen",
+                prompt,
+                execution_config={
+                    **frozen,
+                    "image_base_url": "https://api.openai.com/v1?api_key=must-not-persist",
+                },
+            )
+        supplied = {
+            **frozen,
+            "openai_api_key": "must-not-persist",
+            "pg_connection": "must-not-persist",
+            "nested": {"authorization": "must-not-persist"},
+        }
+        job = self.archive.create_job(
+            owner, "fixture-execution-frozen", prompt, execution_config=supplied
+        )
+        supplied.update(
+            image_backend="codex",
+            image_model="another-image-model",
+            image_base_url="https://chatgpt.com/backend-api/codex",
+            text_model="another-text-model",
+            text_base_url="https://other.example/v1",
+            text_reasoning_effort="low",
+        )
+        self.assertEqual(
+            self.archive.create_job(
+                owner,
+                "fixture-execution-frozen",
+                "重放不得覆盖描述或执行配置",
+                execution_config=supplied,
+            ),
+            job,
+        )
+        restarted = Archive(self.connection, schema=self.schema)
+        restarted.initialize()
+        stored = restarted.owned_job(job, owner)
+        self.assertEqual(stored["execution_config"], frozen)
+        self.assertEqual(stored["original_prompt"], prompt)
+        stream = BytesIO()
+        Image.new("RGB", (2, 2), "blue").save(stream, "PNG")
+        reference = restarted.put_image(job, "reference", stream.getvalue())
+        review_payload = {
+            "api_endpoint": frozen["text_base_url"] + "/responses",
+            "prompt": prompt,
+            "reference_sha256": [reference],
+        }
+        with self.assertRaises(ArchiveError):
+            restarted.begin_request(
+                job, "deepseek", "pre_review", frozen["text_model"], review_payload
+            )
+        pre = restarted.begin_request(
+            job, "openai", "pre_review", frozen["text_model"], review_payload
+        )
+        restarted.finish_request(pre, "succeeded", {"decision": "pass"})
+        restarted.prepare_draft(job, prompt, pre)
+        restarted.update_image_params(job, owner, {"quality": "high"})
+        self.assertEqual(
+            restarted.claim_confirmation(job, owner)["execution_config"], frozen
+        )
+        payload = {
+            "api_endpoint": frozen["image_base_url"] + "/images/edits",
+            "prompt": prompt,
+            "reference_sha256": [reference],
+        }
+        for provider, model, endpoint in (
+            ("codex", frozen["image_model"], payload["api_endpoint"]),
+            ("openai", "another-image-model", payload["api_endpoint"]),
+            ("openai", frozen["image_model"], "https://other.example/v1/images/edits"),
+        ):
+            with (
+                self.subTest(provider=provider, model=model, endpoint=endpoint),
+                self.assertRaises(ArchiveError),
+            ):
+                restarted.begin_request(
+                    job,
+                    provider,
+                    "generate",
+                    model,
+                    {**payload, "api_endpoint": endpoint},
+                )
+        request = restarted.begin_request(
+            job, "openai", "generate", frozen["image_model"], payload
+        )
+        restarted.finish_request(request, "failed", http_status=503)
+        restarted.finish_job(job, "failed")
+        retried = restarted.claim_retry(job, owner, "fixture-execution-retry")
+        self.assertEqual(retried["execution_config"], frozen)
+        restarted.cancel(job, owner)
+        with restarted._db() as db:
+            rows = db.execute(
+                restarted._sql(
+                    "SELECT provider,model,request_payload FROM {schema}.requests "
+                    "WHERE job_id=%s AND stage='generate'"
+                ),
+                (job,),
+            ).fetchall()
+        self.assertEqual(
+            [(row["provider"], row["model"], row["request_payload"]) for row in rows],
+            [("openai", frozen["image_model"], payload)],
+        )
+
+    def test_v4_migration_rolls_back_then_preserves_legacy_confirmation(self):
+        """防止迁移半成功或把历史草稿错误切换到当前 OpenAI 配置。"""
+        owner = (10001, -10002, 10003)
+        prompt = "一只历史纸鹤"
+        job = self.archive.create_job(owner, "fixture-v4-draft", prompt)
+        pre = self._review(job, "pre_review", "pass", prompt)
+        self.archive.prepare_draft(job, prompt, pre)
+        before = self.archive.owned_job(job, owner)
+        with self.archive._db() as db:
+            db.execute(
+                self.archive._sql(
+                    "ALTER TABLE {schema}.jobs DROP COLUMN execution_config;"
+                    "UPDATE {schema}.schema_version SET version=4"
+                )
+            )
+        original_sql = self.archive._sql
+
+        def fail_version_update(query):
+            if query == "UPDATE {schema}.schema_version SET version=5":
+                raise ArchiveError("虚构迁移故障")
+            return original_sql(query)
+
+        with (
+            patch.object(self.archive, "_sql", side_effect=fail_version_update),
+            self.assertRaises(ArchiveError),
+        ):
+            self.archive.initialize()
+        with self.archive._db() as db:
+            columns = db.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema=%s AND table_name='jobs' AND column_name='execution_config'",
+                (self.schema,),
+            ).fetchall()
+            self.assertEqual(columns, [])
+            self.assertEqual(
+                db.execute(
+                    original_sql("SELECT version FROM {schema}.schema_version")
+                ).fetchone()["version"],
+                4,
+            )
+        self.archive.initialize()
+        self.archive.initialize()
+        after = self.archive.owned_job(job, owner)
+        self.assertEqual(after, before)
+        self.assertEqual(after["execution_config"], {})
+        claimed = self.archive.claim_confirmation(job, owner)
+        self.assertEqual(claimed["reviewed_prompt"], prompt)
+        self.assertEqual(claimed["approval_digest"], before["approval_digest"])
+        # 旧记录无需新协议的 api_endpoint，确认后仍沿用 Codex；审核记录保持真实单审。
+        request = self.archive.begin_request(
+            job, "codex", "generate", "fixture-legacy-image", {"prompt": prompt}
+        )
+        self.archive.finish_request(request, "unknown", error_code="OUTCOME_UNCERTAIN")
+        self.archive.finish_job(job, "unknown")
+        self.assertFalse(self.archive.has_stage(job, "post_review"))
+        with self.assertRaises(ArchiveError):
+            self.archive.claim_retry(job, owner, "fixture-v4-unknown-retry")
+
     def test_review_gate_atomic_owner_confirmation_and_durable_images(self):
         owner = (10001, -10002, 10003)
         blocked = self.archive.create_job(owner, "fixture-blocked", "虚构图片要求")
@@ -305,6 +480,7 @@ class ArchiveFlowTests(unittest.TestCase):
             db.execute(
                 self.archive._sql(
                     "DROP INDEX {schema}.one_generation_per_attempt;"
+                    "ALTER TABLE {schema}.jobs DROP COLUMN execution_config;"
                     "ALTER TABLE {schema}.jobs DROP COLUMN generation_attempt;"
                     "ALTER TABLE {schema}.requests DROP COLUMN generation_attempt;"
                     "CREATE UNIQUE INDEX one_generation_per_job ON {schema}.requests(job_id) WHERE stage='generate';"

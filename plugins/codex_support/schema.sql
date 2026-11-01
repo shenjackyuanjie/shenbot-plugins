@@ -16,6 +16,8 @@ CREATE TABLE {schema}.jobs (
     approval_digest text,
     -- 创建任务时冻结的生成参数（尺寸、质量、背景），确认阶段只读不写。
     image_params jsonb NOT NULL DEFAULT '{{}}'::jsonb,
+    -- 创建时冻结非秘密执行配置；历史空对象沿用 Codex / DeepSeek 路径。
+    execution_config jsonb NOT NULL DEFAULT '{{}}'::jsonb,
     -- 0 为首次确认，只有领取新的显式重试时才递增。
     generation_attempt integer NOT NULL DEFAULT 0,
     state text NOT NULL DEFAULT 'reviewing' CHECK (state IN
@@ -76,4 +78,4 @@ COMMENT ON TABLE {schema}.jobs IS 'QQ 生图任务及确认状态；只存命令
 COMMENT ON TABLE {schema}.requests IS '每次外部模型/额度请求；外发前提交 started，禁止保存认证头';
 COMMENT ON TABLE {schema}.assets IS '参考图、原图与发送副本实际二进制，按 SHA-256 去重';
 COMMENT ON TABLE {schema}.events IS '确认、取消、回图及恢复事件；Bridge 受理不等于 QQ 最终送达';
-INSERT INTO {schema}.schema_version(version) VALUES (4);
+INSERT INTO {schema}.schema_version(version) VALUES (5);

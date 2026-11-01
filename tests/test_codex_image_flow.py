@@ -3,6 +3,7 @@
 真实 SDK 协议由 test_codex_clients.py 覆盖；这里只验证业务流程的放行与拦截。
 """
 
+import json
 import unittest
 from datetime import datetime
 from io import BytesIO
@@ -33,9 +34,12 @@ class FakeArchive:
         self.drafted = False
         self.confirmed = False
         self.generated = False
+        self.created = 0
 
-    def create_job(self, owner, source, prompt, params=None):
+    def create_job(self, owner, source, prompt, params=None, *, execution_config=None):
+        self.created += 1
         self.job["image_params"] = params or {}
+        self.job["execution_config"] = execution_config or {}
         return "abcdef12-3456-7890-abcd-ef1234567890"
 
     def put_image(self, job, role, data, request=None, position=0):
@@ -340,6 +344,159 @@ class ImageFlowTests(unittest.TestCase):
         self.assertEqual(calls[-1].payload["quality"], "high")
         self.assertEqual(calls[-1].payload["background"], "transparent")
         self.assertEqual(calls[-1].payload["size"], "auto")
+
+
+class ApiBackendFlowTests(unittest.TestCase):
+    """API 计费模式的核心回归：两把 Key 各司其职，任务按冻结后端执行。"""
+
+    def service(self, archive, logs=None, **overrides):
+        values = {
+            "image_backend": "openai",
+            "text_backend": "openai",
+            "openai_text_api_key": "fixture-check-key",
+            "openai_image_api_key": "fixture-image-key",
+        }
+        values.update(overrides)
+        return ImageService(
+            ImageSettings(
+                pg_connection="postgresql://unused",
+                deepseek_api_key="fixture-deepseek",
+                **values,
+            ),
+            lambda: SimpleNamespace(
+                access="fixture-access", account_id="fixture-account"
+            ),
+            10001,
+            archive=archive,
+            log=(lambda level, message: logs.append(message))
+            if logs is not None
+            else None,
+        )
+
+    @staticmethod
+    def record(service, *values):
+        recorded = []
+        pending = iter(values)
+
+        def call(prepared, job, stopped):
+            recorded.append(prepared)
+            return "request", SimpleNamespace(value=next(pending))
+
+        service._call = Mock(side_effect=call)
+        return recorded
+
+    def test_api_mode_uses_separate_keys_and_keeps_them_out_of_archive_and_logs(self):
+        """防止两把 Key 互借，或 Key 随请求存档、阶段日志泄露到群聊与 PG。"""
+        archive = FakeArchive()
+        logs = []
+        service = self.service(archive, logs=logs)
+        recorded = self.record(
+            service,
+            {"decision": "pass", "reason": "可以"},
+            {"image_sha256": "fixture-digest"},
+        )
+        archive.images = Mock(return_value=[])
+        preview = service.create(message(), Mock(), "虚构图片要求", direct=True)
+        service.confirm(message(), Mock(), "abcdef12")
+
+        review, generate = recorded
+        self.assertEqual((review.provider, review.stage), ("openai", "pre_review"))
+        self.assertEqual(review.model, service.settings.openai_text_model)
+        self.assertEqual(
+            review.payload["reasoning"],
+            {"effort": service.settings.openai_reasoning_effort},
+        )
+        self.assertTrue(review.url.endswith("/responses"))
+        self.assertIn("fixture-check-key", review.headers["Authorization"])
+        self.assertNotIn("fixture-image-key", review.headers["Authorization"])
+        self.assertEqual((generate.provider, generate.stage), ("openai", "generate"))
+        self.assertEqual(generate.model, service.settings.openai_image_model)
+        self.assertTrue(generate.url.endswith("/images/generations"))
+        self.assertIn("fixture-image-key", generate.headers["Authorization"])
+        self.assertNotIn("fixture-check-key", generate.headers["Authorization"])
+        # 任务预览区分独立计费，不会把 API 消耗说成订阅额度。
+        self.assertIn("OpenAI API", preview)
+        for prepared in recorded:
+            archived = json.dumps(prepared.archive_payload, ensure_ascii=False)
+            for key in ("fixture-check-key", "fixture-image-key"):
+                self.assertNotIn(key, archived)
+        for line in logs:
+            for key in ("fixture-check-key", "fixture-image-key"):
+                self.assertNotIn(key, line)
+
+    def test_edit_path_and_hot_reload_do_not_change_the_frozen_backend(self):
+        """防止配置热重载把已建任务从 API 计费改成订阅额度，或换掉审核与生图模型。"""
+        archive = FakeArchive()
+        service = self.service(archive)
+        recorded = self.record(
+            service,
+            {"decision": "pass", "reason": "可以"},
+            {"prompt": "润色后"},
+            {"decision": "pass", "reason": "可以"},
+            {"image_sha256": "fixture-digest"},
+        )
+        service.create(message(), Mock(), "虚构图片要求")
+        frozen = dict(archive.job["execution_config"])
+        # 模拟重载：全球配置改回订阅与另一套模型，任务凭据仍可用。
+        service.settings = ImageSettings(
+            pg_connection="postgresql://unused",
+            deepseek_api_key="fixture-deepseek",
+            openai_text_api_key="fixture-check-key",
+            openai_image_api_key="fixture-image-key",
+            openai_image_model="another-image-model",
+            openai_text_model="another-text-model",
+        )
+        service.confirm(message(), Mock(), "abcdef12")
+        generate = recorded[-1]
+        self.assertEqual((generate.provider, generate.stage), ("openai", "generate"))
+        self.assertEqual(generate.model, frozen["image_model"])
+        self.assertTrue(generate.url.endswith("/images/edits"))
+        # 官方 edits 只接受 multipart：图片进 files，不能塞回 JSON 正文。
+        self.assertEqual([name for name, _ in generate.files], ["image[]"])
+        self.assertNotIn("data:image", json.dumps(generate.payload))
+        # 审核请求也按任务冻结的模型与推理强度，而不是重载后的全局值。
+        for review in recorded[:-1]:
+            self.assertEqual(review.model, frozen["text_model"])
+            self.assertEqual(
+                review.payload["reasoning"], {"effort": frozen["text_reasoning_effort"]}
+            )
+
+    def test_api_mode_rejects_values_the_paid_endpoint_would_refuse(self):
+        """防止把订阅端的 xhigh/max 或非 16 倍数尺寸发给只会 400 的图片 API。"""
+        archive = FakeArchive()
+        service = self.service(archive)
+        for params in ({"quality": "xhigh"}, {"size": "1000x1000"}):
+            with self.subTest(params=params), self.assertRaises(ImageError) as failure:
+                service.create(
+                    message(), Mock(), "虚构图片要求", direct=True, params=params
+                )
+            self.assertIn("OpenAI API", str(failure.exception))
+        self.assertEqual(archive.created, 0)
+
+        # 升级前冻结了 API 后端但参数越界的任务，确认时也不能先消费确认再被上游拒绝。
+        legacy = FakeArchive()
+        legacy.job["execution_config"] = service.settings.execution_config()
+        legacy.job["image_params"] = {"quality": "max"}
+        legacy_service = self.service(legacy)
+        with self.assertRaises(ImageError):
+            legacy_service.confirm(message(), Mock(), "abcdef12")
+        self.assertFalse(legacy.confirmed)
+
+    def test_missing_key_stops_before_charge_without_borrowing_the_other(self):
+        """防止一把 Key 冒充另一用途，或在缺 Key 时消费确认后才发现无法生成。"""
+        archive = FakeArchive()
+        service = self.service(archive, openai_text_api_key="")
+        with self.assertRaises(ImageError) as failure:
+            service.create(message(), Mock(), "虚构图片要求")
+        self.assertEqual(archive.created, 0)
+        self.assertNotIn("fixture-image-key", str(failure.exception))
+
+        archive = FakeArchive()
+        service = self.service(archive, openai_image_api_key="")
+        with self.assertRaises(ImageError) as failure:
+            service.create(message(), Mock(), "虚构图片要求")
+        self.assertEqual(archive.created, 0)
+        self.assertNotIn("fixture-check-key", str(failure.exception))
 
 
 if __name__ == "__main__":

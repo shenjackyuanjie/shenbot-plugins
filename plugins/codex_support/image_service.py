@@ -15,7 +15,13 @@ import requests
 
 from .archive import Archive, ArchiveError
 from .error_messages import format_error
-from .providers import ProviderError, codex_call, deepseek_call
+from .providers import (
+    ProviderError,
+    codex_call,
+    deepseek_call,
+    openai_image_call,
+    openai_text_call,
+)
 from .transport import TransportError
 
 MAX_PROMPT = 2000
@@ -38,6 +44,73 @@ class ImageSettings:
     deepseek_model: str = "deepseek-flash"
     deepseek_timeout: float = 90
     image_timeout: float = 300
+    image_backend: str = "codex"
+    text_backend: str = "deepseek"
+    codex_image_model: str = "gpt-image-2.5-flare"
+    openai_text_api_key: str = field(repr=False, default="")
+    openai_image_api_key: str = field(repr=False, default="")
+    openai_base_url: str = "https://api.openai.com/v1"
+    openai_text_model: str = "gpt-6-luna"
+    openai_image_model: str = "gpt-image-2.5-flare"
+    openai_reasoning_effort: str = "high"
+    # 本机直连 api.openai.com 会超时；代理只影响 API 模式，不参与执行配置冻结。
+    openai_proxy: str = field(repr=False, default="")
+
+    def execution_config(self) -> dict:
+        """仅冻结非秘密字段；密钥始终按用途读取当前配置。"""
+        api_root = self.openai_base_url.rstrip("/").removesuffix("/v1") + "/v1"
+        return {
+            "image_backend": self.image_backend,
+            "image_model": self.openai_image_model
+            if self.image_backend == "openai"
+            else self.codex_image_model,
+            "image_base_url": api_root
+            if self.image_backend == "openai"
+            else "https://chatgpt.com/backend-api/codex",
+            "text_backend": self.text_backend,
+            "text_model": self.openai_text_model
+            if self.text_backend == "openai"
+            else self.deepseek_model,
+            "text_base_url": api_root
+            if self.text_backend == "openai"
+            else self.deepseek_base_url.rstrip("/").removesuffix("/v1"),
+            "text_reasoning_effort": self.openai_reasoning_effort
+            if self.text_backend == "openai"
+            else "high",
+        }
+
+
+# OpenAI 图片 API 的质量枚举比订阅后端窄：xhigh/max 会被 400 拒绝，尺寸宽高须能被 16 整除。
+API_IMAGE_QUALITIES = ("auto", "low", "medium", "high")
+
+
+def _check_backend_params(execution: dict, params: dict) -> None:
+    """按冻结后端提前校验生成参数，避免确认后才被上游按参数拒绝。"""
+    if execution.get("image_backend") != "openai":
+        return
+    if params.get("quality", "auto") not in API_IMAGE_QUALITIES:
+        raise ImageError(
+            "OpenAI API 模式的质量只支持 auto/low/medium/high；"
+            "需要 xhigh/max 请切回订阅后端后重新发起任务。"
+        )
+    size = params.get("size", "auto")
+    width, _, height = size.partition("x")
+    if size != "auto" and not (
+        width.isdigit()
+        and height.isdigit()
+        and int(width) % 16 == 0
+        and int(height) % 16 == 0
+    ):
+        raise ImageError("OpenAI API 模式的尺寸宽高需能被 16 整除，例如 1024x1536。")
+
+
+def _backend_label(config: dict) -> str:
+    model = config.get("image_model", "gpt-image-2.5-flare")
+    return (
+        f"OpenAI API（独立计费） / {model}"
+        if config.get("image_backend", "codex") == "openai"
+        else f"Codex 订阅 / {model}"
+    )
 
 
 def _elapsed(started: float) -> str:
@@ -187,6 +260,9 @@ class ImageService:
                 http_status=result.status,
                 error_code=str(error),
                 upstream_id=result.request_id,
+                usage=result.body.get("usage")
+                if isinstance(result.body, dict)
+                else None,
             )
             self.log(
                 "request rejected",
@@ -232,8 +308,13 @@ class ImageService:
         prompt = prompt.strip()
         if not 0 < len(prompt) <= MAX_PROMPT:
             raise ImageError(f"图片描述需为 1–{MAX_PROMPT} 字。")
-        if not self.settings.deepseek_api_key:
-            raise ImageError("尚未配置 DeepSeek API Key，生图功能不可用。")
+        execution = self.settings.execution_config()
+        self._text_key(execution)
+        if (
+            execution["image_backend"] == "openai"
+            and not self.settings.openai_image_api_key
+        ):
+            raise ImageError("尚未配置 OpenAI 图片专用 Key，生图功能不可用。")
         images = reference_images(client, msg)
         archive = self.archive
         # 缺省项一律按 auto 补齐：预览展示的参数就是确认后真正发给上游的参数。
@@ -243,12 +324,17 @@ class ImageService:
             "background": "auto",
             **(params or {}),
         }
-        job = archive.create_job(self.owner(msg), msg.id, prompt, params)
+        _check_backend_params(execution, params)
+        job = archive.create_job(
+            self.owner(msg), msg.id, prompt, params, execution_config=execution
+        )
         short = str(job)[:8]
         self.log("create", job=short, chars=len(prompt), references=len(images))
         for position, data in enumerate(images):
             archive.put_image(job, "reference", data, position=position)
-        return self._review(job, prompt, images, direct=direct, params=params)
+        return self._review(
+            job, prompt, images, direct=direct, params=params, execution=execution
+        )
 
     def _review(
         self,
@@ -258,6 +344,7 @@ class ImageService:
         *,
         direct: bool,
         params: dict,
+        execution: dict,
     ) -> str:
         """直出只审核原始输入；润色后再独立后审，放行对象与生成输入保持一致。"""
         archive = self.archive
@@ -265,15 +352,28 @@ class ImageService:
         stopped = threading.Event()
 
         def review(stage: str, content: str, original: str | None = None):
-            call = deepseek_call(
-                self.settings.deepseek_base_url,
-                self.settings.deepseek_api_key,
-                self.settings.deepseek_model,
-                stage,
-                content,
-                original=original,
-                images=tuple(images),
-            )
+            if execution.get("text_backend", "deepseek") == "openai":
+                call = openai_text_call(
+                    execution["text_base_url"],
+                    self._text_key(execution),
+                    execution["text_model"],
+                    stage,
+                    content,
+                    original=original,
+                    images=tuple(images),
+                    reasoning_effort=execution["text_reasoning_effort"],
+                    proxy=self.settings.openai_proxy,
+                )
+            else:
+                call = deepseek_call(
+                    execution.get("text_base_url", self.settings.deepseek_base_url),
+                    self._text_key(execution),
+                    execution.get("text_model", self.settings.deepseek_model),
+                    stage,
+                    content,
+                    original=original,
+                    images=tuple(images),
+                )
             return self._call(call, job, stopped)
 
         try:
@@ -317,12 +417,23 @@ class ImageService:
             head = f"模式：润色\n提示词：{final_prompt}\n"
         return (
             f"任务 {short} 待确认\n"
+            + f"后端：{_backend_label(execution)}\n"
             + head
             + f"参数：尺寸 {params['size']} / 质量 {params['quality']} / 背景 {params['background']}\n"
             "回复 /codex confirm 开始生成、/codex cancel 取消、/codex set --quality high 调参数。\n"
             "引用带图片的消息发 /codex attach 可以追加参考图；需要指定任务时带上开头的编号。\n"
             "10 分钟内有效。"
         )
+
+    def _text_key(self, execution: dict) -> str:
+        """文本和图片密钥不互借，包括其中一把尚未配置的情况。"""
+        if execution.get("text_backend", "deepseek") == "openai":
+            key, name = self.settings.openai_text_api_key, "OpenAI 审核/润色专用"
+        else:
+            key, name = self.settings.deepseek_api_key, "DeepSeek"
+        if not key:
+            raise ImageError(f"尚未配置 {name} Key，提示词处理不可用。")
+        return key
 
     def _receipt(self, client, msg, text: str, short: str) -> None:
         """回执与确认属于同一流程：发送失败只记日志，不改变已消费的确认。"""
@@ -341,7 +452,18 @@ class ImageService:
         owner = self.scope(msg)
         job = archive.resolve_job(prefix, owner)
         short = str(job["id"])[:8]
-        login = self.login_provider()
+        execution = job.get("execution_config") or {}
+        # 升级前冻结的任务可能带着 API 端不接受的参数，确认前复核，避免消费确认后必然失败。
+        _check_backend_params(execution, job.get("image_params") or {})
+        # 验证用途凭据后才消费确认；API 任务完全不读取订阅 OAuth。
+        login = None
+        if execution.get("image_backend", "codex") == "openai":
+            if not self.settings.openai_image_api_key:
+                raise ImageError(
+                    "尚未配置 OpenAI 图片专用 Key；未消费确认，请配置后重试。"
+                )
+        else:
+            login = self.login_provider()
         if retry:
             job = archive.claim_retry(
                 job["id"], owner, msg.id, operator_id=msg.sender_id
@@ -365,19 +487,30 @@ class ImageService:
             msg,
             f"{'管理员强制重试：' if forced else ('管理员代办：' if delegated else '')}"
             f"任务 {short} {'已开始重试（会再次消耗生成额度）' if retry else '已确认'}，"
-            "正在生成图片，通常需要 1–2 分钟。",
+            f"正在生成图片，通常需要 1–2 分钟。\n后端：{_backend_label(execution)}",
             short,
         )
         try:
-            call = codex_call(
-                job["reviewed_prompt"],
-                login.access,
-                login.account_id,
-                images=tuple(images),
-                size=params.get("size", "auto"),
-                quality=params.get("quality", "auto"),
-                background=params.get("background", "auto"),
-            )
+            execution = job.get("execution_config") or {}
+            options = {
+                "images": tuple(images),
+                "size": params.get("size", "auto"),
+                "quality": params.get("quality", "auto"),
+                "background": params.get("background", "auto"),
+                "model": execution.get("image_model", "gpt-image-2.5-flare"),
+            }
+            if execution.get("image_backend", "codex") == "openai":
+                call = openai_image_call(
+                    job["reviewed_prompt"],
+                    self.settings.openai_image_api_key,
+                    base_url=execution["image_base_url"],
+                    proxy=self.settings.openai_proxy,
+                    **options,
+                )
+            else:
+                call = codex_call(
+                    job["reviewed_prompt"], login.access, login.account_id, **options
+                )
             self._call(call, job["id"], threading.Event())
         except (ProviderError, TransportError, ArchiveError) as error:
             code = getattr(error, "code", None) or str(error)
@@ -400,6 +533,11 @@ class ImageService:
                     detail
                     + f"\n发送 /codex retry {short} 可按原提示词、参数和参考图再生成一次，"
                     "会再次消耗额度；不会自动重试。"
+                ) from None
+            if code.startswith("INVALID_"):
+                raise ImageError(
+                    detail
+                    + "\n这是本地配置或参数问题，修正后重新发起；本次没有可重试的上游结果。"
                 ) from None
             raise ImageError(
                 detail
@@ -424,6 +562,8 @@ class ImageService:
         archive = self.archive
         owner = self.scope(msg)
         job = archive.resolve_job(prefix, owner)
+        execution = job.get("execution_config") or {}
+        self._text_key(execution)
         images = reference_images(client, msg)
         if not images:
             raise ImageError("请引用带图片的消息再执行 attach。")
@@ -444,7 +584,12 @@ class ImageService:
             "background": stored.get("background", "auto"),
         }
         return self._review(
-            job["id"], job["original_prompt"], merged, direct=direct, params=params
+            job["id"],
+            job["original_prompt"],
+            merged,
+            direct=direct,
+            params=params,
+            execution=execution,
         )
 
     def set_params(self, msg, prefix: str | None, params: dict) -> str:
@@ -453,6 +598,10 @@ class ImageService:
         owner = self.scope(msg)
         job = archive.resolve_job(prefix, owner)
         short = str(job["id"])[:8]
+        _check_backend_params(
+            job.get("execution_config") or {},
+            {**(job.get("image_params") or {}), **params},
+        )
         merged = archive.update_image_params(job["id"], owner, params)
         self.log("params updated", job=short, keys=",".join(sorted(params)))
         return (
@@ -466,7 +615,7 @@ class ImageService:
         owner = self.scope(msg)
         if prefix:
             job = self.archive.owned_job_by_prefix(prefix, owner)
-            return f"任务 {prefix} 当前状态：{job['state']}。"
+            return f"任务 {prefix} 当前状态：{job['state']}。\n后端：{_backend_label(job.get('execution_config') or {})}"
         try:
             job = self.archive.pending_job(owner)
         except ArchiveError as error:
@@ -479,7 +628,7 @@ class ImageService:
                 for row in rows
             )
             return "\n".join(lines)
-        return f"待确认任务 {str(job['id'])[:8]}，10 分钟内有效。"
+        return f"待确认任务 {str(job['id'])[:8]}，10 分钟内有效。\n后端：{_backend_label(job.get('execution_config') or {})}"
 
     def cancel(self, msg, prefix: str | None) -> str:
         owner = self.scope(msg)
