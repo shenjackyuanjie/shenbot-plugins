@@ -16,7 +16,7 @@ from decimal import Decimal, InvalidOperation
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 
 import yaml
 
@@ -33,11 +33,15 @@ if TYPE_CHECKING:
     from ica_typing import IcaClient, IcaNewMessage
     from shenbot_api import IcaConnectionState, IcaConnectionWatch
 
-VERSION = "0.6.0"
+VERSION = "0.6.1"
 POLL_SECONDS = 120
 THRESHOLD_STEP = 5
 COMMAND = "/codex"
 USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
+# OpenAI 组织级已花费聚合；只有 Admin key + api.usage.read 可用，且没有「剩余余额」接口。
+OPENAI_COSTS_URL = "https://api.openai.com/v1/organization/costs"
+OPENAI_USAGE_CACHE_SECONDS = 300
+OPENAI_USAGE_DAYS = 7
 MAX_FILE_BYTES = 4 * 1024 * 1024
 MAX_RESPONSE_BYTES = 1024 * 1024
 DISPLAY_ZONE = timezone(timedelta(hours=8))
@@ -171,6 +175,8 @@ PLUGIN_MANIFEST = PluginManifest(
             # 两把用途独立的 Key 直接写在本地被忽略配置里，不进入提交与日志。
             openai_text_api_key="",
             openai_image_api_key="",
+            # 可选：组织用量查询（Admin key + api.usage.read）；留空则 check 不发额外请求。
+            openai_usage_api_key="",
             openai_base_url="https://api.openai.com/v1",
             openai_text_model="gpt-6-luna",
             openai_image_model="gpt-image-2.5-flare",
@@ -210,6 +216,7 @@ class Settings:
     # 只用于请求头，不参与 repr、日志或存档。
     openai_text_api_key: str = field(default="", repr=False)
     openai_image_api_key: str = field(default="", repr=False)
+    openai_usage_api_key: str = field(default="", repr=False)
     openai_base_url: str = "https://api.openai.com/v1"
     openai_text_model: str = "gpt-6-luna"
     openai_image_model: str = "gpt-image-2.5-flare"
@@ -559,6 +566,158 @@ def format_usage(usage: dict, now: float | None = None) -> str:
     return "\n".join(lines)
 
 
+class UsageError(Exception):
+    """用量查询失败；只携带可直接展示的简短原因，不含凭据与原始响应。"""
+
+
+# 用量结果缓存；配置重载时清空，避免每次都打接口。
+_usage_cache: tuple[float, str] | None = None
+
+
+def _reset_usage_cache() -> None:
+    global _usage_cache
+    _usage_cache = None
+
+
+def _cost_query(now: float) -> str:
+    started = int(now) - OPENAI_USAGE_DAYS * 86400
+    return urlencode(
+        {
+            "start_time": started,
+            "bucket_width": "1d",
+            "limit": OPENAI_USAGE_DAYS,
+        }
+    )
+
+
+def _usage_error_message(body: bytes) -> str:
+    """组织接口的 error 既可能是对象，也可能是一句话，两种都取。"""
+    try:
+        parsed = json.loads(body)
+    except ValueError:
+        return ""
+    if not isinstance(parsed, dict):
+        return ""
+    error = parsed.get("error")
+    if isinstance(error, dict):
+        return str(error.get("message", ""))
+    return error if isinstance(error, str) else ""
+
+
+def _usage_http_error(error: urllib.error.HTTPError) -> UsageError:
+    try:
+        message = _usage_error_message(error.read(64 * 1024))
+    except OSError:
+        message = ""
+    if error.code in (401, 403) and "api.usage.read" in message:
+        return UsageError(
+            "该 Key 缺 api.usage.read，需要 Admin key（Settings → Organization → Admin keys）"
+        )
+    if 300 <= error.code < 400:
+        return UsageError("用量接口发生重定向，已停止查询")
+    if error.code == 401:
+        return UsageError("Key 认证失败（HTTP 401），请检查 openai_usage_api_key")
+    if error.code == 403:
+        return UsageError("Key 没有组织用量权限（HTTP 403）")
+    if error.code == 429:
+        return UsageError("用量接口被限流（HTTP 429），请稍后再查")
+    return UsageError(f"用量服务暂时不可用（HTTP {error.code}）")
+
+
+def fetch_openai_costs(settings: Settings, now: float | None = None) -> dict:
+    """读取最近 7 天的组织已花费；不重试、不跟随重定向，Key 只进请求头。"""
+    request = urllib.request.Request(
+        OPENAI_COSTS_URL + "?" + _cost_query(now or time.time()),
+        headers={
+            "Authorization": "Bearer " + settings.openai_usage_api_key,
+            "Accept": "application/json",
+            "User-Agent": f"shenbot-codex/{VERSION}",
+        },
+    )
+    handlers: list = [_NoRedirect()]
+    if settings.openai_proxy:
+        handlers.insert(
+            0,
+            urllib.request.ProxyHandler(
+                {"http": settings.openai_proxy, "https": settings.openai_proxy}
+            ),
+        )
+    try:
+        with urllib.request.build_opener(*handlers).open(
+            request, timeout=settings.timeout_seconds
+        ) as response:
+            raw = response.read(MAX_RESPONSE_BYTES + 1)
+    except urllib.error.HTTPError as error:
+        raise _usage_http_error(error) from None
+    except (OSError, TimeoutError, urllib.error.URLError):
+        raise UsageError("连接用量接口失败或超时，请检查网络与 openai_proxy") from None
+    if len(raw) > MAX_RESPONSE_BYTES:
+        raise UsageError("用量接口响应过大，已停止查询")
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        raise UsageError("用量接口返回的不是有效 JSON") from None
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _money(value: float) -> str:
+    amount = f"{value:.2f}" if value >= 0.01 else f"{value:.4f}"
+    return "$" + amount
+
+
+def format_openai_costs(payload: dict) -> str:
+    """汇总已花费金额；明细只保留最近两天，整体控制在 5 行内。"""
+    buckets = payload.get("data")
+    if not isinstance(buckets, list):
+        raise UsageError("用量响应缺少 data 字段")
+    days: list[tuple[float, float]] = []
+    total = 0.0
+    for bucket in buckets:
+        if not isinstance(bucket, dict):
+            raise UsageError("用量响应格式异常")
+        amount = 0.0
+        for item in bucket.get("results") or []:
+            money = item.get("amount") if isinstance(item, dict) else None
+            value = money.get("value") if isinstance(money, dict) else None
+            if isinstance(value, (int, float)):
+                amount += float(value)
+        started = bucket.get("start_time")
+        if isinstance(started, (int, float)):
+            days.append((float(started), amount))
+        total += amount
+    lines = [
+        "OpenAI API 用量（最近 7 天，已花费估算，不是余额）",
+        f"合计：{_money(total)}",
+    ]
+    spent = [(started, amount) for started, amount in days if amount > 0]
+    for started, amount in list(reversed(spent))[:2]:
+        try:
+            stamp = datetime.fromtimestamp(started, DISPLAY_ZONE).strftime("%m-%d")
+        except (ValueError, OverflowError, OSError):
+            stamp = "未知日期"
+        lines.append(f"{stamp}：{_money(amount)}")
+    if not spent:
+        lines.append("最近 7 天没有已记录的花费")
+    lines.append("余额与账单请到 OpenAI 控制台查看")
+    return "\n".join(lines)
+
+
+def openai_usage_section(settings: Settings, now: float | None = None) -> str:
+    """返回追加到 check 的用量段；未配置 Key 时零请求、零输出。"""
+    if not settings.openai_usage_api_key:
+        return ""
+    global _usage_cache
+    moment = now or time.time()
+    if _usage_cache is not None and _usage_cache[0] > moment:
+        return _usage_cache[1]
+    try:
+        text = format_openai_costs(fetch_openai_costs(settings, moment))
+    except UsageError as error:
+        text = f"OpenAI API 用量：{error}"
+    _usage_cache = (moment + OPENAI_USAGE_CACHE_SECONDS, text)
+    return text
+
+
 def query_subscription(settings: Settings) -> str:
     return format_usage(
         fetch_usage(read_login(settings.dsh_home), settings.timeout_seconds)
@@ -792,6 +951,7 @@ def on_load() -> None:
         "codex_image_model": "gpt-image-2.5-flare",
         "openai_text_api_key": "",
         "openai_image_api_key": "",
+        "openai_usage_api_key": "",
         "openai_base_url": "https://api.openai.com/v1",
         "openai_text_model": "gpt-6-luna",
         "openai_image_model": "gpt-image-2.5-flare",
@@ -845,6 +1005,7 @@ def on_load() -> None:
     # 真正调用 API 时由生图服务在消费确认前报出具体字段。
     image["openai_text_api_key"] = image["openai_text_api_key"].strip()
     image["openai_image_api_key"] = image["openai_image_api_key"].strip()
+    image["openai_usage_api_key"] = image["openai_usage_api_key"].strip()
     if image["text_backend"] == "openai" and not image["openai_text_api_key"]:
         warn(
             "codex：text_backend 为 openai 但 openai_text_api_key 未配置，提示词处理不可用"
@@ -874,6 +1035,7 @@ def on_load() -> None:
             image_queue_limit=queue_limit,
         )
     )
+    _reset_usage_cache()
     # 首次尽快记录静默基准，之后每两分钟检查。宿主仅在插件提交后开始计时。
     _schedule_poll(_runtime, delay=1)
 
@@ -1143,6 +1305,10 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
         try:
             try:
                 result = query_subscription(state.settings)
+                # 用量查询失败不影响订阅额度展示，只在追加段给简短原因。
+                usage = openai_usage_section(state.settings)
+                if usage:
+                    result = result + "\n\n" + usage
             except QueryError as error:
                 with state.lock:
                     state.next_query_at = max(

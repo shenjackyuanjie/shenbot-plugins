@@ -87,6 +87,8 @@ openai_text_model = "gpt-6-luna"
 openai_image_model = "gpt-image-2.5-flare"
 openai_reasoning_effort = "high"
 openai_proxy = "http://127.0.0.1:7897"
+# 可选：组织级已花费查询（需要 Admin key + api.usage.read）；留空则 check 不发额外请求。
+openai_usage_api_key = "sk-admin-..."
 ```
 
 修改后通过宿主重载 `codex` 插件。真实群号与本机路径只放本地、Git 忽略的配置，
@@ -97,6 +99,26 @@ openai_proxy = "http://127.0.0.1:7897"
 配置范围：超时 1–60 秒；查询冷却 1–3600 秒；默认均为 15 秒。
 并发命令共用一个查询槽位，避免同时请求；收到 HTTP 429 时遵守 Retry-After。
 不缓存额度，冷却结束后的命令重新读取当前账号和实时额度。
+
+## OpenAI API 用量（可选）
+
+`openai_usage_api_key` 为空时，`/codex check` 保持原样：只查 Codex 订阅额度，不发任何额外请求、不显示 OpenAI 段。
+
+填入组织 Admin key（需要 `api.usage.read`）后，订阅额度下方会追加一段组织级已花费：
+
+~~~text
+OpenAI API 用量（最近 7 天，已花费估算，不是余额）
+合计：$0.12
+11-01：$0.05
+10-31：$0.07
+余额与账单请到 OpenAI 控制台查看
+~~~
+
+- 数据来自 `GET /v1/organization/costs`（`bucket_width=1d`，最近 7 天），汇总金额并按天列出最近两天，始终标注「已花费（估算）」。
+- **没有任何接口能返回剩余余额**：`dashboard/billing/credit_grants` 只接受浏览器 session key，secret key（包括 Admin key）一律拿不到余额。余额与充值只能看 OpenAI 控制台，插件不编造这个数字。
+- 缺 `api.usage.read`（HTTP 403）时只显示一行提示：需要 Admin key（Settings → Organization → Admin keys），不会整段抛出 403 噪音。
+- 其他失败（网络、代理、401、5xx）不影响订阅额度展示，只在用量段写简短原因。
+- 用量结果缓存 5 分钟并沿用 check 冷却；重载插件会清空缓存。请求走 `openai_proxy`，不重试、不跟随重定向。
 
 ## 每两分钟自动提醒与 reset 警告
 

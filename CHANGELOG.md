@@ -2,6 +2,12 @@
 
 宿主版本对应 [shenbot_api.py](shenbot_api.py) 的 `__version__`；ICA/Tailchat API 与各插件的 `VERSION` 分别管理。
 
+## 2026-11-01 Codex check 附带 OpenAI API 用量
+
+- [codex](plugins/codex.py) **0.6.0 → 0.6.1**：新增可选 `openai_usage_api_key`。配置后 `/codex check` 在订阅额度后追加最近 7 天的组织级已花费（`GET /v1/organization/costs`，按天 bucket 汇总），明确标注「已花费（估算）」而不是余额；没有任何 secret key 接口能查剩余余额，余额只能看 OpenAI 控制台。未配置时零额外请求，输出保持原样。
+- 缺 `api.usage.read` 时只给一行可执行提示（需要 Admin key：Settings → Organization → Admin keys）；网络、代理、401、5xx 失败不影响订阅额度展示。结果缓存 5 分钟，沿用 check 冷却与 `openai_proxy`，不重试、不跟随重定向。
+- 测试覆盖未配置零请求、已花费汇总展示、403 缺 scope 提示且不影响订阅段；真实调用确认 403 提示路径（当前 key 均缺 `api.usage.read`）。
+
 ## 2026-11-01 Codex 密钥改为内联配置
 
 - 两把 OpenAI Key 从独立文件改为直接写在 `config/codex.toml` 的 `openai_text_api_key`（外审/润色）与 `openai_image_api_key`（生图）；删除 `openai_key_file` 配置项与文件读取路径，不保留双通道。`config*` 已被 gitignore，Key 仍不进入提交、日志、异常文本、PG 存档或回执。

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import io
+import json
 import sys
 import tempfile
 import threading
@@ -208,6 +210,78 @@ class InlineKeyTests(unittest.TestCase):
         self.assertEqual(settings.openai_text_api_key, "")
         self.assertEqual(settings.openai_image_api_key, "")
         self.assertEqual(emitted, [])
+
+
+class UsageTests(unittest.TestCase):
+    def setUp(self):
+        codex._reset_usage_cache()
+        self.addCleanup(codex._reset_usage_cache)
+
+    def test_unconfigured_usage_key_sends_no_request(self):
+        """未配置用量 Key 时 check 保持原输出，不发任何额外请求。"""
+        settings = codex.Settings()
+        with patch.object(codex, "fetch_openai_costs") as fetch:
+            self.assertEqual(codex.openai_usage_section(settings), "")
+            fetch.assert_not_called()
+
+    def test_spend_is_shown_as_estimate_not_balance(self):
+        """用量段只能说过「已花费（估算）」，不能编造不存在的剩余余额。"""
+        settings = codex.Settings(openai_usage_api_key="fixture-usage")
+        payload = {
+            "data": [
+                {
+                    "start_time": NOW,
+                    "results": [{"amount": {"value": 0.03, "currency": "usd"}}],
+                },
+                {
+                    "start_time": NOW + 86400,
+                    "results": [{"amount": {"value": 0.05, "currency": "usd"}}],
+                },
+                {
+                    "start_time": NOW + 2 * 86400,
+                    "results": [{"amount": {"value": 0.04, "currency": "usd"}}],
+                },
+            ]
+        }
+        with patch.object(codex, "fetch_openai_costs", return_value=payload):
+            text = codex.openai_usage_section(settings, now=NOW + 3 * 86400)
+        self.assertIn("已花费估算", text)
+        self.assertIn("不是余额", text)
+        self.assertIn("合计：$0.12", text)
+        self.assertLessEqual(len(text.splitlines()), 5)
+        self.assertNotIn("fixture-usage", text)
+
+    def test_missing_usage_scope_gives_actionable_hint(self):
+        """403 缺 api.usage.read 时只给一行可执行提示，不整段抛 403。"""
+        error = urllib.error.HTTPError(
+            codex.OPENAI_COSTS_URL,
+            403,
+            "Forbidden",
+            {},
+            # 组织接口实际返回的是 {"error": "一句话"}，也要能识别缺失的 scope。
+            io.BytesIO(
+                json.dumps(
+                    {
+                        "error": "You have insufficient permissions for this operation. "
+                        "Missing scopes: api.usage.read."
+                    }
+                ).encode()
+            ),
+        )
+        hint = str(codex._usage_http_error(error))
+        self.assertIn("api.usage.read", hint)
+        self.assertIn("Admin key", hint)
+        self.assertNotIn("HTTP 403", hint)
+
+        settings = codex.Settings(openai_usage_api_key="fixture-usage")
+        with patch.object(
+            codex, "fetch_openai_costs", side_effect=codex.UsageError(hint)
+        ):
+            usage = codex.openai_usage_section(settings)
+        # 订阅额度段照常展示，用量段只追加失败原因。
+        combined = "订阅额度示例" + "\n\n" + usage
+        self.assertIn("订阅额度示例", combined)
+        self.assertIn("api.usage.read", combined)
 
 
 class CommandTests(unittest.TestCase):
