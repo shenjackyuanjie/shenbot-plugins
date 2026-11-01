@@ -2,6 +2,13 @@
 
 宿主版本对应 [shenbot_api.py](shenbot_api.py) 的 `__version__`；ICA/Tailchat API 与各插件的 `VERSION` 分别管理。
 
+## 2026-11-01 Codex check 显示月度上限与按上限剩余
+
+- [codex](plugins/codex.py) **0.6.1 → 0.6.2**：用量段改用 **UTC 本月 1 日至今**窗口，并追加 `GET /v1/organization/spend_limit` 的月度上限，输出「本月上限 / 已花费估算 / 按上限剩余（估算）」；上限窗口与已花费同口径。
+- 单位换算写清：`costs.amount` 是美元小数，`spend_limit.threshold_amount` 是分（10000 = $100）、`currency` 为大写代码，统一换算成美元展示；文案只写「按上限剩余（估算）」，不出现账户余额。
+- 上限接口 404（组织未设置月度预算）显示「组织未设置月度预算上限，可在 OpenAI 控制台 Settings → Limits 设置」；403 缺 `api.management.read` 显示权限提示；两者都不影响已花费展示。权限说明补全 `api.usage.read` 与 `api.management.read`。
+- 真实调用确认 `costs` 200、`spend_limit` 走 404 未配置分支；测试覆盖分→美元换算、大写 USD、缺权限与未配置提示、上限失败不影响花费段。
+
 ## 2026-11-01 Codex check 附带 OpenAI API 用量
 
 - [codex](plugins/codex.py) **0.6.0 → 0.6.1**：新增可选 `openai_usage_api_key`。配置后 `/codex check` 在订阅额度后追加最近 7 天的组织级已花费（`GET /v1/organization/costs`，按天 bucket 汇总），明确标注「已花费（估算）」而不是余额；没有任何 secret key 接口能查剩余余额，余额只能看 OpenAI 控制台。未配置时零额外请求，输出保持原样。

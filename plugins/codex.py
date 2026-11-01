@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import calendar
 import json
 import math
 import os
@@ -33,13 +34,15 @@ if TYPE_CHECKING:
     from ica_typing import IcaClient, IcaNewMessage
     from shenbot_api import IcaConnectionState, IcaConnectionWatch
 
-VERSION = "0.6.1"
+VERSION = "0.6.2"
 POLL_SECONDS = 120
 THRESHOLD_STEP = 5
 COMMAND = "/codex"
 USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
 # OpenAI 组织级已花费聚合；只有 Admin key + api.usage.read 可用，且没有「剩余余额」接口。
 OPENAI_COSTS_URL = "https://api.openai.com/v1/organization/costs"
+# 月度支出上限；threshold_amount 的单位是分，currency 为大写代码。
+OPENAI_SPEND_LIMIT_URL = "https://api.openai.com/v1/organization/spend_limit"
 OPENAI_USAGE_CACHE_SECONDS = 300
 OPENAI_USAGE_DAYS = 7
 MAX_FILE_BYTES = 4 * 1024 * 1024
@@ -579,13 +582,21 @@ def _reset_usage_cache() -> None:
     _usage_cache = None
 
 
+def _month_start(now: float) -> int:
+    """UTC 本月 1 日 0 点的时间戳；用 gmtime 避免依赖 3.11 才有的 datetime.UTC。"""
+    moment = time.gmtime(now)
+    return calendar.timegm((moment.tm_year, moment.tm_mon, 1, 0, 0, 0, 0, 0, 0))
+
+
 def _cost_query(now: float) -> str:
-    started = int(now) - OPENAI_USAGE_DAYS * 86400
+    """与月度上限同口径：UTC 本月 1 日至今，按天分桶，最多 180 桶。"""
+    started = _month_start(now)
+    days = min(180, int((now - started) // 86400) + 1)
     return urlencode(
         {
             "start_time": started,
             "bucket_width": "1d",
-            "limit": OPENAI_USAGE_DAYS,
+            "limit": days,
         }
     )
 
@@ -609,12 +620,21 @@ def _usage_http_error(error: urllib.error.HTTPError) -> UsageError:
         message = _usage_error_message(error.read(64 * 1024))
     except OSError:
         message = ""
+    if error.code in (401, 403) and "api.management.read" in message:
+        return UsageError(
+            "月度上限需 api.management.read 权限（Organization Admin key）"
+        )
     if error.code in (401, 403) and "api.usage.read" in message:
         return UsageError(
             "该 Key 缺 api.usage.read，需要 Admin key（Settings → Organization → Admin keys）"
         )
     if 300 <= error.code < 400:
         return UsageError("用量接口发生重定向，已停止查询")
+    # spend_limit 在该组织没有配置上限时返回 404，不是权限问题。
+    if error.code == 404 and "spend limit" in message.lower():
+        return UsageError(
+            "组织未设置月度预算上限，可在 OpenAI 控制台 Settings → Limits 设置"
+        )
     if error.code == 401:
         return UsageError("Key 认证失败（HTTP 401），请检查 openai_usage_api_key")
     if error.code == 403:
@@ -624,10 +644,10 @@ def _usage_http_error(error: urllib.error.HTTPError) -> UsageError:
     return UsageError(f"用量服务暂时不可用（HTTP {error.code}）")
 
 
-def fetch_openai_costs(settings: Settings, now: float | None = None) -> dict:
-    """读取最近 7 天的组织已花费；不重试、不跟随重定向，Key 只进请求头。"""
+def _openai_get(url: str, settings: Settings, label: str) -> dict:
+    """组织级只读接口：不重试、不跟随重定向，Key 只进请求头。"""
     request = urllib.request.Request(
-        OPENAI_COSTS_URL + "?" + _cost_query(now or time.time()),
+        url,
         headers={
             "Authorization": "Bearer " + settings.openai_usage_api_key,
             "Accept": "application/json",
@@ -650,14 +670,28 @@ def fetch_openai_costs(settings: Settings, now: float | None = None) -> dict:
     except urllib.error.HTTPError as error:
         raise _usage_http_error(error) from None
     except (OSError, TimeoutError, urllib.error.URLError):
-        raise UsageError("连接用量接口失败或超时，请检查网络与 openai_proxy") from None
+        raise UsageError(
+            f"连接{label}接口失败或超时，请检查网络与 openai_proxy"
+        ) from None
     if len(raw) > MAX_RESPONSE_BYTES:
-        raise UsageError("用量接口响应过大，已停止查询")
+        raise UsageError(f"{label}接口响应过大，已停止查询")
     try:
         parsed = json.loads(raw)
     except ValueError:
-        raise UsageError("用量接口返回的不是有效 JSON") from None
+        raise UsageError(f"{label}接口返回的不是有效 JSON") from None
     return parsed if isinstance(parsed, dict) else {}
+
+
+def fetch_openai_costs(settings: Settings, now: float | None = None) -> dict:
+    """读取 UTC 本月 1 日至今的组织已花费。"""
+    return _openai_get(
+        OPENAI_COSTS_URL + "?" + _cost_query(now or time.time()), settings, "用量"
+    )
+
+
+def fetch_openai_spend_limit(settings: Settings) -> dict:
+    """读取月度支出上限；threshold_amount 单位是分，currency 是大写代码。"""
+    return _openai_get(OPENAI_SPEND_LIMIT_URL, settings, "月度上限")
 
 
 def _money(value: float, currency: str) -> str:
@@ -666,8 +700,26 @@ def _money(value: float, currency: str) -> str:
     return "$" + amount if code == "USD" else f"{code} {amount}"
 
 
-def format_openai_costs(payload: dict) -> str:
-    """汇总已花费金额；明细只保留最近两天，整体控制在 5 行内。"""
+def _spend_limit_value(payload: dict) -> tuple[float, str]:
+    """threshold_amount 的单位是分（10000 = $100），costs 的金额是美元小数。"""
+    threshold = payload.get("threshold_amount")
+    if threshold is None:
+        raise UsageError("月度上限响应缺少 threshold_amount")
+    try:
+        limit = float(Decimal(str(threshold))) / 100
+    except (InvalidOperation, ValueError):
+        raise UsageError("月度上限金额格式异常") from None
+    currency = payload.get("currency")
+    return limit, currency if isinstance(currency, str) and currency.strip() else "USD"
+
+
+def format_openai_costs(
+    payload: dict,
+    *,
+    spend_limit: tuple[float, str] | None = None,
+    limit_hint: str = "",
+) -> str:
+    """汇总本月已花费；有月度上限时给出按上限剩余（估算），明细最多两天。"""
     buckets = payload.get("data")
     if not isinstance(buckets, list):
         raise UsageError("用量响应缺少 data 字段")
@@ -695,10 +747,17 @@ def format_openai_costs(payload: dict) -> str:
         if isinstance(started, (int, float)):
             days.append((float(started), amount))
         total += amount
-    lines = [
-        "OpenAI API 用量（最近 7 天，已花费估算，不是余额）",
-        f"合计：{_money(total, currency)}",
-    ]
+    lines = ["OpenAI API 用量（本月至今，已花费估算，不是余额）"]
+    if spend_limit is not None:
+        limit, limit_currency = spend_limit
+        remaining = max(limit - total, 0.0)
+        lines.append(
+            f"本月上限 {_money(limit, limit_currency)} / "
+            f"已花费估算 {_money(total, currency)} / "
+            f"按上限剩余（估算）{_money(remaining, limit_currency)}"
+        )
+    else:
+        lines.append(f"合计：{_money(total, currency)}")
     spent = [(started, amount) for started, amount in days if amount > 0]
     for started, amount in list(reversed(spent))[:2]:
         try:
@@ -707,7 +766,9 @@ def format_openai_costs(payload: dict) -> str:
             stamp = "未知日期"
         lines.append(f"{stamp}：{_money(amount, currency)}")
     if not spent:
-        lines.append("最近 7 天没有已记录的花费")
+        lines.append("本月至今没有已记录的花费")
+    if limit_hint:
+        lines.append(limit_hint)
     lines.append("余额与账单请到 OpenAI 控制台查看")
     return "\n".join(lines)
 
@@ -721,9 +782,24 @@ def openai_usage_section(settings: Settings, now: float | None = None) -> str:
     if _usage_cache is not None and _usage_cache[0] > moment:
         return _usage_cache[1]
     try:
-        text = format_openai_costs(fetch_openai_costs(settings, moment))
+        costs = fetch_openai_costs(settings, moment)
     except UsageError as error:
         text = f"OpenAI API 用量：{error}"
+    else:
+        spend_limit = None
+        hint = ""
+        try:
+            spend_limit = _spend_limit_value(fetch_openai_spend_limit(settings))
+        except UsageError as error:
+            # 上限权限、未配置上限或接口失败都只追加一行，不影响已花费展示。
+            message = str(error)
+            hint = (
+                message
+                if "api.management.read" in message
+                or message.startswith("组织未设置月度预算上限")
+                else f"月度上限查询失败：{message}"
+            )
+        text = format_openai_costs(costs, spend_limit=spend_limit, limit_hint=hint)
     _usage_cache = (moment + OPENAI_USAGE_CACHE_SECONDS, text)
     return text
 

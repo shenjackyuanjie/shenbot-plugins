@@ -104,18 +104,21 @@ openai_usage_api_key = "sk-admin-..."
 
 `openai_usage_api_key` 为空时，`/codex check` 保持原样：只查 Codex 订阅额度，不发任何额外请求、不显示 OpenAI 段。
 
-填入组织 Admin key（需要 `api.usage.read`）后，订阅额度下方会追加一段组织级已花费：
+填入组织 Admin key 后，订阅额度下方会追加一段组织级已花费；配置了月度预算时再带上限对比：
 
 ~~~text
-OpenAI API 用量（最近 7 天，已花费估算，不是余额）
-合计：$0.12
+OpenAI API 用量（本月至今，已花费估算，不是余额）
+本月上限 $100.00 / 已花费估算 $0.12 / 按上限剩余（估算）$99.88
 11-01：$0.05
 10-31：$0.07
 余额与账单请到 OpenAI 控制台查看
 ~~~
 
-- 数据来自 `GET /v1/organization/costs`（`bucket_width=1d`，最近 7 天），汇总金额并按天列出最近两天，始终标注「已花费（估算）」。
-- **没有任何接口能返回剩余余额**：`dashboard/billing/credit_grants` 只接受浏览器 session key，secret key（包括 Admin key）一律拿不到余额。余额与充值只能看 OpenAI 控制台，插件不编造这个数字。
+- 已花费来自 `GET /v1/organization/costs`，窗口是 **UTC 本月 1 日至今**（`bucket_width=1d`，`limit` 不超过 180），与月度上限同口径；明细只列最近两天。
+- 月度上限来自 `GET /v1/organization/spend_limit`。注意单位：`costs` 的 `amount.value` 是**美元小数**，`spend_limit` 的 `threshold_amount` 是**分**（10000 = $100），`currency` 是**大写**代码（如 `USD`）；换算后统一按美元展示。
+- 所需权限：已花费需要 `api.usage.read`，月度上限需要 `api.management.read`，两者都要 Organization Admin key。
+- `spend_limit` 返回 404（`No organization spend limit is configured`）表示组织**没有设置月度预算**，只显示一行「组织未设置月度预算上限，可在 OpenAI 控制台 Settings → Limits 设置」；403 缺 `api.management.read` 时只显示一行权限提示。两种情况都不影响已花费展示。
+- **没有任何接口能返回剩余余额**：`dashboard/billing/credit_grants` 只接受浏览器 session key，secret key（包括 Admin key）一律拿不到余额。界面只写「按上限剩余（估算）」，余额与账单仍以 OpenAI 控制台为准。
 - 缺 `api.usage.read`（HTTP 403）时只显示一行提示：需要 Admin key（Settings → Organization → Admin keys），不会整段抛出 403 噪音。
 - 其他失败（网络、代理、401、5xx）不影响订阅额度展示，只在用量段写简短原因。
 - 用量结果缓存 5 分钟并沿用 check 冷却；重载插件会清空缓存。请求走 `openai_proxy`，不重试、不跟随重定向。

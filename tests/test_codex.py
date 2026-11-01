@@ -224,8 +224,8 @@ class UsageTests(unittest.TestCase):
             self.assertEqual(codex.openai_usage_section(settings), "")
             fetch.assert_not_called()
 
-    def test_spend_is_shown_as_estimate_not_balance(self):
-        """用量段只能说过「已花费（估算）」，不能编造不存在的剩余余额。"""
+    def test_spend_and_monthly_limit_are_shown_as_estimates(self):
+        """用量段只能说过「已花费（估算）」，上限换算成分→美元，不编造账户余额。"""
         settings = codex.Settings(openai_usage_api_key="fixture-usage")
         payload = {
             "data": [
@@ -244,11 +244,22 @@ class UsageTests(unittest.TestCase):
                 },
             ]
         }
-        with patch.object(codex, "fetch_openai_costs", return_value=payload):
+        with (
+            patch.object(codex, "fetch_openai_costs", return_value=payload),
+            # threshold_amount 是分（10000 = $100），currency 是大写 USD。
+            patch.object(
+                codex,
+                "fetch_openai_spend_limit",
+                return_value={"threshold_amount": 10000, "currency": "USD"},
+            ),
+        ):
             text = codex.openai_usage_section(settings, now=NOW + 3 * 86400)
         self.assertIn("已花费估算", text)
         self.assertIn("不是余额", text)
-        self.assertIn("合计：$0.12", text)
+        self.assertNotIn("账户余额", text)
+        self.assertIn("本月上限 $100.00", text)
+        self.assertIn("已花费估算 $0.12", text)
+        self.assertIn("按上限剩余（估算）$99.88", text)
         self.assertLessEqual(len(text.splitlines()), 5)
         self.assertNotIn("fixture-usage", text)
 
@@ -268,6 +279,31 @@ class UsageTests(unittest.TestCase):
             codex.format_openai_costs(
                 {"data": [{"results": [{"amount": {"value": "not-a-number"}}]}]}
             )
+
+    def test_monthly_limit_failures_do_not_hide_spend(self):
+        """上限缺权限或其他失败只追加一行，已花费结果必须保留。"""
+        settings = codex.Settings(openai_usage_api_key="fixture-usage")
+        costs = {
+            "data": [{"start_time": NOW, "results": [{"amount": {"value": 0.12}}]}]
+        }
+        for error, expected in (
+            (
+                codex.UsageError(
+                    "月度上限需 api.management.read 权限（Organization Admin key）"
+                ),
+                "api.management.read",
+            ),
+            (codex.UsageError("连接月度上限接口失败或超时"), "月度上限查询失败"),
+        ):
+            codex._reset_usage_cache()
+            with (
+                self.subTest(expected=expected),
+                patch.object(codex, "fetch_openai_costs", return_value=costs),
+                patch.object(codex, "fetch_openai_spend_limit", side_effect=error),
+            ):
+                text = codex.openai_usage_section(settings)
+            self.assertIn("合计：$0.12", text)
+            self.assertIn(expected, text)
 
     def test_missing_usage_scope_gives_actionable_hint(self):
         """403 缺 api.usage.read 时只给一行可执行提示，不整段抛 403。"""
@@ -290,6 +326,37 @@ class UsageTests(unittest.TestCase):
         self.assertIn("api.usage.read", hint)
         self.assertIn("Admin key", hint)
         self.assertNotIn("HTTP 403", hint)
+
+        # 上限接口缺 api.management.read 与「未配置上限」各有明确提示，都不是 404 噪音。
+        management = urllib.error.HTTPError(
+            codex.OPENAI_SPEND_LIMIT_URL,
+            403,
+            "Forbidden",
+            {},
+            io.BytesIO(
+                json.dumps({"error": "Missing scopes: api.management.read."}).encode()
+            ),
+        )
+        self.assertIn("api.management.read", str(codex._usage_http_error(management)))
+        missing_limit = urllib.error.HTTPError(
+            codex.OPENAI_SPEND_LIMIT_URL,
+            404,
+            "Not Found",
+            {},
+            io.BytesIO(
+                json.dumps(
+                    {
+                        "error": {
+                            "message": "No organization spend limit is configured.",
+                            "code": "not_found",
+                        }
+                    }
+                ).encode()
+            ),
+        )
+        self.assertIn(
+            "组织未设置月度预算上限", str(codex._usage_http_error(missing_limit))
+        )
 
         settings = codex.Settings(openai_usage_api_key="fixture-usage")
         with patch.object(
