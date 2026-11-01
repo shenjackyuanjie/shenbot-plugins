@@ -228,10 +228,7 @@ class ImageService:
         direct: bool = False,
         params: dict | None = None,
     ) -> str:
-        """依次执行前审、（润色）、后审，冻结草稿与生成参数并返回预览文本。
-
-        direct 只跳过润色：两次审核仍然独立执行，放行对象始终是最终要生成的提示词。
-        """
+        """直出前审一次，润色前后各审一次；冻结草稿与参数并返回预览文本。"""
         prompt = prompt.strip()
         if not 0 < len(prompt) <= MAX_PROMPT:
             raise ImageError(f"图片描述需为 1–{MAX_PROMPT} 字。")
@@ -262,10 +259,7 @@ class ImageService:
         direct: bool,
         params: dict,
     ) -> str:
-        """执行前审、（润色）、后审并冻结草稿，返回预览文本。
-
-        direct 只跳过润色：两次审核仍然独立执行，放行对象始终是最终要生成的提示词。
-        """
+        """直出只审核原始输入；润色后再独立后审，放行对象与生成输入保持一致。"""
         archive = self.archive
         short = str(job)[:8]
         stopped = threading.Event()
@@ -289,6 +283,7 @@ class ImageService:
                 archive.finish_job(job, "blocked")
                 self.log("blocked", level="warn", job=short, stage="pre_review")
                 raise ImageError("内容未通过 NSFW 审核：" + verdict.value["reason"])
+            post = None
             if direct:
                 final_prompt = prompt
                 self.log("direct", job=short)
@@ -296,12 +291,14 @@ class ImageService:
                 _, rewritten = review("rewrite", prompt)
                 final_prompt = rewritten.value["prompt"]
                 self.log("rewrite", job=short, chars=len(final_prompt))
-            post, verdict = review("post_review", final_prompt, original=prompt)
-            self.log("post_review", job=short, decision=verdict.value["decision"])
-            if verdict.value["decision"] != "pass":
-                archive.finish_job(job, "blocked")
-                self.log("blocked", level="warn", job=short, stage="post_review")
-                raise ImageError("润色结果未通过 NSFW 审核：" + verdict.value["reason"])
+                post, verdict = review("post_review", final_prompt, original=prompt)
+                self.log("post_review", job=short, decision=verdict.value["decision"])
+                if verdict.value["decision"] != "pass":
+                    archive.finish_job(job, "blocked")
+                    self.log("blocked", level="warn", job=short, stage="post_review")
+                    raise ImageError(
+                        "润色结果未通过 NSFW 审核：" + verdict.value["reason"]
+                    )
             archive.prepare_draft(job, final_prompt, pre, post)
         except (ProviderError, TransportError) as error:
             # 上游格式异常也带上任务号，否则群里只看到一句无法追查的失败提示。

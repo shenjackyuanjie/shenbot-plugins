@@ -48,6 +48,7 @@ class FakeArchive:
         pass
 
     def prepare_draft(self, job, prompt, pre, post):
+        self.job["reviewed_prompt"] = prompt
         self.drafted = True
 
     def finish_job(self, job, state):
@@ -225,34 +226,12 @@ class ImageFlowTests(unittest.TestCase):
         # 只有生成前回执；取消后迟到的结果不再自动回图。
         self.assertEqual(client.send_message.call_count, 1)
 
-    def test_direct_skips_rewrite_but_keeps_both_reviews(self):
-        archive = FakeArchive()
-        service = self.service(archive)
-        stages = []
-        verdicts = iter(
-            [
-                {"decision": "pass", "reason": "可以"},
-                {"decision": "pass", "reason": "可以"},
-            ]
-        )
-
-        def record(call, job, stopped):
-            stages.append(call.stage)
-            return "request", SimpleNamespace(value=next(verdicts))
-
-        service._call = Mock(side_effect=record)
-        service.create(message(), Mock(), "虚构图片要求", direct=True)
-        # direct 不改写提示词，但前审与后审仍是两次独立请求，草稿要求两次 pass。
-        self.assertEqual(stages, ["pre_review", "post_review"])
-        self.assertTrue(archive.drafted)
-
-    def test_direct_freezes_image_options_for_generation(self):
+    def test_direct_reviews_once_and_generates_with_frozen_image_options(self):
         archive = FakeArchive()
         service = self.service(archive)
         calls = []
         values = iter(
             [
-                {"decision": "pass", "reason": "可以"},
                 {"decision": "pass", "reason": "可以"},
                 {"image_sha256": "fixture-digest"},
             ]
@@ -271,7 +250,10 @@ class ImageFlowTests(unittest.TestCase):
             params={"size": "1024x1536", "quality": "high"},
         )
         service.confirm(message(), Mock(), "abcdef12")
-        # 未显式给出的参数按 auto 冻结，确认后按冻结值请求上游。
+        # 直出只做一次前审，不润色或后审；确认后按冻结值生成。
+        self.assertEqual([call.stage for call in calls], ["pre_review", "generate"])
+        self.assertTrue(archive.drafted)
+        self.assertEqual(calls[-1].payload["prompt"], "虚构图片要求")
         self.assertEqual(calls[-1].payload["size"], "1024x1536")
         self.assertEqual(calls[-1].payload["quality"], "high")
         self.assertEqual(calls[-1].payload["background"], "auto")
@@ -318,12 +300,7 @@ class ImageFlowTests(unittest.TestCase):
         archive = FakeArchive()
         service = self.service(archive)
         stages = []
-        verdicts = iter(
-            [
-                {"decision": "pass", "reason": "可以"},
-                {"decision": "pass", "reason": "可以"},
-            ]
-        )
+        verdicts = iter([{"decision": "pass", "reason": "可以"}])
 
         def record(call, job, stopped):
             stages.append(call.stage)
@@ -334,8 +311,8 @@ class ImageFlowTests(unittest.TestCase):
         msg.reply = {"files": [{"type": "image/png", "url": "https://fixture/1.png"}]}
         with patch.object(image_service, "_download", return_value=b"fixture"):
             service.attach(msg, Mock(), "abcdef12")
-        # 追加参考图作废旧草稿，必须重新跑前审和后审再冻结。
-        self.assertEqual(stages, ["pre_review", "post_review"])
+        # 追加参考图作废旧草稿，直出仍只做一次包含新参考图的前审。
+        self.assertEqual(stages, ["pre_review"])
         self.assertEqual(archive.appended, 1)
 
     def test_params_can_be_adjusted_before_confirmation(self):
@@ -344,7 +321,6 @@ class ImageFlowTests(unittest.TestCase):
         calls = []
         values = iter(
             [
-                {"decision": "pass", "reason": "可以"},
                 {"decision": "pass", "reason": "可以"},
                 {"image_sha256": "fixture-digest"},
             ]

@@ -122,6 +122,9 @@ class ArchiveFlowTests(unittest.TestCase):
             rewrite, "succeeded", {"prompt": "蓝色背景上的纸鹤"}
         )
         post = self._review(job, "post_review", "pass", "蓝色背景上的纸鹤", [reference])
+        # 跑过润色的任务即使传回原描述，也不能借单审入口跳过后审。
+        with self.assertRaises(ArchiveError):
+            self.archive.prepare_draft(job, "一只纸鹤", pre)
         with self.assertRaises(ArchiveError):
             self.archive.prepare_draft(job, "未经审核的另一张图", pre, post)
         self.archive.prepare_draft(job, "蓝色背景上的纸鹤", pre, post)
@@ -224,6 +227,39 @@ class ArchiveFlowTests(unittest.TestCase):
             ).fetchall()
             self.assertNotIn("must-not-persist", repr(rows))
             self.assertGreaterEqual(len(rows), 4)
+
+    def test_direct_single_review_binds_original_prompt_and_current_references(self):
+        owner = (10001, -10002, 10003)
+        prompt = "一只纸鹤"
+        job = self.archive.create_job(owner, "fixture-direct-once", prompt)
+        pre = self._review(job, "pre_review", "pass", prompt)
+        with self.assertRaises(ArchiveError):
+            self.archive.prepare_draft(job, "改成另一幅图", pre)
+        self.archive.prepare_draft(job, prompt, pre)
+        self.assertFalse(self.archive.has_stage(job, "post_review"))
+        with self.archive._db() as db:
+            ready = db.execute(
+                self.archive._sql(
+                    "SELECT details FROM {schema}.events WHERE job_id=%s AND kind='draft_ready'"
+                ),
+                (job,),
+            ).fetchone()
+        self.assertIsNone(ready["details"]["post_request"])
+
+        # 单审不是可复用通行证：追加新图后，原来的前审不能确认新输入。
+        stream = BytesIO()
+        Image.new("RGB", (2, 2), "green").save(stream, "PNG")
+        image = stream.getvalue()
+        self.archive.append_references(job, owner, [image])
+        with self.assertRaises(ArchiveError):
+            self.archive.prepare_draft(job, prompt, pre)
+        updated_pre = self._review(
+            job, "pre_review", "pass", prompt, [hashlib.sha256(image).hexdigest()]
+        )
+        self.archive.prepare_draft(job, prompt, updated_pre)
+        claimed = self.archive.claim_confirmation(job, owner)
+        self.assertEqual(claimed["reviewed_prompt"], prompt)
+        self.assertEqual(claimed["state"], "generating")
 
     def test_old_http_failure_retries_atomically_and_replayed_command_cannot_regenerate(
         self,

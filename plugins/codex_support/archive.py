@@ -375,9 +375,13 @@ class Archive:
                 raise ArchiveError("请求已归档或不存在，不覆盖既有结果。")
 
     def prepare_draft(
-        self, job_id: UUID, prompt: str, pre_request: UUID, post_request: UUID
+        self,
+        job_id: UUID,
+        prompt: str,
+        pre_request: UUID,
+        post_request: UUID | None = None,
     ) -> str:
-        """只有两次独立 pass 才能冻结草稿；图像引用也纳入摘要，确认后不能换图。"""
+        """直出只需前审；润色需独立双审，放行始终绑定实际提示词和参考图。"""
         if not prompt.strip() or pre_request == post_request:
             raise ArchiveError("草稿或独立审核记录无效。")
         with self._db() as db:
@@ -387,11 +391,20 @@ class Archive:
             ).fetchone()
             if job is None or job["state"] != "reviewing":
                 raise ArchiveError("任务不在审核阶段，不能替换已冻结草稿。")
+            reviews = [(pre_request, "pre_review", job["original_prompt"])]
+            if post_request is None:
+                rewritten = db.execute(
+                    self._sql(
+                        "SELECT 1 FROM {schema}.requests WHERE job_id=%s AND stage='rewrite' LIMIT 1"
+                    ),
+                    (job_id,),
+                ).fetchone()
+                if prompt != job["original_prompt"] or rewritten is not None:
+                    raise ArchiveError("只有未润色且保持原描述的直出任务可以省略后审。")
+            else:
+                reviews.append((post_request, "post_review", prompt))
             references = self._reference_hashes(db, job_id)
-            for request_id, stage, reviewed in (
-                (pre_request, "pre_review", job["original_prompt"]),
-                (post_request, "post_review", prompt),
-            ):
+            for request_id, stage, reviewed in reviews:
                 verdict = db.execute(
                     self._sql(
                         "SELECT request_payload FROM {schema}.requests WHERE id=%s AND job_id=%s AND stage=%s "
@@ -426,7 +439,9 @@ class Archive:
                 "draft_ready",
                 {
                     "pre_request": str(pre_request),
-                    "post_request": str(post_request),
+                    "post_request": str(post_request)
+                    if post_request is not None
+                    else None,
                     "digest": digest,
                 },
             )

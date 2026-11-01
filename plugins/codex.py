@@ -32,7 +32,7 @@ if TYPE_CHECKING:
     from ica_typing import IcaClient, IcaNewMessage
     from shenbot_api import IcaConnectionState, IcaConnectionWatch
 
-VERSION = "0.5.4"
+VERSION = "0.5.5"
 POLL_SECONDS = 120
 THRESHOLD_STEP = 5
 COMMAND = "/codex"
@@ -61,7 +61,7 @@ HELP_TEXT = (
 IMAGE_HELP = (
     "Codex 生图帮助\n"
     "/codex image <描述>：先润色并做前后两次 NSFW 审核，展示提示词等待你确认。\n"
-    "/codex image direct <描述>：跳过润色，只做两次 NSFW 审核后直接按原描述生成。\n"
+    "/codex image direct <描述>：跳过润色，只做一次前审，通过后等待确认并按原描述生成。\n"
     "引用图片时按改图处理，最多 5 张，按引用顺序一起作为参考；引用里没有图片会被拒绝。\n"
     "/codex image attach <编号>：引用含图片的消息，把图追加为参考图并重新审核。\n"
     "/codex image set <编号> [--size WxH] [--quality 级别] [--background 模式]：确认前调整参数。\n"
