@@ -23,7 +23,12 @@ from PIL import Image
 from psycopg import sql
 
 from plugins import codex
-from plugins.codex_support.archive import Archive, ArchiveError, sanitized
+from plugins.codex_support.archive import (
+    Archive,
+    ArchiveError,
+    _validate_execution_request,
+    sanitized,
+)
 from plugins.codex_support.image_service import ImageError, ImageService, ImageSettings
 from plugins.codex_support.providers import Call
 from plugins.codex_support.transport import HTTPResult
@@ -65,6 +70,21 @@ class SanitizeTests(unittest.TestCase):
         self.assertEqual(cleaned["output_tokens_details"]["cached_tokens"], 5)
         self.assertEqual(cleaned["access_token"], "[已剔除]")
         self.assertEqual(cleaned["set-cookie"], "[已剔除]")
+
+
+class LegacyModelSelectionTests(unittest.TestCase):
+    def test_model_only_legacy_snapshot_keeps_subscription_and_selected_model(self):
+        """旧任务选 Sunburst 后允许正常生成，拒绝误用原 Flare 或串到 API 计费。"""
+        snapshot = {"image_model": "gpt-image-2.5-sunburst"}
+        _validate_execution_request(
+            snapshot, "codex", "generate", "gpt-image-2.5-sunburst", {}
+        )
+        for provider, model in (
+            ("codex", "gpt-image-2.5-flare"),
+            ("openai", "gpt-image-2.5-sunburst"),
+        ):
+            with self.subTest(provider=provider), self.assertRaises(ArchiveError):
+                _validate_execution_request(snapshot, provider, "generate", model, {})
 
 
 @unittest.skipUnless(
@@ -196,10 +216,17 @@ class ArchiveFlowTests(unittest.TestCase):
         )
         restarted.finish_request(pre, "succeeded", {"decision": "pass"})
         restarted.prepare_draft(job, prompt, pre)
-        restarted.update_image_params(job, owner, {"quality": "high"})
+        restarted.update_image_params(
+            job, owner, {"quality": "max"}, image_model="gpt-image-2.5-sunburst"
+        )
+        frozen = {**frozen, "image_model": "gpt-image-2.5-sunburst"}
         self.assertEqual(
             restarted.claim_confirmation(job, owner)["execution_config"], frozen
         )
+        with self.assertRaises(ArchiveError):
+            restarted.update_image_params(
+                job, owner, {"quality": "low"}, image_model="gpt-image-2.5-flare"
+            )
         payload = {
             "api_endpoint": frozen["image_base_url"] + "/images/edits",
             "prompt": prompt,
@@ -343,11 +370,15 @@ class ArchiveFlowTests(unittest.TestCase):
         self.archive.prepare_draft(job, "蓝色背景上的纸鹤", pre, post)
         # 确认前可调整参数，只合并给出的键；冻结的提示词和审核记录不受影响。
         self.assertEqual(
-            self.archive.update_image_params(job, owner, {"quality": "high"}),
+            self.archive.update_image_params(job, owner, {"quality": "high"})[
+                "image_params"
+            ],
             {"quality": "high"},
         )
         self.assertEqual(
-            self.archive.update_image_params(job, owner, {"background": "transparent"}),
+            self.archive.update_image_params(job, owner, {"background": "transparent"})[
+                "image_params"
+            ],
             {"quality": "high", "background": "transparent"},
         )
         with self.assertRaises(ArchiveError):

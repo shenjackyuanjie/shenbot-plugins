@@ -40,7 +40,10 @@ api.openai.com，外审/润色与生图各用一把专用 Key，不使用订阅�
 `text_base_url`、`text_reasoning_effort` 写入 `jobs.execution_config` 并与任务一起返回。
 确认与手动重试都只读这份快照，配置热重载不会把已建任务从 API 计费切回订阅额度，或换掉审核/生图模型。
 归档层在每次外发前核对请求的 provider、模型与端点必须与冻结值一致，重放同一来源也不会改写快照。
-空快照表示历史任务，继续沿用 Codex 与 DeepSeek 路径。
+空快照表示历史任务，继续沿用 Codex 与 DeepSeek 路径，图片默认 Flare；不会批量回填或改写已有记录。
+确认前显式 `set --model` 只更新图片模型；模型与质量等参数同一条 SQL 原子保存，
+后端、端点和审核配置不变，确认后及 retry 均沿用最终确认的模型。
+历史空快照选模型时只记录图片模型覆盖，不套用当前全局后端配置。
 大图可能明显增加数据库及备份体积，后续按真实用量决定是否增加保留策略，不提前搭建对象存储。
 
 ## 审核和确认的不变量
@@ -102,11 +105,13 @@ HTTP/Socket.IO 受理仅记为 submitted，不能伪称 QQ 最终送达。
 | --- | --- | --- |
 | --size | auto 或 512–2048 的 宽x高 | 例如 1024x1536 |
 | --quality | auto/low/medium/high/xhigh/max | 上游渲染质量档位 |
+| --model | flare/sunburst | 本次任务的图片模型；省略时沿用配置或任务原值 |
+| --max | 无取值 | 固定选择 sunburst + 质量 max，优先于同条命令的 model/quality，与顺序无关 |
 | --background | auto/transparent/opaque | 需要透明背景时指定 |
 
 两种后端的图片模型只允许 `gpt-image-2.5-flare`、`gpt-image-2.5-sunburst`
 及各自的 `-2026-09-08` 官方快照，均支持上表全部质量档位；其他模型直接拒绝，不保留旧模型兼容分支。
-校验使用任务冻结的模型，配置重载不会让旧任务换模型；旧模型任务需修改配置后重新发起。
+校验使用任务记录的模型，配置重载不会让旧任务换模型；确认前可显式 set 切换 Flare/Sunburst。
 API 模式的尺寸宽高仍必须能被 16 整除；创建、调整时直接检查，确认阶段也在消费确认前复核参数。
 
 官方定位：[Flare](https://developers.openai.com/api/docs/models/gpt-image-2.5-flare)
@@ -114,7 +119,17 @@ API 模式的尺寸宽高仍必须能被 16 整除；创建、调整时直接检
 是能力最强的生图与编辑模型，侧重编辑精度。质量缺省仍为 auto，不会自动升为 max。
 
 参数在创建任务时写入 `jobs.image_params`，预览展示的就是确认后发给上游的值。
-确认前用 `/codex image set <编号> --quality high` 调整，只合并给出的键、不接受描述文本；
+示例（`direct` 同样支持这些选项）：
+
+```text
+/codex image --model flare 一只纸鹤
+/codex image --model sunburst 精细修改参考图中的背景
+/codex image --max 一只纸鹤
+/codex set <编号> --model flare
+/codex set <编号> --max
+```
+
+确认前用 `/codex image set <编号> --quality high` 或 `--model`、`--max` 调整，只合并给出的键、不接受描述文本；
 确认命令本身不带参数，一经确认便不能再改。重放同一来源不会改写已记录参数。
 
 确认前还可以用 `/codex image attach <编号>` 追加参考图：单条消息最多 5 张、总量 16 MB 以内。

@@ -2,6 +2,13 @@
 
 宿主版本对应 [shenbot_api.py](shenbot_api.py) 的 `__version__`；ICA/Tailchat API 与各插件的 `VERSION` 分别管理。
 
+## 2026-11-02 Codex 支持任务级模型与 --max
+
+- [codex](plugins/codex.py) **0.6.4 → 0.7.0**：创建、direct 与确认前 set 新增 `--model flare|sunburst`；`--max` 无取值，固定为 Sunburst + 质量 max，优先于同条命令的 model/quality 且与顺序无关。普通帮助和生图帮助均补充两个模型的官方定位。
+- 图片模型写入任务执行快照，显式 set 时与尺寸/质量/背景同条 SQL 原子更新，保留原后端、端点与审核配置；确认领取后的快照用于回执和生成，retry 不换模型。确认后不能再调参。
+- 无需数据库结构迁移或批量回填：现有模型记录不变，历史空快照仍默认 Flare；历史任务显式选模型只记图片模型覆盖，继续走原订阅/DeepSeek 路径。
+- 复用核心流程验证命令入口、max 优先级、两后端显式选模型、热重载后调参及模型/参数冻结；更新 PG 原子调参与确认闸门回归，不发真实生图或 QQ 请求。
+
 ## 2026-11-02 Codex 只允许 Flare/Sunburst 图片模型
 
 - [codex](plugins/codex.py) **0.6.3 → 0.6.4**：按新要求移除旧模型兼容，两种后端只允许 GPT Image 2.5 Flare/Sunburst 及各自 `-2026-09-08` 官方快照；其他图片模型即使使用 auto/high 也直接拒绝，不自动替换模型。

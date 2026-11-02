@@ -130,6 +130,13 @@ def _validate_execution_request(
     """新任务的协议身份必须与冻结配置一致；历史空快照保留原路径。"""
     if not config:
         return
+    # 历史空快照任务显式选模型后只记录 image_model，仍沿用原订阅/DeepSeek 路径。
+    if set(config) == {"image_model"}:
+        if stage == "generate" and (
+            provider != "codex" or model != config["image_model"]
+        ):
+            raise ArchiveError("模型请求与任务选择的图片模型不一致。")
+        return
     if stage == "generate":
         prefix = "image"
         suffix = (
@@ -559,22 +566,38 @@ class Archive:
             )
             return digest
 
-    def update_image_params(self, job_id: UUID, owner: Scope, params: dict) -> dict:
+    def update_image_params(
+        self,
+        job_id: UUID,
+        owner: Scope,
+        params: dict,
+        *,
+        image_model: str | None = None,
+    ) -> dict:
         """确认前调整生成参数；仍绑定账号、群与发起者，且草稿必须还在有效期内。
 
         只合并给出的键，提示词与审核记录不动：参数不参与 NSFW 判定。
         """
-        if not params:
+        if not params and image_model is None:
             raise ArchiveError("没有需要更新的生成参数。")
+        if image_model is not None and image_model not in {
+            "gpt-image-2.5-flare",
+            "gpt-image-2.5-sunburst",
+        }:
+            raise ArchiveError("图片模型只允许 flare/sunburst。")
+        model_patch = {"image_model": image_model} if image_model is not None else {}
         with self._db() as db:
             row = db.execute(
                 self._sql(
-                    "UPDATE {schema}.jobs SET image_params=image_params||%s,updated_at=now() "
+                    "UPDATE {schema}.jobs SET image_params=image_params||%s, "
+                    "execution_config=execution_config||%s,updated_at=now() "
                     "WHERE id=%s AND account=%s AND room_id=%s AND (%s::bigint IS NULL OR sender_id=%s) "
-                    "AND state='awaiting_confirmation' AND expires_at>now() RETURNING image_params"
+                    "AND state='awaiting_confirmation' AND expires_at>now() "
+                    "RETURNING image_params,execution_config"
                 ),
                 (
                     Jsonb(sanitized(params)),
+                    Jsonb(model_patch),
                     job_id,
                     owner[0],
                     owner[1],
@@ -587,9 +610,12 @@ class Archive:
                     "任务不可调整参数：请检查所属群、发起者、有效期及当前状态。"
                 )
             self._event(
-                db, job_id, "params_updated", {"image_params": sanitized(params)}
+                db,
+                job_id,
+                "params_updated",
+                {"image_params": sanitized(params), **model_patch},
             )
-            return row["image_params"]
+            return row
 
     def claim_confirmation(self, job_id: UUID, owner: Scope) -> dict:
         """原子消费确认，防止并发确认、跨群操作和已过期草稿重复收费。"""

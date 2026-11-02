@@ -92,6 +92,18 @@ IMAGE_MODELS = frozenset(
 )
 
 
+def _select_image_model(execution: dict, params: dict) -> tuple[dict, dict]:
+    """命令短名只用于选模型，实际身份保存在执行快照，不混进图片 API 参数。"""
+    params = dict(params)
+    execution = dict(execution)
+    model = params.pop("model", None)
+    if model is not None:
+        if model not in {"flare", "sunburst"}:
+            raise ImageError("模型可选：flare/sunburst。")
+        execution["image_model"] = "gpt-image-2.5-" + model
+    return execution, params
+
+
 def _check_backend_params(execution: dict, params: dict) -> None:
     """按冻结模型与后端校验；旧模型在审核或消费确认前直接拒绝。"""
     if execution.get("image_model", "gpt-image-2.5-flare") not in IMAGE_MODELS:
@@ -318,7 +330,9 @@ class ImageService:
         prompt = prompt.strip()
         if not 0 < len(prompt) <= MAX_PROMPT:
             raise ImageError(f"图片描述需为 1–{MAX_PROMPT} 字。")
-        execution = self.settings.execution_config()
+        execution, params = _select_image_model(
+            self.settings.execution_config(), params or {}
+        )
         self._text_key(execution)
         if (
             execution["image_backend"] == "openai"
@@ -480,6 +494,7 @@ class ImageService:
             )
         else:
             job = archive.claim_confirmation(job["id"], owner)
+        execution = job.get("execution_config") or {}
         delegated = job["sender_id"] != msg.sender_id
         forced = retry and job.get("forced_retry", False)
         # 使用原子领取时的快照，参数、提示词与参考图都沿用原来已确认的内容。
@@ -603,20 +618,29 @@ class ImageService:
         )
 
     def set_params(self, msg, prefix: str | None, params: dict) -> str:
-        """确认前调整尺寸、质量或背景；返回合并后的完整参数供群里核对。"""
+        """确认前调整生成参数与图片模型；后端、审核模型和端点保持冻结。"""
         archive = self.archive
         owner = self.scope(msg)
         job = archive.resolve_job(prefix, owner)
         short = str(job["id"])[:8]
-        _check_backend_params(
-            job.get("execution_config") or {},
-            {**(job.get("image_params") or {}), **params},
+        selected_model = "model" in params
+        execution, params = _select_image_model(
+            job.get("execution_config") or {}, params
         )
-        merged = archive.update_image_params(job["id"], owner, params)
+        _check_backend_params(execution, {**(job.get("image_params") or {}), **params})
+        updated = archive.update_image_params(
+            job["id"],
+            owner,
+            params,
+            image_model=execution["image_model"] if selected_model else None,
+        )
+        merged = updated["image_params"]
+        execution = updated["execution_config"]
         self.log("params updated", job=short, keys=",".join(sorted(params)))
         return (
             f"任务 {short} 参数已更新：尺寸 {merged.get('size', 'auto')} / "
             f"质量 {merged.get('quality', 'auto')} / 背景 {merged.get('background', 'auto')}。\n"
+            f"后端：{_backend_label(execution)}\n"
             f"发送 /codex image confirm {short} 开始生成。"
         )
 

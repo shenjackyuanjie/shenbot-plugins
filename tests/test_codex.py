@@ -460,6 +460,40 @@ class CommandTests(unittest.TestCase):
         codex.on_ica_message(self.msg, self.client)
         self.assertEqual(self.thread.call_args.kwargs["args"][1:2], ("retry",))
 
+    def test_image_model_and_max_options_reach_the_worker(self):
+        # 保护真实命令入口：选项不进入提示词，--max 无论顺序都固定选择 Sunburst/max。
+        cases = (
+            (
+                "/codex image --model flare 一只猫",
+                "create",
+                "一只猫",
+                {"model": "flare"},
+            ),
+            (
+                "/codex direct --max 一只猫 --model flare --quality low",
+                "direct",
+                "一只猫",
+                {"model": "sunburst", "quality": "max"},
+            ),
+            (
+                "/codex set abcdef12 --model flare --quality low --max",
+                "set",
+                "abcdef12",
+                {"model": "sunburst", "quality": "max"},
+            ),
+        )
+        for command, action, value, options in cases:
+            with self.subTest(command=command):
+                self.thread.reset_mock()
+                self.msg.content = command
+                codex.on_ica_message(self.msg, self.client)
+                args = self.thread.call_args.kwargs["args"]
+                self.assertEqual((args[1], args[4], args[5]), (action, value, options))
+        self.thread.reset_mock()
+        self.msg.content = "/codex image --model gpt-image-2 一只猫"
+        codex.on_ica_message(self.msg, self.client)
+        self.thread.assert_not_called()
+
     def test_image_worker_reads_host_status_admins_to_delegate_in_current_room(self):
         # 宿主只有 status.admins；宽松 Mock 会把错误的 client.admins 也伪造成可用属性。
         msg = SimpleNamespace(

@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     from ica_typing import IcaClient, IcaNewMessage
     from shenbot_api import IcaConnectionState, IcaConnectionWatch
 
-VERSION = "0.6.4"
+VERSION = "0.7.0"
 POLL_SECONDS = 120
 THRESHOLD_STEP = 5
 COMMAND = "/codex"
@@ -56,7 +56,9 @@ HELP_TEXT = (
     "/codex image <描述>：润色并审核后预览提示词，本人确认后生成图片；可引用图片改图。\n"
     "/codex image direct <描述>：跳过润色，直接按原描述生成。\n"
     "/codex image attach <编号>：确认前追加参考图（引用含图片的消息）。\n"
-    "/codex image set <编号>：确认前调整尺寸、质量与背景。\n"
+    "/codex image set <编号>：确认前调整尺寸、质量、背景与模型。\n"
+    "生图支持 --model flare|sunburst；--max 等同于 sunburst + 质量 max。\n"
+    "Flare：日常高质量生图、速度最快；Sunburst：能力最强，侧重精细编辑。\n"
     "/codex image confirm|cancel|status <编号>：确认生成、取消或查看任务。\n"
     "/codex retry <编号>：按原内容重试明确失败的生图任务，会再次消耗额度。\n"
     "/codex image help：生图帮助，含尺寸、质量、背景参数说明。\n"
@@ -75,7 +77,7 @@ IMAGE_HELP = (
     "/codex image direct <描述>：跳过润色，只做一次前审，通过后等待确认并按原描述生成。\n"
     "引用图片时按改图处理，最多 5 张，按引用顺序一起作为参考；引用里没有图片会被拒绝。\n"
     "/codex image attach <编号>：引用含图片的消息，把图追加为参考图并重新审核。\n"
-    "/codex image set <编号> [--size WxH] [--quality 级别] [--background 模式]：确认前调整参数。\n"
+    "/codex image set <编号> [--size WxH] [--quality 级别] [--background 模式] [--model flare|sunburst] [--max]：确认前调整参数。\n"
     "/codex image confirm [编号]：确认后生成并引用当前消息回图；只有一个待确认任务时可省略编号。\n"
     "/codex image retry <编号>：HTTP 失败后按原内容重试一次，会再次消耗额度；编号必填。\n"
     "管理员可以用 confirm/cancel/retry 直接处理本群其他人的任务；retry 还能强制重试已确认的上游审核拒绝。\n"
@@ -86,6 +88,9 @@ IMAGE_HELP = (
     "--quality low/medium/high/xhigh/max、--background transparent/opaque，缺省均为 auto。\n"
     "图片模型只允许 GPT Image 2.5 Flare/Sunburst（含官方快照），两种后端均支持 xhigh/max；"
     "API 模式的尺寸宽高需能被 16 整除。\n"
+    "--model flare|sunburst 可用于创建或 set；未指定时新任务沿用管理员模型，旧任务保留原模型。\n"
+    "--max 无需取值，固定为 sunburst + 质量 max，覆盖同条命令的 --model/--quality，与顺序无关。\n"
+    "官方定位：Flare 是日常高质量生图的最快模型；Sunburst 是能力最强的生图与编辑模型，侧重编辑精度。\n"
     "auto 表示交给上游决定，不保证固定尺寸或比例。\n"
     "以上子命令都可以省略 image 前缀，例如 /codex confirm。"
 )
@@ -126,19 +131,25 @@ IMAGE_OPTIONS = {
     "--size": _check_size,
     "--quality": _check_choice("质量", IMAGE_QUALITIES),
     "--background": _check_choice("背景", IMAGE_BACKGROUNDS),
+    "--model": _check_choice("模型", ("flare", "sunburst")),
 }
 
 
 def _split_image_options(parts: list[str]) -> tuple[dict[str, str], str, str | None]:
-    """剥离 --size/--quality/--background，返回参数、描述与首个错误。
+    """剥离生图选项；--max 固定覆盖为 sunburst + max，与选项顺序无关。
 
     参数可出现在描述前后；未识别的词一律留在描述里，不吞用户内容。
     """
     options: dict[str, str] = {}
     rest: list[str] = []
     index = 0
+    use_max = False
     while index < len(parts):
         token = parts[index]
+        if token == "--max":
+            use_max = True
+            index += 1
+            continue
         check = IMAGE_OPTIONS.get(token)
         if check is None:
             rest.append(token)
@@ -152,6 +163,8 @@ def _split_image_options(parts: list[str]) -> tuple[dict[str, str], str, str | N
             return options, "", error
         options[token[2:]] = value
         index += 2
+    if use_max:
+        options.update(model="sunburst", quality="max")
     return options, " ".join(rest).strip(), None
 
 
@@ -1323,7 +1336,7 @@ def _handle_image(
                 state,
                 msg,
                 client,
-                "参数调整只接受 --size/--quality/--background，且至少给出一个。",
+                "参数调整只接受 --size/--quality/--background/--model/--max，且至少给出一个。",
             )
             return
     else:

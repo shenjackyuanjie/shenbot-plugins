@@ -63,9 +63,13 @@ class FakeArchive:
     def resolve_job(self, prefix, owner):
         return self.job
 
-    def update_image_params(self, job, owner, params):
+    def update_image_params(self, job, owner, params, *, image_model=None):
         self.job["image_params"] = {**self.job.get("image_params", {}), **params}
-        return self.job["image_params"]
+        execution = dict(self.job.get("execution_config") or {})
+        if image_model is not None:
+            execution["image_model"] = image_model
+        self.job["execution_config"] = execution
+        return {"image_params": self.job["image_params"], "execution_config": execution}
 
     def claim_confirmation(self, job, owner):
         if self.confirmed:
@@ -259,6 +263,7 @@ class ImageFlowTests(unittest.TestCase):
         self.assertTrue(archive.drafted)
         self.assertEqual(calls[-1].payload["prompt"], "虚构图片要求")
         self.assertEqual(calls[-1].payload["size"], "1024x1536")
+        self.assertEqual(calls[-1].model, "gpt-image-2.5-flare")
         self.assertEqual(calls[-1].payload["quality"], "high")
         self.assertEqual(calls[-1].payload["background"], "auto")
 
@@ -336,12 +341,17 @@ class ImageFlowTests(unittest.TestCase):
 
         service._call = Mock(side_effect=record)
         service.create(message(), Mock(), "虚构图片要求", direct=True)
+        # 模拟历史草稿：无执行快照默认 Flare，显式选模型不套用当前全局配置。
+        archive.job["execution_config"] = {}
         service.set_params(
-            message(), "abcdef12", {"quality": "high", "background": "transparent"}
+            message(),
+            "abcdef12",
+            {"quality": "max", "model": "sunburst", "background": "transparent"},
         )
         # 调整只合并给出的键，其余保持创建时的值，确认后按新参数生成。
         service.confirm(message(), Mock(), "abcdef12")
-        self.assertEqual(calls[-1].payload["quality"], "high")
+        self.assertEqual(calls[-1].payload["quality"], "max")
+        self.assertEqual(calls[-1].model, "gpt-image-2.5-sunburst")
         self.assertEqual(calls[-1].payload["background"], "transparent")
         self.assertEqual(calls[-1].payload["size"], "auto")
 
@@ -397,7 +407,11 @@ class ApiBackendFlowTests(unittest.TestCase):
         )
         archive.images = Mock(return_value=[])
         preview = service.create(
-            message(), Mock(), "虚构图片要求", direct=True, params={"quality": "max"}
+            message(),
+            Mock(),
+            "虚构图片要求",
+            direct=True,
+            params={"quality": "max", "model": "sunburst"},
         )
         service.confirm(message(), Mock(), "abcdef12")
 
@@ -412,7 +426,7 @@ class ApiBackendFlowTests(unittest.TestCase):
         self.assertIn("fixture-check-key", review.headers["Authorization"])
         self.assertNotIn("fixture-image-key", review.headers["Authorization"])
         self.assertEqual((generate.provider, generate.stage), ("openai", "generate"))
-        self.assertEqual(generate.model, service.settings.openai_image_model)
+        self.assertEqual(generate.model, "gpt-image-2.5-sunburst")
         self.assertEqual(generate.payload["quality"], "max")
         self.assertTrue(generate.url.endswith("/images/generations"))
         self.assertIn("fixture-image-key", generate.headers["Authorization"])
@@ -451,12 +465,16 @@ class ApiBackendFlowTests(unittest.TestCase):
             openai_image_model="gpt-image-2",
             openai_text_model="another-text-model",
         )
-        service.set_params(message(), "abcdef12", {"quality": "max"})
+        service.set_params(message(), "abcdef12", {"model": "flare"})
         service.confirm(message(), Mock(), "abcdef12")
         generate = recorded[-1]
-        self.assertEqual(generate.payload["quality"], "max")
+        self.assertEqual(generate.payload["quality"], "xhigh")
         self.assertEqual((generate.provider, generate.stage), ("openai", "generate"))
-        self.assertEqual(generate.model, frozen["image_model"])
+        self.assertEqual(generate.model, "gpt-image-2.5-flare")
+        self.assertEqual(
+            archive.job["execution_config"],
+            {**frozen, "image_model": "gpt-image-2.5-flare"},
+        )
         self.assertTrue(generate.url.endswith("/images/edits"))
         # 官方 edits 只接受 multipart：图片进 files，不能塞回 JSON 正文。
         self.assertEqual([name for name, _ in generate.files], ["image[]"])
@@ -497,7 +515,9 @@ class ApiBackendFlowTests(unittest.TestCase):
                 current_service = self.service(archive)
                 current_service._call = Mock()
                 with self.assertRaises(ImageError):
-                    current_service.set_params(message(), "abcdef12", {"quality": "max"})
+                    current_service.set_params(
+                        message(), "abcdef12", {"quality": "max"}
+                    )
                 self.assertEqual(archive.job["image_params"], {"quality": "high"})
                 with self.assertRaises(ImageError):
                     current_service.confirm(message(), Mock(), "abcdef12")
