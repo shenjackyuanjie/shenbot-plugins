@@ -186,7 +186,24 @@ async function cli() {
 	const args = process.argv.slice(2);
 	const mode = args[0] || "any";
 	const round = Number.parseInt(args[1] || "10000", 10);
-	const input = args[2] ? fs.readFileSync(args[2], "utf8") : await read_stdin();
+	const input = args[2] && args[2] !== "--json" ? fs.readFileSync(args[2], "utf8") : await read_stdin();
+	if (args.includes("--json")) {
+		if (mode === "fight") md5_module.run_env.fight_only = true;
+		const result = mode === "fight" ? await fight(input) : mode === "score" ? await score(input, round) : mode === "win-rate" ? await win_rate(input, round) : await run_any(input, round);
+		let output;
+		if ("message" in result) {
+			output = {version: 1, kind: "fight", winner: result.source_plr,
+				winner_is_one_of: true, fight_only: mode === "fight"};
+		} else {
+			const last = result.raw_data[result.raw_data.length - 1];
+			const completed = last ? last.round : null;
+			output = "win_count" in result
+				? {version: 1, kind: "win_rate", wins: result.win_count, rounds_completed: completed, rounds_requested: round}
+				: {version: 1, kind: "score", score_accumulated: result.score, rounds_completed: completed, rounds_requested: round};
+		}
+		console.log(JSON.stringify(output));
+		return;
+	}
 
 	if (mode === "fight") {
 		md5_module.run_env.fight_only = true;

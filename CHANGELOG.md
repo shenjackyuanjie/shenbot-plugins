@@ -2,6 +2,14 @@
 
 宿主版本对应 [shenbot_api.py](shenbot_api.py) 的 `__version__`；ICA/Tailchat API 与各插件的 `VERSION` 分别管理。
 
+## 2026-11-02 namer 全链路结构化请求存档
+
+- [namerena](plugins/namerena.py) **0.11.0 → 0.12.0**：启用预留 telemetry，新增本地 pg_connection 和 Tailchat 账号归属配置；独立 namerena schema 的 jobs/calls 保存结构化输入、实际引擎输出与按输入/引擎对齐的业务结果，不存命令原文、CLI 文本、完整输出或回复文案。
+- md5 包装层同步新增 TypeScript/JavaScript JSON 模式，保留原始累计评分/胜场和实际完成轮数；tswn 使用现有机器输出能力，评分文本集中适配且解析失败显式记录，不虚构有效身份、种子、轮数或完整赢家集。
+- 调用前提交 started，记录退出码、耗时、版本、资产摘要与失败；来源唯一键防重复，ContextVar 隔离并发/后台请求，后台真正完成才收尾。缺 PG 保持旧功能并明确警告，已配置的严格存档失败则阻止新计算；结果提交失败保留未完成。
+- 核心回归保护 PF 部分成功与同名输入对齐、本地特殊名字存档一致、并发后台归属；PG 随机隔离 schema 联调验证初始化、去重、跨账号隔离和终态不覆写，完成后清理。历史回填不在本次范围。
+- [命令说明](docs/namer-commands.md) 补充配置、存档字段、词法输入契约与故障行为。
+
 ## 2026-11-01 Codex check 显示月度上限与按上限剩余
 
 - [codex](plugins/codex.py) **0.6.1 → 0.6.2**：用量段改用 **UTC 本月 1 日至今**窗口，并追加 `GET /v1/organization/spend_limit` 的月度上限，输出「本月上限 / 已花费估算 / 按上限剩余（估算）」；上限窗口与已花费同口径。

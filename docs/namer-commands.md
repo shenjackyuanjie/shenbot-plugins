@@ -41,7 +41,9 @@ Openbox 的几套命令行工具包成 Bot 命令。本文说明命令、依赖�
 | 键 | 默认 | 说明 |
 |---|---|---|
 | `use_bun` | `false` | 优先使用 bun，找不到时回落到 node |
-| `telemetry` | `true` | 预留开关；只有装了 `psycopg` 时才会置位，当前没有上报逻辑 |
+| `telemetry` | `true` | 配置 PG 后启用结构化存档；关闭则不连接数据库 |
+| `pg_connection` | `""` | 本地 PostgreSQL 连接串，目标数据库建议 `namer`；不要提交或粘贴到日志 |
+| `telemetry_tailchat_account` | `""` | 严格存档的 Tailchat 来源归属，填写实际机器人 user ID；ICA 自动取当前连接的 self_id |
 | `use_tswn_compare` | `true` | 评分/战斗时附带 `tswn-cli` 的对照结果 |
 | `tswn_cli_path` | `""` | `tswn-cli` 的 exe、仓库根目录或 `crates/tswn_core` |
 | `tswn_assets_path` | `""` | Openbox 资产目录（含 `targets/`、`teammates/` 的那一层），留空则自动查找 |
@@ -110,3 +112,39 @@ ruff check .
   外部 `tswn` 全部在测试侧 mock。
 - [test_namer_todiy.py](../tests/test_namer_todiy.py)：`/namer-todiy` 的离线用例；
   装了 `tswn-cli` 时额外校验真实导出、`++` 往返与「组队加成烘进导出」。
+
+## 结构化请求存档（0.12.0）
+
+### 开启与兼容策略
+
+- 管理员在本地插件配置中填写指向 `namer` 库的 `pg_connection`，并保持 `telemetry=true`。
+  安装可用的 `psycopg` 驱动；插件首次加载自动在目标库初始化独立 `namerena` schema。
+  不读取 Codex 配置、不操作其它 schema、不做历史消息回填。
+- 默认连接串为空：功能沿用无存档模式，加载时会明确警告“当前不保存请求”。
+  `telemetry=false` 时也保持旧行为，且不要求驱动或数据库可用。
+- 开启且填写 PG 后为严格模式：初始化/请求登记失败不开始计算。实际调用前提交 started，完成后更新终态；
+  结果提交失败保留未完成记录，不能保证崩溃前尚未提交的结果可恢复，也不会自动重放计算。
+- 来源唯一键为平台、实际机器人账号、会话、消息 ID；重复投递不重复计算。
+  Tailchat 宿主当前没有公开自身 user ID，因此严格模式必须显式填写真实账号，缺失只拒绝 Tailchat 请求，
+  不能用宿主 client_id 或发言者代替。
+
+### 存档内容与结构
+
+- `jobs`：来源元数据、插件版本、带版本的 `input/result JSONB`、状态、时间及发送受理事件。
+- `calls`：每次实际业务引擎调用的结构化输入/输出、引擎版本或资产摘要、退出码、耗时、错误分类。
+  本地 Python 属性计算同样记录；运行时版本查询不当作业务计算。
+- 输入按原命令保留组/成员/输入顺序、身份片段、武器片段、解析后的 DIY 覆盖、控制号及实际执行参数。
+  本地 peek/team/base 使用各自真实的名字与空白规则；引擎 DSL 保存 `identity_parts` 等结构化词法，
+  有效身份/隐式继承队伍/有效种子无法可靠解析时明确为 null、语义标为 engine_defined，
+  不声称已经完整解析不同引擎的有效身份。裸 `seed:ABC` 仍是名字，`seed:123@!` 保留为控制号。
+- 输出保存评分、胜场及实际轮数、赢家、属性与技能、DIY 数据。md5 用原生 JSON；
+  tswn 战斗用 JSONL 的最终 result（丢弃逐帧轨迹），CQP/队友评分使用 JSONL 文件；
+  PF/bench 的集中适配器读取引擎数值输出并标注 engine_reported 精度，解析失败明确记录 parse_failed。
+  不从百分比倒推胜场，不把请求轮数假装成实际轮数；md5 的 winner 只承诺“赢家之一”。
+- 请求结果按 input_index 和引擎对齐，保留 PF 各项分数、可比较项的差值、call_id 引用及部分失败。
+  靶子转换等辅助调用保留在 calls，不冒充用户最终评分；同名输入也按序号独立保存。
+- 不存命令原文、拼接 CLI 输入、完整 stdout/stderr、逐轮轨迹或最终回复文字。
+  错误只存 code 与结构参数；发送事件只说明 accepted/not_accepted/unknown，受理不等于最终送达。
+
+后台 CQP/队友评在线程真正结束后收尾，插件卸载不向旧连接回包；热重载重新导入辅助模块，
+旧请求保留旧 Session，不与新请求串用。数据库与代码均不自动重试业务计算。

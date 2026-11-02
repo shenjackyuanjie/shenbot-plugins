@@ -4,16 +4,16 @@ import io
 import json
 import re
 import shutil
-import sys
-import time
-import traceback
 import subprocess
+import sys
 import tempfile
 import threading
-
+import time
+import traceback
 from pathlib import Path
 from typing import TYPE_CHECKING
-from shenbot_api import PluginManifest, ConfigStorage
+
+from shenbot_api import ConfigStorage, PluginManifest, warn
 
 if str(Path(__file__).parent.absolute()) not in sys.path:
     sys.path.append(str(Path(__file__).parent.absolute()))
@@ -21,13 +21,56 @@ if str(Path(__file__).parent.absolute()) not in sys.path:
 import name_utils
 import sqrtools
 
-TELEMETRY = False
-try:
-    import psycopg  # noqa: F401 - 仅用于检测可选遥测依赖
+# 宿主只替换插件入口。导入前清理自家 support，旧后台线程仍持有旧模块对象。
+for _module_name in list(sys.modules):
+    if _module_name == "namerena_support" or _module_name.startswith("namerena_support."):
+        sys.modules.pop(_module_name, None)
 
-    TELEMETRY = True
-except ImportError:
-    pass
+from namerena_support.archive import Archive, ArchiveError
+from namerena_support.model import CURRENT, ITEM, parse_input, split_parts
+from namerena_support.runtime import (
+    ClientProxy,
+    Session,
+    background,
+    local_call,
+    local_output,
+    process,
+)
+
+_ARCHIVE = None
+_ARCHIVE_ERROR = None
+_TAILCHAT_ACCOUNT = ""
+
+
+def _run_process(command, **kwargs):
+    version = None
+    if CURRENT.get() is not None:
+        version = get_runtime_version() if any("md5-api.js" in str(arg) for arg in command) else get_tswn_version()
+    return process(subprocess.run, command, engine_version=version, **kwargs)
+
+
+def _delivery_skipped():
+    session = CURRENT.get()
+    if session:
+        session.archive.delivery(session.identity, {"state": "skipped_unloaded", "time": time.time()})
+
+
+def _failure(code, **params):
+    session = CURRENT.get()
+    if session:
+        session.error(code, **params)
+
+
+def _select(index):
+    ITEM.set([index])
+
+
+def _player_data(player, index):
+    return {"input_index": index, "name": player.name, "team": player.team,
+            "attributes": dict(zip(("attack", "defense", "speed", "agility", "magic", "resistance", "wisdom", "hp"), player.name_prop)),
+            "name_base": player.name_base[:],
+            "skills": [{"slot": slot, "id": player.skl_id[slot], "level": player.skl_freq[slot]} for slot in range(16)]}
+
 
 try:
     import tomllib
@@ -36,14 +79,14 @@ except ModuleNotFoundError:  # pragma: no cover - Python 3.10 fallback
 
 if TYPE_CHECKING:
     from ica_typing import (
-        IcaNewMessage,
         IcaClient,
+        IcaNewMessage,
         ReciveMessage,
         TailchatClient,
         TailchatReciveMessage,
     )
 
-VERSION = "0.11.0"
+VERSION = "0.12.0"
 
 CMD_PREFIX = "/namer"
 
@@ -107,6 +150,8 @@ cfg = ConfigStorage(
     use_bun=False,
     # 是否启用遥测
     telemetry=True,
+    pg_connection="",
+    telemetry_tailchat_account="",
     # 是否启用 tswn-cli 对比
     use_tswn_compare=True,
     # tswn-cli 路径, 支持直接填 exe / 仓库根目录 / crates/tswn_core
@@ -264,7 +309,7 @@ def run_tswn_cli(input_text: str, *args: str) -> tuple[str, float] | None:
     command, cwd = runner
     start_time = time.time()
     try:
-        result = subprocess.run(
+        result = _run_process(
             [*command, *args],
             input=input_text,
             stdout=subprocess.PIPE,
@@ -282,7 +327,9 @@ def run_tswn_cli(input_text: str, *args: str) -> tuple[str, float] | None:
     except FileNotFoundError:
         TSWN_RUNNER_FAILED = True
         return None
-    except Exception as e:
+    except ArchiveError:
+        raise
+    except Exception as e:  # noqa: BLE001 - 插件执行边界保留错误反馈，不让异常穿透宿主
         output = f"发生错误: {e}\n{traceback.format_exc()}"
     return output.strip(), time.time() - start_time
 
@@ -295,21 +342,20 @@ def last_non_empty_line(output: str) -> str:
 
 
 def resolve_command_version(command: list[str], cwd: str | None = None) -> str | None:
-    cache_key = tuple([*command, f"cwd={cwd or ''}"])
+    cache_key = (*command, f"cwd={cwd or ''}")
     if cache_key in VERSION_CACHE:
         return VERSION_CACHE[cache_key]
 
     try:
         result = subprocess.run(
             [*command, "--version"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             check=False,
             text=True,
             encoding="utf-8",
             cwd=cwd,
         )
-    except Exception:
+    except Exception:  # noqa: BLE001 - 可选版本查询失败只影响版本显示
         VERSION_CACHE[cache_key] = None
         return None
 
@@ -368,7 +414,7 @@ def parse_tswn_winner_names(output: str) -> list[str]:
             continue
         if not in_winner_block:
             continue
-        if line.startswith("总战斗分:") or line.startswith("win_idx="):
+        if line.startswith(("总战斗分:", "win_idx=")):
             break
         if line.startswith("- "):
             winners.append(line[2:].split(" (", 1)[0])
@@ -728,7 +774,7 @@ def _run_tswn_to_diy_file(input_file: Path, output_file: Path) -> None:
     if runner is None:
         raise RuntimeError("未找到 tswn-cli，无法转换 DIY")
     command, cwd = runner
-    result = subprocess.run(
+    result = _run_process(
         [*command, "to-diy", "-f", str(input_file), "-o", str(output_file)],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -793,7 +839,7 @@ def run_tswn_pair_scores(players: list[str], teammate_file: Path, head: int) -> 
         scores_file = temp_root / "scores.txt"
         players_in.write_text("\n".join(players) + "\n", encoding="utf-8")
         _prepare_weighted_target_diy(target2, target_diy)
-        result = subprocess.run(
+        result = _run_process(
             [
                 *command,
                 "bench",
@@ -862,12 +908,17 @@ def cmd_pair_rating(
     def calculate() -> None:
         try:
             output = run_tswn_pair_scores(players, teammate_file, head)
-        except Exception as exc:
+        except ArchiveError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - 命令边界分类记录未知失败，不透传到宿主
+            _failure("calculation_failed", exception_type=type(exc).__name__)
             output = f"队友评计算失败: {exc}"
         if not _shutdown.is_set():
             client.send_message(msg.reply_with(output))
+        else:
+            _delivery_skipped()
 
-    threading.Thread(target=calculate, daemon=True).start()
+    background(calculate)
 
 
 def _run_tswn_cqp_file(player_file: Path, target_file: Path, target_factored: bool = False) -> list[str]:
@@ -877,7 +928,7 @@ def _run_tswn_cqp_file(player_file: Path, target_file: Path, target_factored: bo
     command, cwd = runner
     with tempfile.TemporaryDirectory(prefix="namer_cqp_") as temp:
         output_file = Path(temp) / "cqp.txt"
-        result = subprocess.run(
+        result = _run_process(
             [
                 *command,
                 "bench",
@@ -928,6 +979,7 @@ def run_tswn_cqp(raw_groups: list[str]) -> str:
 
     results: dict[int, str] = {}
     for count, entries in indexed.items():
+        ITEM.set([index for index, _ in entries])
         if not entries:
             continue
         with tempfile.TemporaryDirectory(prefix="namer_cqp_players_") as temp:
@@ -961,14 +1013,20 @@ def cmd_cqp(msg: ReciveMessage, client: IcaClient | TailchatClient) -> None:
     def calculate() -> None:
         try:
             output = run_tswn_cqp(groups)
-        except Exception as exc:
+        except ArchiveError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - 命令边界分类记录未知失败，不透传到宿主
+            _failure("calculation_failed", exception_type=type(exc).__name__)
             output = f"CQP 计算失败: {exc}"
         if not _shutdown.is_set():
             client.send_message(msg.reply_with(output))
+        else:
+            _delivery_skipped()
 
-    threading.Thread(target=calculate, daemon=True).start()
+    background(calculate)
 
 
+@local_call
 def convert_name(
     msg: ReciveMessage, client: IcaClient | TailchatClient, sort_skills: bool = True
 ) -> None:
@@ -996,6 +1054,7 @@ def convert_name(
             continue
         cache.write(player.display(sort_skills=sort_skills))
         cache.write("\n")
+    local_output({"kind": "attributes", "items": [_player_data(player, i) if raw_players[i] else {"input_index": i, "error": {"code": "invalid_player"}} for i, player in enumerate(players)]})
     reply = msg.reply_with(f"{cache.getvalue()}版本:{VERSION}")
     client.send_message(reply)
 
@@ -1105,6 +1164,7 @@ def _team_display(
     return "|".join(parts) + (f"\n{skill_text}" if skill_text else "")
 
 
+@local_call
 def convert_team(
     msg: ReciveMessage, client: IcaClient | TailchatClient, sort_skills: bool = True
 ) -> None:
@@ -1150,6 +1210,12 @@ def convert_team(
             _team_upgrade_player(left, right)
             _team_upgrade_player(right, left)
 
+    local_output({"kind": "team", "items": [
+        {"input_index": i, "name": player.name, "team": player.team,
+         "before": {"attributes": original_attrs[i], "skills": original_skills[i]},
+         "after": {"attributes": _team_attrs(player), "skills": _team_skill_levels(player)},
+         "name_base": player.name_base[:], "skill_order": player.skl_id[:16]}
+        for i, player in enumerate(players)]})
     output = "\n".join(
         _team_display(player, original_attrs[index], original_skills[index], sort_skills=sort_skills)
         for index, player in enumerate(players)
@@ -1180,6 +1246,7 @@ def cmd_to_diy(msg: ReciveMessage, client: IcaClient | TailchatClient) -> None:
         return
 
     if resolve_tswn_runner() is None:
+        _failure("runner_not_found", engine="tswn")
         client.send_message(
             msg.reply_with(
                 "错误: 未找到 tswn-cli, 无法导出 +ol\n"
@@ -1190,12 +1257,16 @@ def cmd_to_diy(msg: ReciveMessage, client: IcaClient | TailchatClient) -> None:
 
     try:
         converted = _run_tswn_to_diy_names(raw_names)
-    except Exception as exc:
+    except ArchiveError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - 命令边界分类记录未知失败，不透传到宿主
+        _failure("diy_failed", exception_type=type(exc).__name__)
         client.send_message(msg.reply_with(f"错误: DIY 转换失败\n{exc}"))
         return
     client.send_message(msg.reply_with("\n".join(converted)))
 
 
+@local_call
 def convert_base(msg: ReciveMessage, client: IcaClient | TailchatClient) -> None:
     if int(sqrtools.SQRTOOLS_VERSION.split(".")[1]) < 3:
         client.send_message(msg.reply_with("错误: 内部依赖库版本错误\n"))
@@ -1243,6 +1314,11 @@ def convert_base(msg: ReciveMessage, client: IcaClient | TailchatClient) -> None
         propcnt += 1
     cache.write("\n")
     current_player.calcskill(False)
+    current_player.calcprops(False)
+    local_output({"kind": "base", "items": [{"input_index": 0,
+        "name_base": list(current_player.namebase), "attributes": list(current_player.nameprop),
+        "skills": [{"slot": i, "id": skill, "level": level} for i, (skill, level) in enumerate(current_player.nameskill)],
+        "sqrtools_version": sqrtools.SQRTOOLS_VERSION}]})
     doubleflag = -1
     for i in range(15, -1, -1):
         if current_player.nameskill[i][1] > 0 and current_player.nameskill[i][0] < 25:
@@ -1291,7 +1367,7 @@ def convert_base(msg: ReciveMessage, client: IcaClient | TailchatClient) -> None
                             )
                         )
                         skill_result = (
-                            str(a if a > b else b).zfill(2)
+                            str(max(a, b)).zfill(2)
                             + "\n    ↑末尾座位加成: "
                             + " ".join(
                                 str(j).zfill(2)
@@ -1322,9 +1398,11 @@ def run_namerena(input_text: str, fight_mode: bool = False) -> tuple[str, float]
     root_path = Path(__file__).parent
     runner_path = (root_path / "md5" / "md5-api.js").resolve()
     if not runner_path.exists():
+        _failure("runner_not_found", engine="md5")
         return "未找到namerena运行文件", 0.0
     runtime = get_js_runtime()
     if runtime is None:
+        _failure("runtime_not_found", engine="md5")
         return "未找到 JavaScript 运行时，请安装 Node.js 或 Bun", 0.0
     run_cmd = [runtime, str(runner_path), "any", str(TSWN_COMPARE_ROUNDS)]
     if fight_mode:
@@ -1332,7 +1410,7 @@ def run_namerena(input_text: str, fight_mode: bool = False) -> tuple[str, float]
 
     start_time = time.time()
     try:
-        result = subprocess.run(
+        result = _run_process(
             run_cmd,
             input=input_text,
             stdout=subprocess.PIPE,
@@ -1346,14 +1424,16 @@ def run_namerena(input_text: str, fight_mode: bool = False) -> tuple[str, float]
             result = result.stdout
         else:
             result = result.stderr
-    except Exception as e:
+    except ArchiveError:
+        raise
+    except Exception as e:  # noqa: BLE001 - 插件执行边界保留错误反馈，不让异常穿透宿主
         result = f"发生错误: {e}\n{traceback.format_exc()}"
     end_time = time.time()
     return result.strip(), end_time - start_time
 
 
 def eval_fight(msg: ReciveMessage, client: IcaClient | TailchatClient) -> None:
-    if msg.content.find("\n") == -1:
+    if msg.content.find("\n") == -1:  # noqa: SIM102 - 保留既有输入提示流程
         # 在判断一下是不是 /xxx xxxx
         if msg.content.find(" ") != -1:
             client.send_message(
@@ -1405,15 +1485,16 @@ def run_fights(msg: ReciveMessage, client: IcaClient | TailchatClient) -> None:
         client.send_message(msg.reply_with("请输入名字"))
         return
     # 以换行分割
-    fights = content.split("\n")
+    fights = [line for line in content.split("\n") if line.strip()]
     results = []
     tswn_results = []
     tswn_total_time = 0.0
     has_tswn_compare = USE_TSWN_COMPARE and resolve_tswn_runner() is not None
     start_time = time.time()
-    for fight in fights:
+    for input_index, fight in enumerate(fights):
+        _select(input_index)
         # 以 + 分割
-        names = fight.split("+")
+        names = split_parts(fight)
         if len(names) < 2:
             results.append(f"输入错误, 只有{len(names)} 个部分")
             if has_tswn_compare:
@@ -1452,13 +1533,14 @@ def eval_score(msg: ReciveMessage, client, template: str) -> None:
     if content.strip() == "":
         client.send_message(msg.reply_with("请输入名字"))
         return
-    names = content.split("\n")
+    names = [line for line in content.split("\n") if line.strip()]
     results = []
     start_time = time.time()
-    for name in names:
+    for input_index, name in enumerate(names):
+        _select(input_index)
         if name.strip() == "":
             continue
-        name = name.split("+")
+        name = split_parts(name)
         name = "\n".join(name)
         runs = template.format(test=name)
         result = run_namerena(runs)
@@ -1505,7 +1587,7 @@ def score_all(msg: ReciveMessage, client: IcaClient | TailchatClient) -> None:
     if content.strip() == "":
         client.send_message(msg.reply_with("请输入名字"))
         return
-    names = content.split("\n")
+    names = [line for line in content.split("\n") if line.strip()]
     results = []
     has_tswn_compare = USE_TSWN_COMPARE and resolve_tswn_runner() is not None
     client.send_message(
@@ -1522,7 +1604,8 @@ def score_all(msg: ReciveMessage, client: IcaClient | TailchatClient) -> None:
         "!test!\n!\n\n{test}",
         "!test!\n!\n\n{test}\n{test}",
     ]
-    for name in names:
+    for input_index, name in enumerate(names):
+        _select(input_index)
         scores = []
         all_time = 0
         tswn_scores = []
@@ -1531,7 +1614,7 @@ def score_all(msg: ReciveMessage, client: IcaClient | TailchatClient) -> None:
         for run in runs:
             if name.strip() == "":
                 continue
-            name = name.split("+")
+            name = split_parts(name)
             name = "\n".join(name)
             bench = run.format(test=name)
             result = run_namerena(bench)
@@ -1540,8 +1623,7 @@ def score_all(msg: ReciveMessage, client: IcaClient | TailchatClient) -> None:
             # 只取最后一行括号之前的内容
             last_line = result[0].split("\n")[-1]
             last_line = last_line.split("(")[0]
-            if last_line.endswith(".00"):
-                last_line = last_line[:-3]
+            last_line = last_line.removesuffix(".00")
             scores.append(last_line)
             diffs.append("")
         if all(x.isdigit() for x in scores):
@@ -1582,7 +1664,7 @@ def score_all(msg: ReciveMessage, client: IcaClient | TailchatClient) -> None:
     client.send_message(reply)
 
 
-def dispatch_msg(msg: ReciveMessage, client: IcaClient | TailchatClient) -> None:
+def _dispatch_msg(msg: ReciveMessage, client: IcaClient | TailchatClient) -> None:
     if msg.is_reply or msg.is_from_self:
         return
     if msg.content == HELP_CMD:
@@ -1627,6 +1709,69 @@ def dispatch_msg(msg: ReciveMessage, client: IcaClient | TailchatClient) -> None
             eval_fight(msg, client)
 
 
+def dispatch_msg(msg, client, platform="ica"):
+    if _ARCHIVE is None and _ARCHIVE_ERROR is None:
+        return _dispatch_msg(msg, client)
+    if msg.is_reply or msg.is_from_self:
+        return
+    commands = sorted([EVAL_CMD, EVAL_SIMPLE_CMD, EVAL_PP_CMD, EVAL_PD_CMD, EVAL_QP_CMD,
+        EVAL_QD_CMD, EVAL_PF_CMD, CQP_CMD, *PAIR_COMMANDS, CONVERT_CMD, CONVERT_RAW_CMD,
+        BASE_CMD, TODIY_CMD, TEAM_CMD, TEAM_RAW_CMD, FIGHT_CMD, HELP_CMD], key=len, reverse=True)
+    command = next((value for value in commands if msg.content.startswith(value)), None)
+    if command is None or (command == EVAL_SIMPLE_CMD and msg.content.startswith(("/namer-", "/namer_"))):
+        return
+    session = None
+    token = None
+    item_token = ITEM.set(None)
+    try:
+        if _ARCHIVE_ERROR:
+            raise ArchiveError(_ARCHIVE_ERROR)
+        account = str(client.status.self_id) if platform == "ica" else _TAILCHAT_ACCOUNT
+        room = str(msg.room_id) if platform == "ica" else str(msg.converse_id)
+        if not account or account in ("None", "0"):
+            raise ArchiveError("missing_account")
+        parse_error = None
+        try:
+            payload = parse_input(msg.content, command, TSWN_COMPARE_ROUNDS)
+        except (ValueError, TypeError):
+            payload = {"version": 1, "command": command, "groups": [], "settings": {}}
+            parse_error = "invalid_input"
+        payload["settings"]["tswn_compare"] = USE_TSWN_COMPARE
+        identity = _ARCHIVE.begin_job({"platform": platform, "account": account, "room_id": room,
+            "message_id": str(msg.id), "sender_id": str(msg.sender_id)}, payload, VERSION)
+        if identity is None:
+            return
+        session = Session(_ARCHIVE, identity, payload)
+        token = CURRENT.set(session)
+        if parse_error:
+            session.error(parse_error)
+            ClientProxy(client, session).send_message(msg.reply_with("输入无法解析"))
+            return
+        if not payload["groups"] and command != HELP_CMD:
+            session.error("empty_input")
+        _dispatch_msg(msg, ClientProxy(client, session))
+        if not session.calls and session.pending == 1 and command != HELP_CMD:
+            session.error("no_result")
+    except ArchiveError:
+        if session:
+            session.broken = True
+        client.send_message(msg.reply_with("请求存档不可用，已停止本次计算，请联系管理员检查遥测配置。"))
+    except Exception as exc:  # noqa: BLE001 - 命令边界分类记录未知失败，不透传到宿主
+        if session:
+            session.error("request_failed", exception_type=type(exc).__name__)
+        client.send_message(msg.reply_with("计算失败，请检查输入或联系管理员。"))
+    finally:
+        try:
+            if session:
+                session.release()
+        except ArchiveError:
+            warn("namer：结果存档失败，记录保留未完成状态")
+        finally:
+            if token is not None:
+                CURRENT.reset(token)
+            ITEM.reset(item_token)
+
+
 def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
     dispatch_msg(msg, client)  # type: ignore
 
@@ -1634,10 +1779,11 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
 def on_tailchat_message(
     msg: TailchatReciveMessage, client: TailchatClient
 ) -> None:
-    dispatch_msg(msg, client)  # type: ignore
+    dispatch_msg(msg, client, "tailchat")  # type: ignore
 
 
 def on_load() -> None:
+    global _ARCHIVE, _ARCHIVE_ERROR, _TAILCHAT_ACCOUNT
     global \
         USE_BUN, \
         USE_TSWN_COMPARE, \
@@ -1657,8 +1803,21 @@ def on_load() -> None:
     TSWN_RUNNER_FAILED = False
     VERSION_CACHE = {}
     _shutdown.clear()
-    # conn = get_db_connection()
-    # conn.close()
+    _ARCHIVE = None
+    _ARCHIVE_ERROR = None
+    _TAILCHAT_ACCOUNT = str(main_cfg.get_value("telemetry_tailchat_account") or "")
+    if main_cfg.get_value("telemetry") is not False:
+        connection = main_cfg.get_value("pg_connection") or ""
+        if not connection:
+            warn("namer：telemetry 已开启但 pg_connection 未配置；当前不保存请求")
+        else:
+            try:
+                archive = Archive(connection)
+                archive.initialize()
+                _ARCHIVE = archive
+            except ArchiveError as exc:
+                _ARCHIVE_ERROR = exc.code
+                warn("namer：遥测初始化失败，已阻止新请求计算；请检查 PostgreSQL 与 psycopg")
 
 
 def on_unload() -> None:
