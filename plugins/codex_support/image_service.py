@@ -80,18 +80,30 @@ class ImageSettings:
         }
 
 
-# OpenAI 图片 API 的质量枚举比订阅后端窄：xhigh/max 会被 400 拒绝，尺寸宽高须能被 16 整除。
+# GPT Image 2.5 的官方别名与快照支持 xhigh/max；较早及未知模型保留原质量范围。
 API_IMAGE_QUALITIES = ("auto", "low", "medium", "high")
+API_IMAGE_25_MODELS = frozenset(
+    {
+        "gpt-image-2.5-flare",
+        "gpt-image-2.5-flare-2026-09-08",
+        "gpt-image-2.5-sunburst",
+        "gpt-image-2.5-sunburst-2026-09-08",
+    }
+)
 
 
 def _check_backend_params(execution: dict, params: dict) -> None:
     """按冻结后端提前校验生成参数，避免确认后才被上游按参数拒绝。"""
     if execution.get("image_backend") != "openai":
         return
-    if params.get("quality", "auto") not in API_IMAGE_QUALITIES:
+    model = execution.get("image_model", "gpt-image-2.5-flare")
+    qualities = API_IMAGE_QUALITIES
+    if model in API_IMAGE_25_MODELS:
+        qualities += ("xhigh", "max")
+    if params.get("quality", "auto") not in qualities:
         raise ImageError(
-            "OpenAI API 模式的质量只支持 auto/low/medium/high；"
-            "需要 xhigh/max 请切回订阅后端后重新发起任务。"
+            f"OpenAI API 模型 {model} 的质量只支持 {'/'.join(qualities)}；"
+            "需要 xhigh/max 请使用 GPT Image 2.5 Flare/Sunburst 重新发起任务。"
         )
     size = params.get("size", "auto")
     width, _, height = size.partition("x")

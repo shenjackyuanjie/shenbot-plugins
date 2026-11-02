@@ -396,7 +396,9 @@ class ApiBackendFlowTests(unittest.TestCase):
             {"image_sha256": "fixture-digest"},
         )
         archive.images = Mock(return_value=[])
-        preview = service.create(message(), Mock(), "虚构图片要求", direct=True)
+        preview = service.create(
+            message(), Mock(), "虚构图片要求", direct=True, params={"quality": "max"}
+        )
         service.confirm(message(), Mock(), "abcdef12")
 
         review, generate = recorded
@@ -411,6 +413,7 @@ class ApiBackendFlowTests(unittest.TestCase):
         self.assertNotIn("fixture-image-key", review.headers["Authorization"])
         self.assertEqual((generate.provider, generate.stage), ("openai", "generate"))
         self.assertEqual(generate.model, service.settings.openai_image_model)
+        self.assertEqual(generate.payload["quality"], "max")
         self.assertTrue(generate.url.endswith("/images/generations"))
         self.assertIn("fixture-image-key", generate.headers["Authorization"])
         self.assertNotIn("fixture-check-key", generate.headers["Authorization"])
@@ -425,9 +428,11 @@ class ApiBackendFlowTests(unittest.TestCase):
                 self.assertNotIn(key, line)
 
     def test_edit_path_and_hot_reload_do_not_change_the_frozen_backend(self):
-        """防止配置热重载把已建任务从 API 计费改成订阅额度，或换掉审核与生图模型。"""
+        """防止热重载换后端/模型，或让 Sunburst 的高质量改图被旧模型规则拦截。"""
         archive = FakeArchive()
-        service = self.service(archive)
+        service = self.service(
+            archive, openai_image_model="gpt-image-2.5-sunburst-2026-09-08"
+        )
         recorded = self.record(
             service,
             {"decision": "pass", "reason": "可以"},
@@ -435,7 +440,7 @@ class ApiBackendFlowTests(unittest.TestCase):
             {"decision": "pass", "reason": "可以"},
             {"image_sha256": "fixture-digest"},
         )
-        service.create(message(), Mock(), "虚构图片要求")
+        service.create(message(), Mock(), "虚构图片要求", params={"quality": "xhigh"})
         frozen = dict(archive.job["execution_config"])
         # 模拟重载：全球配置改回订阅与另一套模型，任务凭据仍可用。
         service.settings = ImageSettings(
@@ -443,11 +448,13 @@ class ApiBackendFlowTests(unittest.TestCase):
             deepseek_api_key="fixture-deepseek",
             openai_text_api_key="fixture-check-key",
             openai_image_api_key="fixture-image-key",
-            openai_image_model="another-image-model",
+            openai_image_model="gpt-image-2",
             openai_text_model="another-text-model",
         )
+        service.set_params(message(), "abcdef12", {"quality": "max"})
         service.confirm(message(), Mock(), "abcdef12")
         generate = recorded[-1]
+        self.assertEqual(generate.payload["quality"], "max")
         self.assertEqual((generate.provider, generate.stage), ("openai", "generate"))
         self.assertEqual(generate.model, frozen["image_model"])
         self.assertTrue(generate.url.endswith("/images/edits"))
@@ -462,9 +469,9 @@ class ApiBackendFlowTests(unittest.TestCase):
             )
 
     def test_api_mode_rejects_values_the_paid_endpoint_would_refuse(self):
-        """防止把订阅端的 xhigh/max 或非 16 倍数尺寸发给只会 400 的图片 API。"""
+        """旧图片模型仍拦截高质量档位，尺寸约束也仍在建任务前检查。"""
         archive = FakeArchive()
-        service = self.service(archive)
+        service = self.service(archive, openai_image_model="gpt-image-2")
         for params in ({"quality": "xhigh"}, {"size": "1000x1000"}):
             with self.subTest(params=params), self.assertRaises(ImageError) as failure:
                 service.create(

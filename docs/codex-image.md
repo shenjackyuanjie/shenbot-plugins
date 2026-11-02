@@ -104,8 +104,13 @@ HTTP/Socket.IO 受理仅记为 submitted，不能伪称 QQ 最终送达。
 | --quality | auto/low/medium/high/xhigh/max | 上游渲染质量档位 |
 | --background | auto/transparent/opaque | 需要透明背景时指定 |
 
-API 模式对上表取值额外限制：质量只接受 auto/low/medium/high（`xhigh`/`max` 会被上游按参数拒绝），
-尺寸宽高必须能被 16 整除；违反时在创建任务或调整参数阶段直接拒绝，不会等确认后才被上游拒。
+API 模式按任务冻结的图片模型校验质量：`gpt-image-2.5-flare`、`gpt-image-2.5-sunburst`
+及各自的 `-2026-09-08` 快照支持上表全部档位；较早及未知模型仅接受 auto/low/medium/high。
+尺寸宽高仍必须能被 16 整除；创建、调整时直接检查，确认阶段也在消费确认前复核参数。
+
+官方定位：[Flare](https://developers.openai.com/api/docs/models/gpt-image-2.5-flare)
+侧重快速的日常高质量生图；[Sunburst](https://developers.openai.com/api/docs/models/gpt-image-2.5-sunburst)
+是能力最强的生图与编辑模型，侧重编辑精度。质量缺省仍为 auto，不会自动升为 max。
 
 参数在创建任务时写入 `jobs.image_params`，预览展示的就是确认后发给上游的值。
 确认前用 `/codex image set <编号> --quality high` 调整，只合并给出的键、不接受描述文本；
