@@ -2,6 +2,13 @@
 
 宿主版本对应 [shenbot_api.py](shenbot_api.py) 的 `__version__`；ICA/Tailchat API 与各插件的 `VERSION` 分别管理。
 
+## 2026-11-02 namer 历史原始输入离线重算
+
+- 新增离线 CLI：只从只读历史源读取原命令，按当前固定引擎/资产和原命令语义重算，不解析旧回复、不构造假 client、不发消息。默认评分10000轮/pair1000轮，支持筛选、限量、每进程及每请求超时的小批试算。
+- 存档 schema v1 → v2：稳定 history_key、原请求时间、account=NULL 与 history_recompute 来源；历史领取短事务清空该 job 旧结果与 calls，再保存当次 started/终态，直接覆盖、不保留多版本、不影响实时数据。
+- 同来源独占会话锁与瞬时 writer 所有权栅栏防并发覆盖和旧worker写回，支持 overwrite/resume/retry-failed；resume 限额只计真实尝试。非法输入保留逐行词法，不丢掉其它有效名字或空白。
+- 增加覆盖重试、无消息纯计算、非法输入保全与失锁停止回归，并补充命令及覆盖语义说明。
+
 ## 2026-11-02 namer 全链路结构化请求存档
 
 - [namerena](plugins/namerena.py) **0.11.0 → 0.12.0**：启用预留 telemetry，新增本地 pg_connection 和 Tailchat 账号归属配置；独立 namerena schema 的 jobs/calls 保存结构化输入、实际引擎输出与按输入/引擎对齐的业务结果，不存命令原文、CLI 文本、完整输出或回复文案。

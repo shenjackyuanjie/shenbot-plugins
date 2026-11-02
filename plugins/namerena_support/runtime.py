@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import contextvars
+
+PROCESS_TIMEOUT = contextvars.ContextVar("namerena_process_timeout", default=None)
+PROCESS_DEADLINE = contextvars.ContextVar("namerena_process_deadline", default=None)
 import json
 import threading
 import time
@@ -208,6 +211,13 @@ def process(run, command, *, engine_version=None, **kwargs):
     if session is None:
         return run(command, **kwargs)
     command = list(command)
+    if PROCESS_TIMEOUT.get() is not None:
+        remaining = PROCESS_TIMEOUT.get()
+        if PROCESS_DEADLINE.get() is not None:
+            remaining = min(remaining, PROCESS_DEADLINE.get() - time.monotonic())
+        if remaining <= 0:
+            raise TimeoutError("request_timeout")
+        kwargs.setdefault("timeout", remaining)
     md5 = any("md5-api.js" in str(part) for part in command)
     if md5:
         engine, operation = "md5", command[2]
@@ -222,6 +232,8 @@ def process(run, command, *, engine_version=None, **kwargs):
         operation = command[position]
         if operation == "bench":
             operation = command[position + 1]
+        if operation == "pair" and "-n" in command:
+            command[command.index("-n") + 1] = str(session.payload["settings"].get("pair_rounds", command[command.index("-n") + 1]))
         payload = engine_input(kwargs.get("input", ""))
         params = {}
         for flag, field in (("-n", "rounds_requested"), ("--head", "head")):

@@ -148,3 +148,51 @@ ruff check .
 
 后台 CQP/队友评在线程真正结束后收尾，插件卸载不向旧连接回包；热重载重新导入辅助模块，
 旧请求保留旧 Session，不与新请求串用。数据库与代码均不自动重试业务计算。
+
+## 历史原始输入离线重算与覆盖
+
+入口为 [namer_history.py](../tools/namer_history.py)，通过必填 --group 从只读历史源读取本次明确授权的单个群的全部候选原命令，
+不读取旧回复、不以聊天 client 执行、不发送消息、不启动插件 on_load/watch。默认只盘点，
+必须显式添加 `--execute` 才计算并写目标；目标数据库参数仅允许 `namer`，连接后还会核实真实 dbname。
+连接从本地配置读取，不出现在命令行、日志或提交中。
+
+在仓库目录执行（以下 12345 仅为合成群号，真实执行必须换成明确授权群号；保留默认评分 10000 轮、pair 1000 轮）：
+
+```powershell
+# 只盘点输入，不写目标
+uv run --no-project --no-cache --python 3.12 --with-requirements requirements.txt tools/namer_history.py --group 12345
+# 小批试算：普通属性20条、PF两条
+uv run --no-project --no-cache --python 3.12 --with-requirements requirements.txt tools/namer_history.py --group 12345 --execute --commands /namer-peek --limit 20
+uv run --no-project --no-cache --python 3.12 --with-requirements requirements.txt tools/namer_history.py --group 12345 --execute --commands /namer-pf --limit 2
+# 全部原命令，按来源覆盖当前单份结果（无limit）；默认单worker
+uv run --no-project --no-cache --python 3.12 --with-requirements requirements.txt tools/namer_history.py --group 12345 --execute --mode overwrite
+# 断点继续，跳过相同计算指纹的成功来源；limit只计真正尝试，不计已跳过条目
+uv run --no-project --no-cache --python 3.12 --with-requirements requirements.txt tools/namer_history.py --group 12345 --execute --mode resume --limit 100
+# 只重试已有失败/部分成功/中断条目，不新建尚未执行的来源
+uv run --no-project --no-cache --python 3.12 --with-requirements requirements.txt tools/namer_history.py --group 12345 --execute --mode retry-failed
+```
+
+可用 `--source-config` 指定只读源配置；`--target-config` 默认读取本地 Codex 配置的连接后显式改库名；
+`--plugin-config` 读取当前 namer 的运行时、tswn 与资产路径。
+`--commands` 接受逗号分隔规范命令，重型 CQP/队友评可单独分批；
+`--rounds`、`--pair-rounds` 可显式降低小批成本，不会暗中降低全量默认轮数。
+每个子进程默认最多600秒、每条请求默认最多3600秒，可分别用 `--timeout`、`--request-timeout` 调整。
+超时记录明确失败，后续可重试；不使用 shell 执行聊天内容，不擅自改变种子。
+
+### 单结果覆盖与断点契约
+
+- schema v2为历史 job 增加 history_key、requested_at、短期 writer_token；历史 account=NULL，
+  origin=history_recompute，不猜测原执行机器人、不修改消息 ID。原请求发生时间与当前重算时间分开保存。
+- history_key由稳定源别名、平台、会话、消息 ID构成；更换源别名视为另一来源，应保持默认稳定别名。
+  live 与 history 是明确分开的路径，历史覆盖绝不删除实时 job/calls。
+- 同来源计算期间持有会话级数据库锁；领取用短事务删除该历史 job 的旧 calls、清空旧 result、置 started。
+  不是保留旧版本的 runs/attempts；新 calls 仍在每次真正执行前登记，完成后才发布当前业务结果。
+- 失败留下 failed/partial，崩溃留下 started；旧成功不会继续冒充当前成功。断点重启只在取得独占锁后回收。
+  writer_token只是瞬时所有权栅栏，贯穿调用/结果/发送元数据；旧worker失锁或被回收后不能写回新结果。
+- resume 跳过相同指纹的成功样本，失败或中断可以重算；retry-failed只处理已有非成功样本。
+  指纹包含输入、规范命令、轮数/超时设置、执行代码与引擎/资产摘要；发现批次内文件改变时整批停止。
+- 旧别名按已知源码语义处理：_peeks/_teams 规范为对应连字符命令，rhp 对应当前 fsp；
+  未知命令或无法解析输入明确记录 unsupported/invalid，不从旧回复推测结果。
+  每行原始输入保留独立词法节点，非法overlay仅该行标 unparsed，不能丢弃其它行或名字空白。
+- 全量暂不启用计算缓存/并发；每条来源独立落库，打印 scanned、executed、分类计数和 elapsed_seconds，
+  不打印聊天正文、源消息标识或凭据。
