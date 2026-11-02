@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     from ica_typing import IcaClient, IcaNewMessage
     from shenbot_api import IcaConnectionState, IcaConnectionWatch
 
-VERSION = "0.7.1"
+VERSION = "0.7.2"
 POLL_SECONDS = 120
 THRESHOLD_STEP = 5
 COMMAND = "/codex"
@@ -61,7 +61,7 @@ HELP_TEXT = (
     "Flare：日常高质量生图、速度最快；Sunburst：能力最强，侧重精细编辑。\n"
     "/codex image confirm|cancel|status <编号>：确认生成、取消或查看任务。\n"
     "/codex retry <编号>：按原内容重试明确失败的生图任务，会再次消耗额度。\n"
-    "/codex image help：生图帮助，含尺寸、质量、背景参数说明。\n"
+    "/codex image help：完整生图帮助，含命令、参数、尺寸与重试规则。\n"
     "生图子命令可以省略 image，例如直接发 /codex confirm、/codex cancel、/codex set。\n"
     f"自动提醒：每 {POLL_SECONDS // 60} 分钟检查，剩余额度跨过 95%、90%、85%……0% 时提醒；"
     "只发配置的提醒群。\n"
@@ -70,17 +70,44 @@ HELP_TEXT = (
     "仅白名单群可用；登录失效请在 DSH 中刷新。"
 )
 IMAGE_HELP = (
-    "Codex 生图\n"
-    "/codex image <描述> [参数]：审核润色后确认生成；引用图片改图，最多 5 张。\n"
-    "/codex direct <描述>：跳过润色，仍须审核和确认。\n"
+    "Codex 生图速查\n"
+    "/codex image [--max] <描述>：审核润色后等待确认；引用图片可改图。\n"
+    "/codex direct <描述>：跳过润色，仍须审核与确认。\n"
     "/codex confirm|cancel|status [编号]：确认、取消、查看。\n"
-    "/codex set [编号] <参数>：调参；/codex attach [编号]：引用追加参考图。\n"
-    "/codex retry <编号>：失败后手动重试，再次消耗额度。\n"
-    "--model flare|sunburst；--max = sunburst + 质量 max（优先于 model/quality）。\n"
-    "--quality auto/low/medium/high/xhigh/max；--background auto/transparent/opaque。\n"
-    "--size auto 或 宽x高，推荐 1024x1024、1536x1024、1024x1536。\n"
+    "/codex set [编号] --model flare|sunburst；--max = Sunburst + 质量 max。\n"
     "Flare：最快日常生图；Sunburst：能力最强，侧重精细编辑。\n"
-    "草稿 10 分钟有效；尺寸/质量/背景默认 auto，模型与计费后端见预览。"
+    "完整命令、参数与规则：/codex image help"
+)
+
+IMAGE_DETAILED_HELP = (
+    "Codex 生图完整帮助\n"
+    "【生成与确认】\n"
+    "/codex image <描述> [参数]：前审 → 润色 → 后审 → 预览，确认后才生成。\n"
+    "/codex direct <描述> [参数]：不润色，只做一次前审，仍需确认。\n"
+    "引用含图片的消息即可改图，最多 5 张；引用无图会拒绝，不退化成文生图。\n"
+    "/codex confirm|cancel|status [编号]：确认、取消、查看；只有一个待确认任务可省略编号。\n"
+    "草稿 10 分钟有效，确认只生效一次；生成按预览中的后端与参数执行。\n"
+    "【确认前调整】\n"
+    "/codex set [编号] <参数>：只改给出的参数，确认后不能再改。\n"
+    "/codex attach [编号]：引用图片追加参考图并重新审核。\n"
+    "【参数与模型】\n"
+    "--model flare|sunburst；未指定时新任务沿用管理员配置，旧任务保留原模型。\n"
+    "--max：固定 Sunburst + 质量 max，优先于同条命令的 model/quality，与顺序无关。\n"
+    "--quality auto/low/medium/high/xhigh/max；--background auto/transparent/opaque。\n"
+    "--size auto 或 宽x高；尺寸、质量、背景默认 auto，由上游决定。\n"
+    "只允许 GPT Image 2.5 Flare/Sunburst 及官方快照，两种后端都支持 xhigh/max。\n"
+    "Flare：日常高质量生图的最快模型；Sunburst：能力最强的生图与编辑模型，侧重编辑精度。\n"
+    "【尺寸】\n"
+    "推荐 1024x1024、1536x1024、1024x1536 或 auto。\n"
+    "插件目前每边限 512–2048，API 模式额外检查 16 倍数；这不是官方完整范围。\n"
+    "API 官方还要求：比例 1:3～3:1、每边 ≤3840、总像素 655360～8294400；\n"
+    "超过 2560x1440 属实验性支持。插件尚未完整校验比例和总像素，建议用推荐尺寸。\n"
+    "【重试、权限与计费】\n"
+    "/codex retry <编号>：明确 HTTP 失败后手动重试，沿用确认内容，会再次消耗额度。\n"
+    "不自动重试；超时、断线或成功响应解析失败等结果不确定的任务不能重试。\n"
+    "仅原群本人可操作；宿主管理员可代办 confirm/cancel/retry，并强制重试已确认的上游审核拒绝。\n"
+    "后端由管理员配置，订阅额度与 API 独立计费分开；以任务预览为准，不自动换模型或后端。\n"
+    "这些子命令可省略 image 前缀；返回简短速查：/codex image"
 )
 
 # 这些生图子命令可以省略 image 前缀，例如 /codex confirm 与 /codex image confirm。
@@ -1275,8 +1302,11 @@ def _handle_image(
 ) -> None:
     """命令分派只做参数检查与线程启动；真正网络调用都放到 worker 线程。"""
     parts = command[2:]
-    if not parts or parts == ["help"]:
+    if not parts:
         _reply(state, msg, client, IMAGE_HELP)
+        return
+    if parts == ["help"]:
+        _reply(state, msg, client, IMAGE_DETAILED_HELP)
         return
     action = parts[0]
     options: dict[str, str] = {}
