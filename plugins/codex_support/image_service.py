@@ -80,9 +80,9 @@ class ImageSettings:
         }
 
 
-# GPT Image 2.5 的官方别名与快照支持 xhigh/max；较早及未知模型保留原质量范围。
-API_IMAGE_QUALITIES = ("auto", "low", "medium", "high")
-API_IMAGE_25_MODELS = frozenset(
+# 两种后端都只允许 GPT Image 2.5 的官方别名与快照，不兼容旧图片模型。
+IMAGE_QUALITIES = ("auto", "low", "medium", "high", "xhigh", "max")
+IMAGE_MODELS = frozenset(
     {
         "gpt-image-2.5-flare",
         "gpt-image-2.5-flare-2026-09-08",
@@ -93,18 +93,16 @@ API_IMAGE_25_MODELS = frozenset(
 
 
 def _check_backend_params(execution: dict, params: dict) -> None:
-    """按冻结后端提前校验生成参数，避免确认后才被上游按参数拒绝。"""
+    """按冻结模型与后端校验；旧模型在审核或消费确认前直接拒绝。"""
+    if execution.get("image_model", "gpt-image-2.5-flare") not in IMAGE_MODELS:
+        raise ImageError(
+            "图片模型只允许 GPT Image 2.5 Flare/Sunburst（含官方快照）；"
+            "请修改模型配置后重新发起任务。"
+        )
+    if params.get("quality", "auto") not in IMAGE_QUALITIES:
+        raise ImageError(f"质量可选：{'/'.join(IMAGE_QUALITIES)}。")
     if execution.get("image_backend") != "openai":
         return
-    model = execution.get("image_model", "gpt-image-2.5-flare")
-    qualities = API_IMAGE_QUALITIES
-    if model in API_IMAGE_25_MODELS:
-        qualities += ("xhigh", "max")
-    if params.get("quality", "auto") not in qualities:
-        raise ImageError(
-            f"OpenAI API 模型 {model} 的质量只支持 {'/'.join(qualities)}；"
-            "需要 xhigh/max 请使用 GPT Image 2.5 Flare/Sunburst 重新发起任务。"
-        )
     size = params.get("size", "auto")
     width, _, height = size.partition("x")
     if size != "auto" and not (

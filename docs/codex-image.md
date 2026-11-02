@@ -104,9 +104,10 @@ HTTP/Socket.IO 受理仅记为 submitted，不能伪称 QQ 最终送达。
 | --quality | auto/low/medium/high/xhigh/max | 上游渲染质量档位 |
 | --background | auto/transparent/opaque | 需要透明背景时指定 |
 
-API 模式按任务冻结的图片模型校验质量：`gpt-image-2.5-flare`、`gpt-image-2.5-sunburst`
-及各自的 `-2026-09-08` 快照支持上表全部档位；较早及未知模型仅接受 auto/low/medium/high。
-尺寸宽高仍必须能被 16 整除；创建、调整时直接检查，确认阶段也在消费确认前复核参数。
+两种后端的图片模型只允许 `gpt-image-2.5-flare`、`gpt-image-2.5-sunburst`
+及各自的 `-2026-09-08` 官方快照，均支持上表全部质量档位；其他模型直接拒绝，不保留旧模型兼容分支。
+校验使用任务冻结的模型，配置重载不会让旧任务换模型；旧模型任务需修改配置后重新发起。
+API 模式的尺寸宽高仍必须能被 16 整除；创建、调整时直接检查，确认阶段也在消费确认前复核参数。
 
 官方定位：[Flare](https://developers.openai.com/api/docs/models/gpt-image-2.5-flare)
 侧重快速的日常高质量生图；[Sunburst](https://developers.openai.com/api/docs/models/gpt-image-2.5-sunburst)

@@ -468,26 +468,55 @@ class ApiBackendFlowTests(unittest.TestCase):
                 review.payload["reasoning"], {"effort": frozen["text_reasoning_effort"]}
             )
 
-    def test_api_mode_rejects_values_the_paid_endpoint_would_refuse(self):
-        """旧图片模型仍拦截高质量档位，尺寸约束也仍在建任务前检查。"""
-        archive = FakeArchive()
-        service = self.service(archive, openai_image_model="gpt-image-2")
-        for params in ({"quality": "xhigh"}, {"size": "1000x1000"}):
-            with self.subTest(params=params), self.assertRaises(ImageError) as failure:
-                service.create(
-                    message(), Mock(), "虚构图片要求", direct=True, params=params
+    def test_old_models_are_rejected_before_review_or_charge(self):
+        """即使质量为 high，两个后端的旧模型及冻结旧任务也不能继续使用。"""
+        for backend in ("openai", "codex"):
+            with self.subTest(backend=backend):
+                archive = FakeArchive()
+                service = self.service(
+                    archive,
+                    image_backend=backend,
+                    openai_image_model="gpt-image-2",
+                    codex_image_model="gpt-image-2",
                 )
-            self.assertIn("OpenAI API", str(failure.exception))
-        self.assertEqual(archive.created, 0)
+                service._call = Mock()
+                with self.assertRaises(ImageError):
+                    service.create(
+                        message(),
+                        Mock(),
+                        "虚构图片要求",
+                        direct=True,
+                        params={"quality": "high"},
+                    )
+                self.assertEqual(archive.created, 0)
+                service._call.assert_not_called()
 
-        # 升级前冻结了 API 后端但参数越界的任务，确认时也不能先消费确认再被上游拒绝。
-        legacy = FakeArchive()
-        legacy.job["execution_config"] = service.settings.execution_config()
-        legacy.job["image_params"] = {"quality": "max"}
-        legacy_service = self.service(legacy)
-        with self.assertRaises(ImageError):
-            legacy_service.confirm(message(), Mock(), "abcdef12")
-        self.assertFalse(legacy.confirmed)
+                # 全局配置已改为 2.5，历史任务仍按冻结的旧模型拒绝，不自动换模型。
+                archive.job["execution_config"] = service.settings.execution_config()
+                archive.job["image_params"] = {"quality": "high"}
+                current_service = self.service(archive)
+                current_service._call = Mock()
+                with self.assertRaises(ImageError):
+                    current_service.set_params(message(), "abcdef12", {"quality": "max"})
+                self.assertEqual(archive.job["image_params"], {"quality": "high"})
+                with self.assertRaises(ImageError):
+                    current_service.confirm(message(), Mock(), "abcdef12")
+                self.assertFalse(archive.confirmed)
+                current_service._call.assert_not_called()
+
+    def test_api_size_is_checked_before_creating_a_job(self):
+        archive = FakeArchive()
+        service = self.service(archive)
+        with self.assertRaises(ImageError) as failure:
+            service.create(
+                message(),
+                Mock(),
+                "虚构图片要求",
+                direct=True,
+                params={"quality": "max", "size": "1000x1000"},
+            )
+        self.assertIn("16", str(failure.exception))
+        self.assertEqual(archive.created, 0)
 
     def test_missing_key_stops_before_charge_without_borrowing_the_other(self):
         """防止一把 Key 冒充另一用途，或在缺 Key 时消费确认后才发现无法生成。"""

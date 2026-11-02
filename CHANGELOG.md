@@ -2,6 +2,12 @@
 
 宿主版本对应 [shenbot_api.py](shenbot_api.py) 的 `__version__`；ICA/Tailchat API 与各插件的 `VERSION` 分别管理。
 
+## 2026-11-02 Codex 只允许 Flare/Sunburst 图片模型
+
+- [codex](plugins/codex.py) **0.6.3 → 0.6.4**：按新要求移除旧模型兼容，两种后端只允许 GPT Image 2.5 Flare/Sunburst 及各自 `-2026-09-08` 官方快照；其他图片模型即使使用 auto/high 也直接拒绝，不自动替换模型。
+- 创建、调整、确认均按任务冻结模型检查；历史旧模型任务在消费确认前停止，需要改配置后重新发起。质量档位统一支持到 max，缺省 auto 与 API 尺寸约束不变。
+- 离线核心回归覆盖两种后端拒绝旧模型、旧任务调参与确认无法绕过限制，以及 2.5 API 尺寸约束。
+
 ## 2026-11-02 修复 Codex API 图片质量上限
 
 - [codex](plugins/codex.py) **0.6.2 → 0.6.3**：API 模式按任务冻结的图片模型校验质量，GPT Image 2.5 Flare/Sunburst 及各自 `-2026-09-08` 快照支持 xhigh/max；较早及未知模型继续限制到 high，尺寸 16 倍数约束与缺省 auto 不变。

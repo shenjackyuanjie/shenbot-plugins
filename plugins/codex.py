@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     from ica_typing import IcaClient, IcaNewMessage
     from shenbot_api import IcaConnectionState, IcaConnectionWatch
 
-VERSION = "0.6.3"
+VERSION = "0.6.4"
 POLL_SECONDS = 120
 THRESHOLD_STEP = 5
 COMMAND = "/codex"
@@ -84,8 +84,8 @@ IMAGE_HELP = (
     "不会自动重试；超时、断线或成功响应解析失败等结果不确定的任务不能重试。\n"
     "参数可写在描述前后：--size 1024x1536（512–2048，或 auto）、"
     "--quality low/medium/high/xhigh/max、--background transparent/opaque，缺省均为 auto。\n"
-    "API 模式的 GPT Image 2.5 Flare/Sunburst 支持 xhigh/max，较早模型仅到 high；"
-    "尺寸宽高需能被 16 整除，订阅模式不变。\n"
+    "图片模型只允许 GPT Image 2.5 Flare/Sunburst（含官方快照），两种后端均支持 xhigh/max；"
+    "API 模式的尺寸宽高需能被 16 整除。\n"
     "auto 表示交给上游决定，不保证固定尺寸或比例。\n"
     "以上子命令都可以省略 image 前缀，例如 /codex confirm。"
 )
