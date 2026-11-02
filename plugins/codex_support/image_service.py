@@ -536,7 +536,10 @@ class ImageService:
                 call = codex_call(
                     job["reviewed_prompt"], login.access, login.account_id, **options
                 )
+            # 只计本次生成请求（含响应处理与存档），不计排队、审核和回图发送。
+            started = time.monotonic()
             self._call(call, job["id"], threading.Event())
+            generation_time = _elapsed(started)
         except (ProviderError, TransportError, ArchiveError) as error:
             code = getattr(error, "code", None) or str(error)
             state = (
@@ -576,8 +579,8 @@ class ImageService:
         if data is None:
             self.log("image missing", level="warn", job=short)
             raise ImageError("生成已完成但未取到图片存档，请检查数据库。")
-        self.log("generated", job=short, bytes=len(data))
-        sent = msg.reply_with("已生成图片")
+        self.log("generated", job=short, bytes=len(data), cost=generation_time)
+        sent = msg.reply_with(f"已生成图片，用时 {generation_time}")
         sent.set_img(data, "image/png", False)
         client.send_message(sent)
         self.log("delivered", job=short)

@@ -103,7 +103,7 @@ def message():
         sender_id=10003,
         account=10001,
         reply=None,
-        reply_with=lambda text: SimpleNamespace(set_img=lambda *a: None),
+        reply_with=lambda text: SimpleNamespace(content=text, set_img=Mock()),
     )
 
 
@@ -151,9 +151,15 @@ class ImageFlowTests(unittest.TestCase):
         )
         service.create(message(), Mock(), "虚构图片要求")
         client = Mock()
-        self.assertIsNone(service.confirm(message(), client, "abcdef12"))
-        # 确认后先回执、成功后再回图，且不再追加额外收尾文本。
+        with patch.object(image_service.time, "monotonic", side_effect=[100.0, 112.3]):
+            self.assertIsNone(service.confirm(message(), client, "abcdef12"))
+        # 确认后先回执，成功用时随图片返回，不另发收尾消息或包含审核耗时。
         self.assertEqual(client.send_message.call_count, 2)
+        returned = client.send_message.call_args.args[0]
+        self.assertEqual(returned.content, "已生成图片，用时 12.3s")
+        returned.set_img.assert_called_once_with(
+            archive.image(archive.job["id"], "original"), "image/png", False
+        )
         self.assertTrue(archive.generated)
         with self.assertRaises(image_service.ArchiveError):
             service.confirm(message(), client, "abcdef12")
