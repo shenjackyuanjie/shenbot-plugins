@@ -575,10 +575,10 @@ class CommandTests(unittest.TestCase):
         self.msg.room_id = -123456
         self.state.busy = True
         self.state.next_query_at = float("inf")
-        for command in ("/codex", "/codex help"):
+        for command in ("/codex", "/codex help", "/codex image", "/codex image help"):
             self.msg.content = command
             codex.on_ica_message(self.msg, self.client)
-        self.assertEqual(self.client.send_message.call_count, 2)
+        self.assertEqual(self.client.send_message.call_count, 4)
         self.thread.assert_not_called()
         # 忙时帮助仍在本地立即返回，不占用查询槽位。
         self.assertTrue(self.state.busy)
