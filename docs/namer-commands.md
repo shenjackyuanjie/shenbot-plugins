@@ -194,5 +194,11 @@ uv run --no-project --no-cache --python 3.12 --with-requirements requirements.tx
 - 旧别名按已知源码语义处理：_peeks/_teams 规范为对应连字符命令，rhp 对应当前 fsp；
   未知命令或无法解析输入明确记录 unsupported/invalid，不从旧回复推测结果。
   每行原始输入保留独立词法节点，非法overlay仅该行标 unparsed，不能丢弃其它行或名字空白。
-- 全量暂不启用计算缓存/并发；每条来源独立落库，打印 scanned、executed、分类计数和 elapsed_seconds，
+- 不启用计算缓存；默认每进程一个 worker，可用 `--shard-count 4 --shard-index 0` 启动四分片中的第0片，
+  在另外三个独立进程分别使用编号1、2、3（各运行一次）。所有分片必须使用相同群、源别名、命令筛选和计算设置。
+  例如在四个终端分别运行上方 resume 命令并追加对应分片参数；`--limit` 按每个分片分别计数。
+- 分片按完整来源身份的 SHA-256 稳定分配，不依赖 Python 随机哈希，不改变计算指纹、轮数或种子。
+  切换并行前先停止旧单进程，使用 resume 保留既有成功；分片数量变更也需先停止旧批次。
+  每个进程独立分页只读源库，单片失败可按原编号断点继续；数据库同来源锁继续防止并发覆盖。
+- 每条来源独立落库，打印 scanned、executed、分类计数和 elapsed_seconds，
   不打印聊天正文、源消息标识或凭据。

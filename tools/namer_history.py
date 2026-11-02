@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import subprocess
 import sys
@@ -22,6 +23,13 @@ def positive(value):
     return result
 
 
+def shard_index(message, count):
+    """按历史来源身份稳定分片；与内容、Python 哈希随机化和计算指纹无关。"""
+    identity = [message.source_alias, message.platform, str(message.room_id), str(message.message_id)]
+    digest = hashlib.sha256(json.dumps(identity, ensure_ascii=False, separators=(",", ":")).encode()).digest()
+    return int.from_bytes(digest[:8], "big") % count
+
+
 def parser():
     value = argparse.ArgumentParser(description=__doc__)
     value.add_argument("--group", type=positive, required=True, help="本次明确授权查询的单个群号")
@@ -35,6 +43,8 @@ def parser():
     value.add_argument("--commands", help="逗号分隔的规范命令，未指定则全部候选命令")
     value.add_argument("--limit", type=positive, help="本批最多处理的匹配样本数；未指定不限")
     value.add_argument("--batch-size", type=positive, default=100)
+    value.add_argument("--shard-count", type=positive, default=1, help="独立进程的总分片数，所有进程保持一致")
+    value.add_argument("--shard-index", type=int, default=0, help="本进程分片编号，从0开始；每个编号只启动一次")
     value.add_argument("--rounds", type=positive, default=10000)
     value.add_argument("--pair-rounds", type=positive, default=1000)
     value.add_argument("--timeout", type=positive, default=600, help="每个子进程秒数上限")
@@ -43,7 +53,10 @@ def parser():
 
 
 def main(argv=None):
-    args = parser().parse_args(argv)
+    arguments = parser()
+    args = arguments.parse_args(argv)
+    if not 0 <= args.shard_index < args.shard_count:
+        arguments.error("--shard-index 必须在 0 到 --shard-count-1 之间")
     # namerena 导入时重建辅助模块，必须先导入入口，再绑定本轮 support 类型。
     import namerena
     from namerena_support.archive import Archive, ArchiveError
@@ -80,13 +93,16 @@ def main(argv=None):
         commands = set(args.commands.split(",")) if args.commands else None
         print(json.dumps({"mode": args.mode, "rounds": settings.rounds, "pair_rounds": settings.pair_rounds,
             "limit": args.limit, "commands": sorted(commands) if commands else "all",
-            "source": args.source_alias, "snapshot_files": len(snapshot), "workers": 1}, ensure_ascii=False), flush=True)
+            "source": args.source_alias, "snapshot_files": len(snapshot), "workers": 1,
+            "shard_count": args.shard_count, "shard_index": args.shard_index}, ensure_ascii=False), flush=True)
         counts = Counter()
         scanned = 0
         started = time.monotonic()
         for message in source.iter_messages(batch_size=args.batch_size):
             scanned += 1
             if commands is not None and message.command not in commands:
+                continue
+            if args.shard_count > 1 and shard_index(message, args.shard_count) != args.shard_index:
                 continue
             if args.limit is not None and counts.total() - counts["skipped"] >= args.limit:
                 break
