@@ -234,7 +234,12 @@ def process(run, command, *, engine_version=None, **kwargs):
             operation = command[position + 1]
         if operation == "pair" and "-n" in command:
             command[command.index("-n") + 1] = str(session.payload["settings"].get("pair_rounds", command[command.index("-n") + 1]))
-        payload = engine_input(kwargs.get("input", ""))
+        if operation == "namer-pf":
+            lines = [line for line in kwargs.get("input", "").splitlines() if line.strip()]
+            payload = {"version": VERSION, "groups": [{"input_index": i, **group(line)} for i, line in enumerate(lines)],
+                       "settings": {}, "grouping": "one_line_per_group"}
+        else:
+            payload = engine_input(kwargs.get("input", ""))
         params = {}
         for flag, field in (("-n", "rounds_requested"), ("--head", "head")):
             if flag in command:

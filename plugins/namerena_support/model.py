@@ -188,11 +188,32 @@ def parse_tswn(text, operation):
         raise ValueError("missing_fight_result")
     if operation == "namer-pf":
         rows = []
+        keys = ("pp", "pd", "qp", "qd", "sum")
+        scores = {}
+        label = None
+        mode = None
         for line in text.splitlines():
-            if re.fullmatch(r"-?\d+(?:\.\d+)?(?:\|-?\d+(?:\.\d+)?){3,4}", line.strip()):
+            if re.fullmatch(r"-?\d+(?:\.\d+)?(?:\s*\|\s*-?\d+(?:\.\d+)?){3,4}", line.strip()):
+                if mode == "named":
+                    raise ValueError("mixed_pf_formats")
+                mode = "pipe"
                 values = [numeric(value) for value in line.split("|")]
-                rows.append({"input_index": len(rows), "scores": dict(zip(("pp", "pd", "qp", "qd", "sum"), values))})
-        if not rows:
+                rows.append({"input_index": len(rows), "scores": dict(zip(keys, values))})
+                continue
+            match = re.fullmatch(r"(.*)\s+(pp|pd|qp|qd|sum):\s*(-?\d+(?:\.\d+)?)", line)
+            if match:
+                if mode == "pipe":
+                    raise ValueError("mixed_pf_formats")
+                mode = "named"
+                name, metric, value = match.groups()
+                if metric != keys[len(scores)] or (scores and name != label):
+                    raise ValueError("incomplete_pf_result")
+                label = name
+                scores[metric] = numeric(value)
+                if metric == "sum":
+                    rows.append({"input_index": len(rows), "scores": scores})
+                    scores = {}
+        if not rows or scores:
             raise ValueError("invalid_pf_result")
         return {"version": VERSION, "kind": "pf", "items": rows, "precision": "engine_reported"}
     metrics = []
