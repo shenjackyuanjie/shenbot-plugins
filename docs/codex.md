@@ -55,8 +55,11 @@ HTTP 请求拒绝重定向，避免向其他服务转发认证。支持系统和
 - 官方定位：Flare 是日常高质量生图的最快模型；Sunburst 是能力最强的生图与编辑模型，侧重编辑精度。
 - 不做自动重试、自动换模型或自动换后端；上游 401/403/404/429 只停止并按中文错误说明给手动操作建议。
   本地审核拒绝的任务在任何模式下都不能被普通用户强制重试。
-- 两种后端的图片模型只允许 GPT Image 2.5 Flare/Sunburst（含 `-2026-09-08` 官方快照），均支持 xhigh/max；
+- 两种后端新任务默认请求 GPT Image 2.6 Flare，`--model` 与 `--max` 选择 2.6 对应模型；保留已支持的 2.5 别名/快照用于冻结任务；
   其他图片模型直接拒绝，不做兼容或自动切换。校验使用任务冻结模型；API 尺寸宽高仍需能被 16 整除。
+
+订阅接口的模型名仅代表请求值：实测不存在的模型名也能出图，不能据此确认真正切换了版本；
+公共 API 则会拒绝无效模型名。具体速度和尺寸差异见 [2.6 双后端实测](codex-image-26-test.md)。
 
 ## 配置
 
@@ -83,13 +86,13 @@ cooldown_seconds = 15
 # 生图 / 文本后端：codex|openai、deepseek|openai。
 image_backend = "codex"
 text_backend = "deepseek"
-codex_image_model = "gpt-image-2.5-flare"
+codex_image_model = "gpt-image-2.6-flare"
 # API 模式专用：两把用途独立的 Key 直接写在本地配置里，不要提交。
 openai_text_api_key = "sk-...（外审与润色）"
 openai_image_api_key = "sk-...（生图）"
 openai_base_url = "https://api.openai.com/v1"
 openai_text_model = "gpt-6-luna"
-openai_image_model = "gpt-image-2.5-flare"
+openai_image_model = "gpt-image-2.6-flare"
 openai_reasoning_effort = "high"
 openai_proxy = "http://127.0.0.1:7897"
 # 可选：组织级已花费查询（需要 Admin key + api.usage.read）；留空则 check 不发额外请求。

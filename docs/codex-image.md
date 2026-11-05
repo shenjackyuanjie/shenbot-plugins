@@ -40,7 +40,7 @@ api.openai.com，外审/润色与生图各用一把专用 Key，不使用订阅�
 `text_base_url`、`text_reasoning_effort` 写入 `jobs.execution_config` 并与任务一起返回。
 确认与手动重试都只读这份快照，配置热重载不会把已建任务从 API 计费切回订阅额度，或换掉审核/生图模型。
 归档层在每次外发前核对请求的 provider、模型与端点必须与冻结值一致，重放同一来源也不会改写快照。
-空快照表示历史任务，继续沿用 Codex 与 DeepSeek 路径，图片默认 Flare；不会批量回填或改写已有记录。
+空快照表示历史任务，继续沿用 Codex 与 DeepSeek 路径，图片默认 2.5 Flare；不会批量回填或改写已有记录。
 确认前显式 `set --model` 只更新图片模型；模型与质量等参数同一条 SQL 原子保存，
 后端、端点和审核配置不变，确认后及 retry 均沿用最终确认的模型。
 历史空快照选模型时只记录图片模型覆盖，不套用当前全局后端配置。
@@ -113,8 +113,15 @@ HTTP/Socket.IO 受理仅记为 submitted，不能伪称 QQ 最终送达。
 | --max | 无取值 | 固定选择 sunburst + 质量 max，优先于同条命令的 model/quality，与顺序无关 |
 | --background | auto/transparent/opaque | 需要透明背景时指定 |
 
-两种后端的图片模型只允许 `gpt-image-2.5-flare`、`gpt-image-2.5-sunburst`
-及各自的 `-2026-09-08` 官方快照，均支持上表全部质量档位；其他模型直接拒绝，不保留旧模型兼容分支。
+两种后端的新任务默认请求 `gpt-image-2.6-flare`，`--model flare|sunburst` 与 `--max`
+分别选择 2.6 对应模型。保留 2.5 Flare/Sunburst 别名及各自的 `-2026-09-08` 官方快照，
+使已冻结任务仍能按原模型执行；GPT Image 2 等更早或未知模型仍直接拒绝。
+质量选项原样透传，不降档；2.6 的 API Flare/low、Sunburst/medium 和 Sunburst/max 已实测出图。
+
+**订阅接口只保证发送指定模型名，不能确认上游实际使用的模型。** 2026-11-05 实测中，
+订阅接口对不存在的模型名也返回图片，且请求 1024x1024 实际返回 1254x1254；
+因此订阅预览标为“请求模型”，不能把 HTTP 200 当作成功切换到 2.6 的证据。
+公共 API 对同一个无效模型名返回 HTTP 400。详见 [2.6 双后端实测](codex-image-26-test.md)。
 校验使用任务记录的模型，配置重载不会让旧任务换模型；确认前可显式 set 切换 Flare/Sunburst。
 API 模式的尺寸宽高仍必须能被 16 整除；创建、调整时直接检查，确认阶段也在消费确认前复核参数。
 
@@ -133,9 +140,10 @@ API 模式的尺寸宽高仍必须能被 16 整除；创建、调整时直接检
 却低于官方最小总像素，`512x2048` 则超出官方比例；4K 又会被插件的本地上限拦截。
 当前优先使用上面的推荐尺寸或 auto；本次只修正说明，不改变尺寸校验行为。
 
-官方定位：[Flare](https://developers.openai.com/api/docs/models/gpt-image-2.5-flare)
-侧重快速的日常高质量生图；[Sunburst](https://developers.openai.com/api/docs/models/gpt-image-2.5-sunburst)
-是能力最强的生图与编辑模型，侧重编辑精度。质量缺省仍为 auto，不会自动升为 max。
+官方定位：[Flare](https://developers.openai.com/api/docs/models/gpt-image-2.6-flare)
+侧重快速的日常高质量生图；[Sunburst](https://developers.openai.com/api/docs/models/gpt-image-2.6-sunburst)
+侧重精细构图与编辑。2.6 新增的 complexity 本次不提供命令选项，省略时官方默认 high；
+质量缺省仍为 auto，不会自动升为 max。本轮只接静态 PNG，不处理 GIF 或 SVG。
 
 参数在创建任务时写入 `jobs.image_params`，预览展示的就是确认后发给上游的值。
 示例（`direct` 同样支持这些选项）：

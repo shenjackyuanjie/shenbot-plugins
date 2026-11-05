@@ -581,6 +581,8 @@ class Archive:
         if not params and image_model is None:
             raise ArchiveError("没有需要更新的生成参数。")
         if image_model is not None and image_model not in {
+            "gpt-image-2.6-flare",
+            "gpt-image-2.6-sunburst",
             "gpt-image-2.5-flare",
             "gpt-image-2.5-sunburst",
         }:

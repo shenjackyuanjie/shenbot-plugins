@@ -46,12 +46,12 @@ class ImageSettings:
     image_timeout: float = 300
     image_backend: str = "codex"
     text_backend: str = "deepseek"
-    codex_image_model: str = "gpt-image-2.5-flare"
+    codex_image_model: str = "gpt-image-2.6-flare"
     openai_text_api_key: str = field(repr=False, default="")
     openai_image_api_key: str = field(repr=False, default="")
     openai_base_url: str = "https://api.openai.com/v1"
     openai_text_model: str = "gpt-6-luna"
-    openai_image_model: str = "gpt-image-2.5-flare"
+    openai_image_model: str = "gpt-image-2.6-flare"
     openai_reasoning_effort: str = "high"
     # 本机直连 api.openai.com 会超时；代理只影响 API 模式，不参与执行配置冻结。
     openai_proxy: str = field(repr=False, default="")
@@ -80,10 +80,12 @@ class ImageSettings:
         }
 
 
-# 两种后端都只允许 GPT Image 2.5 的官方别名与快照，不兼容旧图片模型。
+# 新任务默认 2.6；保留已冻结的 2.5 别名与快照，不在升级时替换历史模型。
 IMAGE_QUALITIES = ("auto", "low", "medium", "high", "xhigh", "max")
 IMAGE_MODELS = frozenset(
     {
+        "gpt-image-2.6-flare",
+        "gpt-image-2.6-sunburst",
         "gpt-image-2.5-flare",
         "gpt-image-2.5-flare-2026-09-08",
         "gpt-image-2.5-sunburst",
@@ -100,7 +102,7 @@ def _select_image_model(execution: dict, params: dict) -> tuple[dict, dict]:
     if model is not None:
         if model not in {"flare", "sunburst"}:
             raise ImageError("模型可选：flare/sunburst。")
-        execution["image_model"] = "gpt-image-2.5-" + model
+        execution["image_model"] = "gpt-image-2.6-" + model
     return execution, params
 
 
@@ -108,7 +110,7 @@ def _check_backend_params(execution: dict, params: dict) -> None:
     """按冻结模型与后端校验；旧模型在审核或消费确认前直接拒绝。"""
     if execution.get("image_model", "gpt-image-2.5-flare") not in IMAGE_MODELS:
         raise ImageError(
-            "图片模型只允许 GPT Image 2.5 Flare/Sunburst（含官方快照）；"
+            "图片模型只允许 GPT Image 2.6 Flare/Sunburst 或已支持的 2.5 别名/快照；"
             "请修改模型配置后重新发起任务。"
         )
     if params.get("quality", "auto") not in IMAGE_QUALITIES:
@@ -131,7 +133,7 @@ def _backend_label(config: dict) -> str:
     return (
         f"OpenAI API（独立计费） / {model}"
         if config.get("image_backend", "codex") == "openai"
-        else f"Codex 订阅 / {model}"
+        else f"Codex 订阅 / 请求模型 {model}"
     )
 
 

@@ -269,7 +269,7 @@ class ImageFlowTests(unittest.TestCase):
         self.assertTrue(archive.drafted)
         self.assertEqual(calls[-1].payload["prompt"], "虚构图片要求")
         self.assertEqual(calls[-1].payload["size"], "1024x1536")
-        self.assertEqual(calls[-1].model, "gpt-image-2.5-flare")
+        self.assertEqual(calls[-1].model, "gpt-image-2.6-flare")
         self.assertEqual(calls[-1].payload["quality"], "high")
         self.assertEqual(calls[-1].payload["background"], "auto")
 
@@ -357,7 +357,7 @@ class ImageFlowTests(unittest.TestCase):
         # 调整只合并给出的键，其余保持创建时的值，确认后按新参数生成。
         service.confirm(message(), Mock(), "abcdef12")
         self.assertEqual(calls[-1].payload["quality"], "max")
-        self.assertEqual(calls[-1].model, "gpt-image-2.5-sunburst")
+        self.assertEqual(calls[-1].model, "gpt-image-2.6-sunburst")
         self.assertEqual(calls[-1].payload["background"], "transparent")
         self.assertEqual(calls[-1].payload["size"], "auto")
 
@@ -432,7 +432,7 @@ class ApiBackendFlowTests(unittest.TestCase):
         self.assertIn("fixture-check-key", review.headers["Authorization"])
         self.assertNotIn("fixture-image-key", review.headers["Authorization"])
         self.assertEqual((generate.provider, generate.stage), ("openai", "generate"))
-        self.assertEqual(generate.model, "gpt-image-2.5-sunburst")
+        self.assertEqual(generate.model, "gpt-image-2.6-sunburst")
         self.assertEqual(generate.payload["quality"], "max")
         self.assertTrue(generate.url.endswith("/images/generations"))
         self.assertIn("fixture-image-key", generate.headers["Authorization"])
@@ -476,10 +476,10 @@ class ApiBackendFlowTests(unittest.TestCase):
         generate = recorded[-1]
         self.assertEqual(generate.payload["quality"], "xhigh")
         self.assertEqual((generate.provider, generate.stage), ("openai", "generate"))
-        self.assertEqual(generate.model, "gpt-image-2.5-flare")
+        self.assertEqual(generate.model, "gpt-image-2.6-flare")
         self.assertEqual(
             archive.job["execution_config"],
-            {**frozen, "image_model": "gpt-image-2.5-flare"},
+            {**frozen, "image_model": "gpt-image-2.6-flare"},
         )
         self.assertTrue(generate.url.endswith("/images/edits"))
         # 官方 edits 只接受 multipart：图片进 files，不能塞回 JSON 正文。
@@ -491,6 +491,21 @@ class ApiBackendFlowTests(unittest.TestCase):
             self.assertEqual(
                 review.payload["reasoning"], {"effort": frozen["text_reasoning_effort"]}
             )
+
+    def test_upgrade_keeps_existing_25_job_model_until_explicitly_changed(self):
+        """防止默认升级为 2.6 后，确认旧草稿时静默换模型或计费通道。"""
+        archive = FakeArchive()
+        original = self.service(archive, openai_image_model="gpt-image-2.5-flare")
+        self.record(original, {"decision": "pass", "reason": "可以"})
+        original.create(message(), Mock(), "虚构图片要求", direct=True)
+        frozen = dict(archive.job["execution_config"])
+
+        upgraded = self.service(archive)
+        recorded = self.record(upgraded, {"image_sha256": "fixture-digest"})
+        upgraded.confirm(message(), Mock(), "abcdef12")
+        self.assertEqual(recorded[0].model, "gpt-image-2.5-flare")
+        self.assertEqual(recorded[0].provider, "openai")
+        self.assertEqual(archive.job["execution_config"], frozen)
 
     def test_old_models_are_rejected_before_review_or_charge(self):
         """即使质量为 high，两个后端的旧模型及冻结旧任务也不能继续使用。"""
@@ -515,7 +530,7 @@ class ApiBackendFlowTests(unittest.TestCase):
                 self.assertEqual(archive.created, 0)
                 service._call.assert_not_called()
 
-                # 全局配置已改为 2.5，历史任务仍按冻结的旧模型拒绝，不自动换模型。
+                # 全局配置已改为 2.6，历史任务仍按冻结的旧模型拒绝，不自动换模型。
                 archive.job["execution_config"] = service.settings.execution_config()
                 archive.job["image_params"] = {"quality": "high"}
                 current_service = self.service(archive)

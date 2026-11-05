@@ -30,7 +30,7 @@ from .transport import HTTPResult, post_json, post_multipart
 
 TEXT_MODEL = "gpt-6-luna"
 OPENAI_BASE_URL = "https://api.openai.com/v1"
-IMAGE_MODEL = "gpt-image-2.5-flare"
+IMAGE_MODEL = "gpt-image-2.6-flare"
 IMAGE_GENERATION_URL = "https://chatgpt.com/backend-api/codex/images/generations"
 IMAGE_EDIT_URL = "https://chatgpt.com/backend-api/codex/images/edits"
 

@@ -2,6 +2,13 @@
 
 宿主版本对应 [shenbot_api.py](shenbot_api.py) 的 `__version__`；ICA/Tailchat API 与各插件的 `VERSION` 分别管理。
 
+## 2026-11-05 Codex 静态生图支持 Images 2.6
+
+- [codex](plugins/codex.py) **0.7.3 → 0.8.0**：订阅与 API 新任务默认请求 2.6 Flare，任务级 Flare/Sunburst 与 --max 选择 2.6 对应模型；保留已支持的 2.5 别名/快照和历史空快照的原模型，不在确认或重试时自动升级模型、替换后端。
+- 实测公共 API 的 2.6 Flare/low、Sunburst/medium 和 Sunburst/max 均返回有效静态 PNG；本轮不接 GIF、SVG 或新增 complexity 参数，不改变尺寸校验。
+- 订阅接口对不存在模型名也返回图片，无法验证实际模型；预览明确标为“请求模型”，文档记录该限制，不把 HTTP 200 当作成功切到 2.6 的证明。[双后端实测报告](docs/codex-image-26-test.md)保留耗时、实际尺寸、2.5 对照和无效模型反证。
+- 复用两后端核心流程验证 2.6 默认与显式选择，补充默认升级后旧 2.5 草稿仍按冻结模型确认的回归；原子调参与旧模型拒绝规则继续有效。
+
 ## 2026-11-02 Codex 成功回图显示用时
 
 - [codex](plugins/codex.py) **0.7.2 → 0.7.3**：成功返回图片的同一条消息增加“已生成图片，用时 xxx.xs”，不额外发送收尾文本；订阅/API、初次生成/手动重试共用计时逻辑。

@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     from ica_typing import IcaClient, IcaNewMessage
     from shenbot_api import IcaConnectionState, IcaConnectionWatch
 
-VERSION = "0.7.3"
+VERSION = "0.8.0"
 POLL_SECONDS = 120
 THRESHOLD_STEP = 5
 COMMAND = "/codex"
@@ -95,7 +95,7 @@ IMAGE_DETAILED_HELP = (
     "--max：固定 Sunburst + 质量 max，优先于同条命令的 model/quality，与顺序无关。\n"
     "--quality auto/low/medium/high/xhigh/max；--background auto/transparent/opaque。\n"
     "--size auto 或 宽x高；尺寸、质量、背景默认 auto，由上游决定。\n"
-    "只允许 GPT Image 2.5 Flare/Sunburst 及官方快照，两种后端都支持 xhigh/max。\n"
+    "新任务选择 GPT Image 2.6 Flare/Sunburst；已有任务保留确认的模型。\n"
     "Flare：日常高质量生图的最快模型；Sunburst：能力最强的生图与编辑模型，侧重编辑精度。\n"
     "【尺寸】\n"
     "推荐 1024x1024、1536x1024、1024x1536 或 auto。\n"
@@ -203,7 +203,7 @@ PLUGIN_MANIFEST = PluginManifest(
             deepseek_model="deepseek-flash",
             image_backend="codex",
             text_backend="deepseek",
-            codex_image_model="gpt-image-2.5-flare",
+            codex_image_model="gpt-image-2.6-flare",
             # 两把用途独立的 Key 直接写在本地被忽略配置里，不进入提交与日志。
             openai_text_api_key="",
             openai_image_api_key="",
@@ -211,7 +211,7 @@ PLUGIN_MANIFEST = PluginManifest(
             openai_usage_api_key="",
             openai_base_url="https://api.openai.com/v1",
             openai_text_model="gpt-6-luna",
-            openai_image_model="gpt-image-2.5-flare",
+            openai_image_model="gpt-image-2.6-flare",
             openai_reasoning_effort="high",
             # 本机直连 api.openai.com 会超时，按需填写 HTTP 代理；留空则不使用代理。
             openai_proxy="",
@@ -244,14 +244,14 @@ class Settings:
     deepseek_model: str = "deepseek-flash"
     image_backend: str = "codex"
     text_backend: str = "deepseek"
-    codex_image_model: str = "gpt-image-2.5-flare"
+    codex_image_model: str = "gpt-image-2.6-flare"
     # 只用于请求头，不参与 repr、日志或存档。
     openai_text_api_key: str = field(default="", repr=False)
     openai_image_api_key: str = field(default="", repr=False)
     openai_usage_api_key: str = field(default="", repr=False)
     openai_base_url: str = "https://api.openai.com/v1"
     openai_text_model: str = "gpt-6-luna"
-    openai_image_model: str = "gpt-image-2.5-flare"
+    openai_image_model: str = "gpt-image-2.6-flare"
     openai_reasoning_effort: str = "high"
     openai_proxy: str = field(default="", repr=False)
     alert_groups: frozenset[int] = frozenset()
@@ -1066,13 +1066,13 @@ def on_load() -> None:
     for name, default in {
         "image_backend": "codex",
         "text_backend": "deepseek",
-        "codex_image_model": "gpt-image-2.5-flare",
+        "codex_image_model": "gpt-image-2.6-flare",
         "openai_text_api_key": "",
         "openai_image_api_key": "",
         "openai_usage_api_key": "",
         "openai_base_url": "https://api.openai.com/v1",
         "openai_text_model": "gpt-6-luna",
-        "openai_image_model": "gpt-image-2.5-flare",
+        "openai_image_model": "gpt-image-2.6-flare",
         "openai_reasoning_effort": "high",
         "openai_proxy": "",
     }.items():

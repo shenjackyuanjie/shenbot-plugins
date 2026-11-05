@@ -217,9 +217,9 @@ class ArchiveFlowTests(unittest.TestCase):
         restarted.finish_request(pre, "succeeded", {"decision": "pass"})
         restarted.prepare_draft(job, prompt, pre)
         restarted.update_image_params(
-            job, owner, {"quality": "max"}, image_model="gpt-image-2.5-sunburst"
+            job, owner, {"quality": "max"}, image_model="gpt-image-2.6-sunburst"
         )
-        frozen = {**frozen, "image_model": "gpt-image-2.5-sunburst"}
+        frozen = {**frozen, "image_model": "gpt-image-2.6-sunburst"}
         self.assertEqual(
             restarted.claim_confirmation(job, owner)["execution_config"], frozen
         )
