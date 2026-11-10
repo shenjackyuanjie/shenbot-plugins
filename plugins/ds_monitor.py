@@ -2,7 +2,8 @@
 ds_monitor.py - DeepSeek 网页更新监测插件
 
 启动 ds-monitor 二进制的 watch 模式监控 Chat、官网、Harness、Platform、API Docs 页面变更，
-检测到变化时由 ds-monitor 自动通过 noticer 发送 AI 分析结果。配套 ds-monitor 0.5.0，
+检查结束检测到变化时由 ds-monitor 立即通过 noticer 发送基本信息，同时分析，完成后补发结果。
+配套 ds-monitor 0.5.7，
 服务状态页基线与待发通知由 Rust 持久保存；Release、tag、commit、npm 与 profile
 在独立快通道运行，不计入网页/文档周期状态字段。插件只负责进程管理、查询与看板发布。
 配置房间通知走 /v1/send；命令触发的动态 room_id 通知走受 Token 保护的 direct API。
@@ -61,7 +62,7 @@ if TYPE_CHECKING:
 from shenbot_api import PluginManifest, ConfigStorage
 
 # 插件版本独立于 Rust 二进制版本；分析模型名集中供用户文案引用。
-VERSION = "0.5.6"
+VERSION = "0.5.7"
 ANALYZE_MODEL = "V41F"
 
 PLUGIN_MANIFEST = PluginManifest(
@@ -69,7 +70,7 @@ PLUGIN_MANIFEST = PluginManifest(
     name="DeepSeek 网页更新监测",
     version=VERSION,
     description=(
-        f"定期检查 DeepSeek Chat、官网、Harness、Platform 和 API Docs 变更，DeepSeek {ANALYZE_MODEL} 分析后推送通知；"
+        f"定期检查 DeepSeek Chat、官网、Harness、Platform 和 API Docs 变更，先推送基本信息，并行 DeepSeek {ANALYZE_MODEL} 分析后补发结果；"
         "同时盯服务状态页的故障 / 恢复事件"
     ),
     authors=["shenjack"],
@@ -943,7 +944,7 @@ def cycle_report(elapsed: float) -> str:
     if detail:
         lines.append(detail)
     if changes:
-        lines.append(f"变更摘要与 DeepSeek {ANALYZE_MODEL} 分析稍后由监测推送")
+        lines.append(f"监测先推送基本变更信息，同时分析，完成后补发 DeepSeek {ANALYZE_MODEL} 结果")
     return ds("\n".join(lines))
 
 

@@ -2,6 +2,12 @@
 
 宿主版本对应 [shenbot_api.py](shenbot_api.py) 的 `__version__`；ICA/Tailchat API 与各插件的 `VERSION` 分别管理。
 
+## 2026-11-10 DeepSeek 监测先通知再补发分析
+
+- [ds_monitor](plugins/ds_monitor.py) **0.5.6 → 0.5.7**：配套 Rust ds-monitor 0.5.7，说明与检查回执改为“先推送基本信息，同时分析，完成后补发结果”。即时摘要由 Rust 发送，插件不重复转发 stdout。
+- 保留检查结果与整轮完成标记分工：前者立即唤醒查询，后者仍在分析和通知结束后触发看板自动发布；复用 stdout 核心回归确认中途基本信息与分析日志不触发发布。
+- 更新维护文档的通知时序与生效步骤；需要 `/monitor update` 更新运行副本，单独重载 Python 插件不会改变旧 EXE 行为。
+
 ## 2026-11-05 Codex 静态生图支持 Images 2.6
 
 - [codex](plugins/codex.py) **0.7.3 → 0.8.0**：订阅与 API 新任务默认请求 2.6 Flare，任务级 Flare/Sunburst 与 --max 选择 2.6 对应模型；保留已支持的 2.5 别名/快照和历史空快照的原模型，不在确认或重试时自动升级模型、替换后端。

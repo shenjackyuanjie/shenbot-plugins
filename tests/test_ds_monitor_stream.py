@@ -23,9 +23,18 @@ class StreamAndArchiveTests(unittest.TestCase):
     ):
         proc = Mock()
         proc.poll.return_value = None
-        proc.stdout = iter(
-            [DONE, RESULT.replace("errors=0", "errors=-1"), RESULT, DONE, DONE]
-        )
+
+        def output():
+            yield from [DONE, RESULT.replace("errors=0", "errors=-1"), RESULT]
+            # 基本通知提前、分析仍在进行时，查询应已就绪，但看板不能提前发布。
+            self.assertTrue(monitor.wait_cycle_result(42, 0))
+            yield "[Chat] 已发送通知"
+            yield "=== Chat DeepSeek V41F 分析 ==="
+            publish.assert_not_called()
+            notify.assert_not_called()
+            yield from [DONE, DONE]
+
+        proc.stdout = output()
         with (
             patch.multiple(
                 monitor,
@@ -47,6 +56,7 @@ class StreamAndArchiveTests(unittest.TestCase):
             ),
             patch.object(monitor, "log"),
             patch.object(monitor, "maybe_publish") as publish,
+            patch.object(monitor, "noticer_post") as notify,
         ):
             monitor.watch_stdout_loop(proc, 42)
             publish.assert_called_once_with(1)
