@@ -28,7 +28,9 @@ config = "D:\\githubs\\deepseek\\web_craw\\config.toml"
 interval = 600
 # 本轮有变化时自动导出并部署看板（Cloudflare Pages），默认关闭
 publish = false
-# watch 的更新通知直发该群号；留空则跟随 ds-monitor 的 config.toml（room/rooms 广播）
+# 单群直发房间号（走 direct 通道，会跳过房间广播）；留空或 0 时按 ds-monitor 的
+# config.toml 广播。多群上报不改这里：在 noticer 的 [rooms] 加房间名，再到
+# ds-monitor 的 config.toml [noticer] rooms 里列出来。
 room_id = 0
 ```
 
