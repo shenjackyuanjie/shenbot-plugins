@@ -28,6 +28,8 @@ config = "D:\\githubs\\deepseek\\web_craw\\config.toml"
 interval = 600
 # 本轮有变化时自动导出并部署看板（Cloudflare Pages），默认关闭
 publish = false
+# watch 的更新通知直发该群号；留空则跟随 ds-monitor 的 config.toml（room/rooms 广播）
+room_id = 0
 ```
 
 `binary` 指向 release 产物的**副本**：长跑的 watch 会锁住自己那个可执行文件，把构建
@@ -62,7 +64,7 @@ if TYPE_CHECKING:
 from shenbot_api import PluginManifest, ConfigStorage
 
 # 插件版本独立于 Rust 二进制版本；分析模型名集中供用户文案引用。
-VERSION = "0.5.7"
+VERSION = "0.5.8"
 ANALYZE_MODEL = "V41F"
 
 PLUGIN_MANIFEST = PluginManifest(
@@ -80,6 +82,7 @@ PLUGIN_MANIFEST = PluginManifest(
             config="D:\\githubs\\deepseek\\web_craw\\config.toml",
             interval=600,
             publish=False,
+            room_id="",
         ),
     },
 )
@@ -134,6 +137,8 @@ _last_publish_cmd_at: float = 0.0
 _publish_enabled: bool = False
 # 发布期间禁止并发触发：构建 + 导出 + 上传不能两路一起跑
 _publish_in_progress: bool = False
+# watch 更新通知的直发群号（config/ds_monitor.toml 的 room_id）；None 表示跟随 Rust 配置
+_notify_room_id: int | None = None
 # 发布进行中又攒下的待发布（新一轮有变化、或上一次没成功），本次结束后补一次
 _publish_pending: bool = False
 # 连续失败次数：连着失败到上限就停止自动重试，改由人工 /monitor deploy
@@ -254,9 +259,19 @@ def _as_bool(value: Any) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def parse_room_id(value: Any) -> int | None:
+    """把配置里的群号读成正整数；空值与 0 表示继续跟随 ds-monitor 自己的 noticer 配置。"""
+    text = str(value).strip() if value is not None else ""
+    if not text or not text.isascii() or not text.isdecimal():
+        return None
+    room_id = int(text)
+    return room_id if room_id > 0 else None
+
+
 def load_config() -> None:
     global _binary_path, _config_path, _check_interval, _target_configs
     global _fingerprint_history_path, _status_config, _publish_enabled
+    global _notify_room_id
 
     cfg = PLUGIN_MANIFEST.config_unchecked("ds_monitor")
 
@@ -271,6 +286,12 @@ def load_config() -> None:
     if cfg_str and not os.path.isabs(cfg_str):
         cfg_str = os.path.abspath(cfg_str)
     _config_path = cfg_str
+
+    # watch 的更新通知直发群号；配置后不再走 config.toml 的 room/rooms 广播
+    raw_room = cfg.get_value("room_id")
+    _notify_room_id = parse_room_id(raw_room)
+    if _notify_room_id is None and str(raw_room or "").strip():
+        log("room_id 配置无效（需正整数群号），更新通知继续跟随 ds-monitor 配置")
 
     raw_int = cfg.get_value("interval")
     try:
@@ -431,6 +452,14 @@ def base_args(command: str) -> list[str]:
     return [_binary_path, "--config", _config_path, command]
 
 
+def room_args(room_id: int | None) -> list[str]:
+    """noticer 目标：显式群号优先，其次配置的更新上报群，都没有时跟随 ds-monitor 配置。"""
+    target = room_id if room_id is not None else _notify_room_id
+    if target is None:
+        return []
+    return [f"--noticer-room-id={target}", f"--room=room_{target}"]
+
+
 def binary_version() -> str:
     if not _binary_path:
         return "未配置"
@@ -496,9 +525,7 @@ def run_binary(room_id: int | None = None) -> str:
         return f"❌ ds-monitor 二进制不存在: {_binary_path}"
 
     args = base_args("check")
-    if room_id is not None:
-        args.append(f"--noticer-room-id={room_id}")
-        args.append(f"--room=room_{room_id}")
+    args.extend(room_args(room_id))
 
     try:
         result = subprocess.run(
@@ -533,9 +560,7 @@ def run_last_analyze(target: str, room_id: int | None = None) -> str:
     args.append(f"--target={target}")
     args.append("--reanalyze")
     args.append("--unlimited-timeout")
-    if room_id is not None:
-        args.append(f"--noticer-room-id={room_id}")
-        args.append(f"--room=room_{room_id}")
+    args.extend(room_args(room_id))
 
     try:
         result = subprocess.run(
@@ -569,9 +594,7 @@ def run_last_render(target: str | None, room_id: int | None = None) -> str:
     args = base_args("render-last")
     if target is not None:
         args.append(f"--target={target}")
-    if room_id is not None:
-        args.append(f"--noticer-room-id={room_id}")
-        args.append(f"--room=room_{room_id}")
+    args.extend(room_args(room_id))
 
     try:
         result = subprocess.run(
@@ -993,6 +1016,7 @@ def start_watch(expected_generation: int | None = None) -> bool:
             return False
         args = base_args("watch")
         args.append(f"--interval={_check_interval}")
+        args.extend(room_args(None))
         try:
             proc = subprocess.Popen(
                 args, cwd=work_dir(), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -1558,6 +1582,11 @@ def cmd_status(msg: IcaNewMessage, client: IcaClient) -> None:
         f"EXE版本: {binary_version()}",
         f"状态: {state}",
         f"检查间隔: {_check_interval}s",
+        (
+            f"更新上报群: {_notify_room_id}"
+            if _notify_room_id is not None
+            else "更新上报群: 跟随 ds-monitor 配置"
+        ),
     ]
     if _publish_enabled:
         if _publish_in_progress:

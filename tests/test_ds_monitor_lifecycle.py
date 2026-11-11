@@ -79,6 +79,7 @@ class LifecycleTests(unittest.TestCase):
                     _last_restart_cmd_at=0.0,
                     _update_in_progress=False,
                     _publish_in_progress=False,
+                    _notify_room_id=None,
                     _watch_lock=threading.Lock(),
                     _lifecycle_lock=threading.RLock(),
                     _operation_lock=threading.RLock(),
@@ -202,6 +203,46 @@ class LifecycleTests(unittest.TestCase):
             fx.popen.assert_not_called()
             self.assertEqual(fx.target.read_bytes(), b"old-binary")
             self.assertNotIn("恢复监测", self.report(fx))
+
+    def test_configured_room_id_reaches_watch_command(self):
+        """上报群号要从插件配置一路传到 watch 命令，否则更新仍落到 config.toml 的房间。"""
+        with self.fixture() as fx, contextlib.ExitStack() as stack:
+            stack.enter_context(
+                patch.multiple(
+                    monitor,
+                    _binary_path=str(fx.target),
+                    _config_path="",
+                    _target_configs={},
+                    _fingerprint_history_path="",
+                    _status_config={},
+                    _publish_enabled=False,
+                    _notify_room_id=None,
+                )
+            )
+            values = {
+                "binary": str(fx.target),
+                "config": "",
+                "interval": 600,
+                "publish": False,
+                "room_id": "12345678",
+            }
+            config = Mock()
+            config.get_value.side_effect = values.get
+            stack.enter_context(
+                patch.object(
+                    monitor,
+                    "PLUGIN_MANIFEST",
+                    types.SimpleNamespace(
+                        version="offline", config_unchecked=Mock(return_value=config)
+                    ),
+                )
+            )
+            stack.enter_context(patch.object(monitor, "log"))
+            monitor.load_config()
+            self.assertTrue(monitor.start_watch())
+        args = fx.popen.call_args.args[0]
+        self.assertIn("--noticer-room-id=12345678", args)
+        self.assertIn("--room=room_12345678", args)
 
     def test_stop_failure_preserves_handle_and_eof_wakes_waiters(self):
         wait_result = monitor.wait_cycle_result

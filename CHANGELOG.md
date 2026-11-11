@@ -2,6 +2,12 @@
 
 宿主版本对应 [shenbot_api.py](shenbot_api.py) 的 `__version__`；ICA/Tailchat API 与各插件的 `VERSION` 分别管理。
 
+## 2026-11-11 DeepSeek 监测可指定更新上报群
+
+- [ds_monitor](plugins/ds_monitor.py) **0.5.7 → 0.5.8**：插件配置新增 `room_id`，填正整数群号后 watch 与一次性 check/analyze/render 的 noticer 通知都直发该群；留空或 0 时继续跟随 ds-monitor `config.toml` 的 room/rooms 广播。
+- 直发通道沿用 ds-monitor 的 `direct_url`/`direct_token`；`/monitor` 显示当前上报群，配置不是正整数时忽略并记日志，不把群号写进日志。
+- 复用生命周期回归验证配置的群号一路传到 watch 命令，未配置时不追加房间参数。
+
 ## 2026-11-10 DeepSeek 监测先通知再补发分析
 
 - [ds_monitor](plugins/ds_monitor.py) **0.5.6 → 0.5.7**：配套 Rust ds-monitor 0.5.7，说明与检查回执改为“先推送基本信息，同时分析，完成后补发结果”。即时摘要由 Rust 发送，插件不重复转发 stdout。
