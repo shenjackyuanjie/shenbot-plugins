@@ -57,11 +57,11 @@ class EngineExecutor:
         runtime_path = shutil.which(runtime)
         files = {"tswn": (Path(runner[0][0]), file_snapshot(runner[0][0])),
                  "runtime": (Path(runtime_path), file_snapshot(runtime_path))}
-        root = Path(module.__file__).parent
+        asset_root = Path(__file__).resolve().parent
         for path in (Path(module.__file__), Path(__file__), Path(__file__).with_name("model.py"), Path(__file__).with_name("runtime.py"), Path(__file__).with_name("history_source.py")):
             files["executor/" + path.name] = (path, file_snapshot(path))
         for name in ("md5.js", "md5-api.js"):
-            path = root / "md5" / name
+            path = asset_root / "md5" / name
             files[name] = (path, file_snapshot(path))
         for path in sorted(assets.rglob("*")):
             if path.is_file():

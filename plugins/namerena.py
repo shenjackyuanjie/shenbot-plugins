@@ -18,14 +18,12 @@ from shenbot_api import ConfigStorage, PluginManifest, warn
 if str(Path(__file__).parent.absolute()) not in sys.path:
     sys.path.append(str(Path(__file__).parent.absolute()))
 
-import name_utils
-import sqrtools
-
 # 宿主只替换插件入口。导入前清理自家 support，旧后台线程仍持有旧模块对象。
 for _module_name in list(sys.modules):
     if _module_name == "namerena_support" or _module_name.startswith("namerena_support."):
         sys.modules.pop(_module_name, None)
 
+from namerena_support import name_utils, sqrtools
 from namerena_support.archive import Archive, ArchiveError
 from namerena_support.model import CURRENT, ITEM, parse_input, split_parts
 from namerena_support.runtime import (
@@ -87,6 +85,8 @@ if TYPE_CHECKING:
     )
 
 VERSION = "0.12.1"
+# JS 运行时、tswn 二进制与名字/技能数据都收在 support 包里，入口只留控制逻辑。
+SUPPORT_DIR = Path(__file__).resolve().parent / "namerena_support"
 
 CMD_PREFIX = "/namer"
 
@@ -258,11 +258,10 @@ def resolve_tswn_runner() -> tuple[list[str], str | None] | None:
             TSWN_RUNNER = resolved
             return resolved
 
-    plugin_root = Path(__file__).resolve().parent
     exe_name = "tswn-cli.exe" if sys.platform.startswith("win") else "tswn-cli"
     for candidate in (
-        plugin_root / "name_utils" / exe_name,
-        plugin_root / "name_utils" / "tswn-cli",
+        SUPPORT_DIR / "name_utils" / exe_name,
+        SUPPORT_DIR / "name_utils" / "tswn-cli",
     ):
         resolved = _resolve_tswn_runner_candidate(str(candidate))
         if resolved is not None:
@@ -1395,8 +1394,8 @@ def convert_base(msg: ReciveMessage, client: IcaClient | TailchatClient) -> None
 
 def run_namerena(input_text: str, fight_mode: bool = False) -> tuple[str, float]:
     """运行namerena"""
-    root_path = Path(__file__).parent
-    runner_path = (root_path / "md5" / "md5-api.js").resolve()
+    asset_root = SUPPORT_DIR / "md5"
+    runner_path = (asset_root / "md5-api.js").resolve()
     if not runner_path.exists():
         _failure("runner_not_found", engine="md5")
         return "未找到namerena运行文件", 0.0
@@ -1418,7 +1417,7 @@ def run_namerena(input_text: str, fight_mode: bool = False) -> tuple[str, float]
             check=False,
             text=True,
             encoding="utf-8",
-            cwd=root_path / "md5",
+            cwd=asset_root,
         )
         if result.returncode == 0:
             result = result.stdout

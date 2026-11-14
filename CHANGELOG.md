@@ -2,6 +2,12 @@
 
 宿主版本对应 [shenbot_api.py](shenbot_api.py) 的 `__version__`；ICA/Tailchat API 与各插件的 `VERSION` 分别管理。
 
+## 2026-11-14 namerena 资产收进 support 包
+
+- [namerena](plugins/namerena.py)：`md5/`、`name_utils/`、`sqrtools/` 从 `plugins/` 根目录移入 `namerena_support/`，根目录只剩入口文件与 support 包。入口与 `namerena_support/history.py` 改为按 support 目录定位 JS 运行时、`tswn-cli` 与快照资产，查找顺序与行为不变。
+- `.gitignore` 里本地 `tswn-cli` 二进制的路径同步到新位置，文档的依赖说明随之更新。
+- 手工同步过这几个目录的部署需要重新拷一次，或把 `tswn_cli_path` 指到新路径。
+
 ## 2026-11-14 优化各插件用户文案并修复 Ruff 告警
 
 - [codex](plugins/codex.py) **0.8.0 → 0.8.1**、[ds_monitor](plugins/ds_monitor.py) **0.5.8 → 0.5.9**、[bridge_query](plugins/bridge_query.py) **0.1.0 → 0.1.1**、[namerena](plugins/namerena.py) **0.12.0 → 0.12.1**、[score](plugins/score.py) **0.3.4 → 0.3.5**、[sign](plugins/sign.py) **0.3.4 → 0.3.5**：简化帮助与错误提示中的防御性表述，改为正面、自然的人话。

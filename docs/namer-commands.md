@@ -33,7 +33,7 @@ Openbox 的几套命令行工具包成 Bot 命令。本文说明命令、依赖�
 | `/namer-cp` `/namer-fp` `/namer-wcp` `/namer-fsp` `/namer-pjp` | Openbox 队友评测（刺评/辅评/无刺评/分身评/配件评） | `tswn-cli` + backend 资产 |
 | `/namer-todiy` | 名字导出为 `+ol` 覆盖格式，对齐 Openbox 的 `to-diy` | `tswn-cli` |
 
-「JS 运行时」指 `node` 或 `bun`：评分与战斗跑 `plugins/md5/md5-api.js`，用 `use_bun` 决定优先哪一个。
+「JS 运行时」指 `node` 或 `bun`：评分与战斗跑 `plugins/namerena_support/md5/md5-api.js`，用 `use_bun` 决定优先哪一个。
 `-peek` / `-team` / `-base` 用插件内置的本地端口，不需要外部运行时。
 
 ## 配置项
@@ -48,7 +48,7 @@ Openbox 的几套命令行工具包成 Bot 命令。本文说明命令、依赖�
 | `tswn_cli_path` | `""` | `tswn-cli` 的 exe、仓库根目录或 `crates/tswn_core` |
 | `tswn_assets_path` | `""` | Openbox 资产目录（含 `targets/`、`teammates/` 的那一层），留空则自动查找 |
 
-`tswn_cli_path` 留空时会依次尝试：插件目录下的 `name_utils/tswn-cli`、`PATH`、以及仓库相对位置的
+`tswn_cli_path` 留空时会依次尝试：`namerena_support/name_utils/tswn-cli`、`PATH`、以及仓库相对位置的
 `target/{debug,release}/tswn-cli`。找不到时 `/namer-cqp`、队友评和 `/namer-todiy` 会报错，
 其余命令不受影响。
 
