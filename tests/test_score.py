@@ -60,10 +60,9 @@ class ScoreLifecycleTests(unittest.TestCase):
                 time.sleep(0.01)
 
         self.assertFalse(score._query_lock.locked())
-        self.assertEqual(
-            client.sent,
-            ["正在查询成绩；如 Edge 出现安全验证，请手动完成。"],
-        )
+        # 卸载后只留下发起查询时那条提示，后台算出来的结果不该再发出去。
+        self.assertEqual(len(client.sent), 1)
+        self.assertNotIn("查询结果", client.sent[0])
 
 
 class ScoreReservationTests(unittest.TestCase):

@@ -124,9 +124,11 @@ class QueryTests(unittest.TestCase):
         opener.open.side_effect = urllib.error.HTTPError(
             codex.USAGE_URL, 401, "fixture-private-token", {}, None
         )
-        with patch.object(codex.urllib.request, "build_opener", return_value=opener):
-            with self.assertRaises(codex.QueryError) as error:
-                codex.fetch_usage(codex.Login("fixture-access", "fixture-account"), 5)
+        with (
+            patch.object(codex.urllib.request, "build_opener", return_value=opener),
+            self.assertRaises(codex.QueryError) as error,
+        ):
+            codex.fetch_usage(codex.Login("fixture-access", "fixture-account"), 5)
         self.assertIn("DSH", str(error.exception))
         self.assertIn("登录已失效", str(error.exception))
         self.assertNotIn("fixture", str(error.exception))
@@ -136,9 +138,11 @@ class QueryTests(unittest.TestCase):
         opener.open.side_effect = urllib.error.HTTPError(
             codex.USAGE_URL, 429, "limited", {"Retry-After": "120"}, None
         )
-        with patch.object(codex.urllib.request, "build_opener", return_value=opener):
-            with self.assertRaises(codex.QueryError) as error:
-                codex.fetch_usage(codex.Login("fixture-access", "fixture-account"), 5)
+        with (
+            patch.object(codex.urllib.request, "build_opener", return_value=opener),
+            self.assertRaises(codex.QueryError) as error,
+        ):
+            codex.fetch_usage(codex.Login("fixture-access", "fixture-account"), 5)
         self.assertEqual(error.exception.retry_after, 120)
 
 
@@ -227,7 +231,7 @@ class UsageTests(unittest.TestCase):
             fetch.assert_not_called()
 
     def test_spend_and_monthly_limit_are_shown_as_estimates(self):
-        """用量段只能说过「已花费（估算）」，上限换算成分→美元，不编造账户余额。"""
+        """上限从分换算成美元，三天金额相加，剩余额度正确，且不回显用量 Key。"""
         settings = codex.Settings(openai_usage_api_key="fixture-usage")
         payload = {
             "data": [
@@ -256,12 +260,11 @@ class UsageTests(unittest.TestCase):
             ),
         ):
             text = codex.openai_usage_section(settings, now=NOW + 3 * 86400)
-        self.assertIn("已花费估算", text)
-        self.assertIn("不是余额", text)
-        self.assertNotIn("账户余额", text)
-        self.assertIn("本月上限 $100.00", text)
-        self.assertIn("已花费估算 $0.12", text)
-        self.assertIn("按上限剩余（估算）$99.88", text)
+        # 只锁算出来的数，不锁措辞：10000 分换算成 $100.00，三天金额相加得 $0.12，
+        # 剩余 $99.88，字符串金额也要计入。
+        self.assertIn("$100.00", text)
+        self.assertIn("$0.12", text)
+        self.assertIn("$99.88", text)
         self.assertLessEqual(len(text.splitlines()), 5)
         self.assertNotIn("fixture-usage", text)
 

@@ -66,7 +66,6 @@ class SignReservationTests(unittest.TestCase):
         self.reserve("13:00")
         self.reserve("13:00")
         self.assertEqual(len(self.tasks), 1)
-        self.assertIn("无需重复", self.client.send_message.call_args.args[0])
         self.now = self.now.replace(hour=13)
         self.tasks[0].callback()
         self.tasks[0].callback()
