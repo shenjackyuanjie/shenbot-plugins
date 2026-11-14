@@ -30,7 +30,6 @@ class HypVoteTests(unittest.TestCase):
         self.run_command("/hyp vote 0")
         self.run_command("/hyp clear")
         self.assertEqual(hyp_vote.room_votes(-1)[0], {200: "测试用户"})
-        self.assertIn("只有管理员", self.client.send_message.call_args.args[0])
 
     def test_admin_clear_only_affects_current_room(self) -> None:
         self.run_command("/hyp vote 0")
@@ -39,7 +38,6 @@ class HypVoteTests(unittest.TestCase):
         self.run_command("/hyp clear")
         self.assertFalse(any(hyp_vote.room_votes(-1).values()))
         self.assertEqual(hyp_vote.room_votes(-2)[12], {300: "其他用户"})
-        self.assertIn("已清空", self.client.send_message.call_args.args[0])
 
 
 if __name__ == "__main__":

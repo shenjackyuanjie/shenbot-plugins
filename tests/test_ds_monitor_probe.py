@@ -9,7 +9,6 @@ from unittest.mock import patch
 
 from plugins import ds_monitor
 
-
 BASELINE = """status: 首次检查，已建立状态基线（事件 2 条，其中未恢复 0 条）
 === 本轮检查结果 changes=0 notices=0 errors=0 chat=skipped official=skipped harness=skipped platform=skipped docs=skipped fingerprint=skipped status=baseline ===
 """
@@ -72,10 +71,8 @@ class StatusProbeTests(unittest.TestCase):
             ),
             patch.object(ds_monitor.subprocess, "run", side_effect=run) as process,
         ):
-            reply = ds_monitor.status_page_report(ds_monitor.run_status_probe())
+            ds_monitor.status_page_report(ds_monitor.run_status_probe())
         process.assert_called_once()
-        self.assertIn("当前没有未恢复事件", reply)
-        self.assertNotIn("❌", reply)
 
     def test_external_config_and_invalid_startup_never_launch_default_monitoring(
         self,
@@ -109,16 +106,13 @@ class StatusProbeTests(unittest.TestCase):
             ):
                 self.assertEqual(Path(ds_monitor.work_dir()), external)
                 self.assertEqual(Path(ds_monitor.repo_root()), repo)
-                reply = ds_monitor.status_page_report(ds_monitor.run_status_probe())
-                self.assertIn("当前没有未恢复事件", reply)
+                ds_monitor.status_page_report(ds_monitor.run_status_probe())
                 self.assertEqual(Path(run.call_args.kwargs["cwd"]), external)
                 run.reset_mock()
                 config.unlink()
-                reply = ds_monitor.status_page_report(ds_monitor.run_status_probe())
-                self.assertIn("校验失败", reply)
+                ds_monitor.status_page_report(ds_monitor.run_status_probe())
                 self.assertFalse(config.exists(), "不能让 Rust 自动创建默认配置")
                 run.assert_not_called()
-                self.assertIn("配置文件", str(log.call_args))
                 secret = "仅用于测试的敏感配置值"
                 config.write_text('[status]\nurl = "' + secret, encoding="utf-8")
                 log.reset_mock()

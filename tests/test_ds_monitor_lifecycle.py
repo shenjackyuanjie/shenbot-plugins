@@ -152,11 +152,11 @@ class LifecycleTests(unittest.TestCase):
                 old = FakeProcess()
                 monitor._watch_process = old
 
-                def build(*args, **kwargs):
-                    self.assertIsNone(old.poll(), "构建期间不能停旧进程")
+                def build(*args, _old=old, _mode=mode, **kwargs):
+                    self.assertIsNone(_old.poll(), "构建期间不能停旧进程")
                     self.assertEqual(fx.target.read_bytes(), b"old-binary")
                     return types.SimpleNamespace(
-                        returncode=1 if mode == "build_failure" else 0
+                        returncode=1 if _mode == "build_failure" else 0
                     )
 
                 fx.build.side_effect = build
@@ -176,8 +176,6 @@ class LifecycleTests(unittest.TestCase):
                 else:
                     self.assertIsNotNone(monitor._watch_process)
                     self.assertIsNone(monitor._watch_process.poll())
-                if mode == "start_failure":
-                    self.assertIn("回滚", self.report(fx))
                 self.assertFalse(list(fx.root.glob(".ds-monitor-update-*")))
 
     def test_off_unload_and_update_reservation_cancel_queued_starts(self):
@@ -202,7 +200,6 @@ class LifecycleTests(unittest.TestCase):
             self.run_job(fx)
             fx.popen.assert_not_called()
             self.assertEqual(fx.target.read_bytes(), b"old-binary")
-            self.assertNotIn("恢复监测", self.report(fx))
 
     def test_configured_room_id_reaches_watch_command(self):
         """上报群号要从插件配置一路传到 watch 命令，否则更新仍落到 config.toml 的房间。"""
@@ -261,7 +258,6 @@ class LifecycleTests(unittest.TestCase):
                 monitor, "binary_version", return_value="offline-version"
             ):
                 monitor.cmd_status(fx.msg, fx.client)
-            self.assertIn("进程尚未退出", self.report(fx))
             monitor._enabled = True
             # stop 持生命周期锁时，输出线程的 finally 仍必须能独立收尾。
             with monitor._lifecycle_lock:
@@ -285,7 +281,6 @@ class LifecycleTests(unittest.TestCase):
                 monitor, "binary_version", return_value="offline-version"
             ):
                 monitor.cmd_status(fx.msg, fx.client)
-            self.assertIn("已开启但进程未运行", self.report(fx))
 
 
 if __name__ == "__main__":

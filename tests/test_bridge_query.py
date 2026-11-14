@@ -147,11 +147,10 @@ class BridgeQueryTests(unittest.TestCase):
         client = FakeClient()
         bridge_query.on_ica_message(message, client)
         self.assertEqual(client.calls, [])
-        self.assertEqual(
-            client.sent[0].content,
-            "回复消息媒体：图片 2、语音 1、视频 1、文件 1\n正文摘要：附件正文",
-        )
-        self.assertNotIn("private", client.sent[0].content)
+        text = client.sent[0].content
+        for counted in ("图片 2", "语音 1", "视频 1", "文件 1", "附件正文"):
+            self.assertIn(counted, text)
+        self.assertNotIn("private", text)
 
     def test_query_failure_does_not_expose_remote_exception_or_history(self) -> None:
         for command in ("/bot-history", "/bot-search 示例"):

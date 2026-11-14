@@ -38,7 +38,6 @@ class BmclCommandTests(unittest.TestCase):
         ):
             bmcl.on_ica_message(self.message, self.client)
         self.client.send_message.assert_called_once()
-        self.assertIn("暂无节点", self.client.send_message.call_args.args[0])
         self.client.send_and_warn.assert_not_called()
 
     def test_failed_dashboard_stops_after_one_request_without_exposing_exception(

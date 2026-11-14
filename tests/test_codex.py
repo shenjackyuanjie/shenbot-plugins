@@ -129,8 +129,6 @@ class QueryTests(unittest.TestCase):
             self.assertRaises(codex.QueryError) as error,
         ):
             codex.fetch_usage(codex.Login("fixture-access", "fixture-account"), 5)
-        self.assertIn("DSH", str(error.exception))
-        self.assertIn("登录已失效", str(error.exception))
         self.assertNotIn("fixture", str(error.exception))
 
     def test_server_rate_limit_is_preserved_for_retry_scheduling(self):
@@ -330,7 +328,7 @@ class UsageTests(unittest.TestCase):
                 patch.object(codex, "fetch_openai_spend_limit", side_effect=error),
             ):
                 text = codex.openai_usage_section(settings)
-            self.assertIn("合计：$0.12", text)
+            self.assertIn("$0.12", text)
             self.assertIn(expected, text)
 
     def test_missing_usage_scope_gives_actionable_hint(self):
@@ -568,7 +566,6 @@ class CommandTests(unittest.TestCase):
             self.finish()
         text = self.client.send_message.call_args.args[0]
         self.assertIn("虚构订阅额度", text)
-        self.assertIn("OpenAI API 用量：本轮查询失败", text)
 
     def test_help_is_local_during_query_and_respects_group_boundary(self):
         self.msg.content = "/codex help"

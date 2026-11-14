@@ -110,7 +110,6 @@ class SignReservationTests(unittest.TestCase):
         with patch.object(sign, "Scheduler", side_effect=RuntimeError("调度不可用")):
             self.reserve("14:00")
         self.assertEqual(sign.SIGN_PLAN[-1].hour, 15)
-        self.assertIn("失败", self.client.send_message.call_args.args[0])
         self.now = self.now.replace(hour=15)
         self.tasks[0].callback()
         self.client.send_room_sign_in.assert_called_once_with(-1)

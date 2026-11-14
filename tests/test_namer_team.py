@@ -1,10 +1,8 @@
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from plugins import namerena
-
 
 FIRST = "大家好啊，我是媒莺旷籍@otto"
 SECOND = "大家好啊，我是婪蛤渤泪@otto"

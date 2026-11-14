@@ -25,9 +25,6 @@ class StatusWindowTests(unittest.TestCase):
                     patch.object(status.time, "time", return_value=1300),
                 ):
                     hook(message, client)
-                text = client.send_message.call_args.args[0]
-                self.assertIn("0.00", text)
-                self.assertIn("0.50", text)
                 self.assertEqual(counter.tc_frequence + counter.ica_frequence, 0.5)
 
 

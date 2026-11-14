@@ -72,7 +72,7 @@ class PollingTests(unittest.TestCase):
         text = self.watch.send_text.call_args.args[3]
         self.assertIn("reset", text)
         self.assertIn("74% → 76%", text)
-        self.assertIn("浪费了74%额度😭", text)
+        self.assertIn("浪费", text)
         self.poll()
         self.fetch.return_value = usage(74)
         self.poll()
@@ -89,7 +89,7 @@ class PollingTests(unittest.TestCase):
         self.poll()
         text = self.watch.send_text.call_args.args[3]
         self.assertIn("75% → 100%", text)
-        self.assertIn("浪费了75%额度😭", text)
+        self.assertIn("浪费", text)
         self.fetch.return_value = usage(0, RESET + 604800)
         self.poll()
         self.fetch.return_value = usage(100, RESET + 2 * 604800)

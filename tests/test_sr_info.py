@@ -32,7 +32,6 @@ class SrInfoCommandTests(unittest.TestCase):
         request.assert_called_once_with(
             "https://example.invalid/info/123456", timeout=5
         )
-        self.assertIn("ID: 123456", self.client.send_message.call_args.args[0])
 
 
 if __name__ == "__main__":

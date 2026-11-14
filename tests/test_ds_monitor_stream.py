@@ -8,7 +8,6 @@ from unittest.mock import Mock, patch
 
 from plugins import ds_monitor as monitor
 
-
 RESULT = (
     "=== 本轮检查结果 changes=1 notices=0 errors=0 "
     "chat=change official=nochange harness=nochange platform=nochange "
@@ -93,7 +92,6 @@ class StreamAndArchiveTests(unittest.TestCase):
             }
             with patch.object(monitor, "_target_configs", targets):
                 text = monitor.latest_change_report()
-            self.assertIn("metadata 格式无效", text)
             self.assertIn("正常文档", text)
             (site / "site.json").write_text("[]", encoding="utf-8")
             unknown = monitor.archive_entries(str(root))

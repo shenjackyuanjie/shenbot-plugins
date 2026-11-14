@@ -20,8 +20,10 @@ class ArchiveLinkTests(unittest.TestCase):
             ds_monitor.new_archive_urls(before, after, "https://archive.example/"),
             [
                 "https://archive.example/platform/#/platform/new",
-                "https://archive.example/fingerprints/#/fingerprints/"
-                "2026-09-28T00%3A00%3A00Z",
+                (
+                    "https://archive.example/fingerprints/#/fingerprints/"
+                    "2026-09-28T00%3A00%3A00Z"
+                ),
             ],
         )
 

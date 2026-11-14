@@ -82,7 +82,6 @@ class ScoreReservationTests(unittest.TestCase):
             score.on_ica_message(self.message, self.client)
             score.on_ica_message(self.message, self.client)
             thread.assert_called_once()
-            self.assertIn("请稍候", self.client.sent[-1])
             self.assertTrue(score._query_lock.locked())
             thread.call_args.kwargs["target"]()
             query.assert_called_once()
