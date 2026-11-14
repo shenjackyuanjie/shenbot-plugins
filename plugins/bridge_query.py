@@ -8,7 +8,7 @@ from shenbot_api import PluginManifest
 if TYPE_CHECKING:
     from ica_typing import IcaClient, IcaNewMessage
 
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 HISTORY_COMMAND = "/bot-history"
 SEARCH_COMMAND = "/bot-search"
 MEDIA_COMMAND = "/bot-media"
@@ -20,7 +20,7 @@ PLUGIN_MANIFEST = PluginManifest(
     plugin_id="bridge_query",
     name="Bridge 查询示例",
     version=VERSION,
-    description="管理员显式查询当前房间历史、搜索与回复消息媒体结构；不重放历史",
+    description="查询当前房间历史、搜索消息，以及查看回复消息的媒体结构",
     authors=["shenjack"],
 )
 
@@ -85,13 +85,13 @@ def _history(message: IcaNewMessage, client: IcaClient, arguments: str) -> None:
         return
     fetch = getattr(client, "fetch_messages", None)
     if not callable(fetch):
-        _reply(client, message, "当前 Bot 尚无历史查询 API，请先升级 Bot。")
+        _reply(client, message, "当前 Bot 还不支持查历史消息，请先升级 Bot。")
         return
     records = fetch(message.room_id)
     selected = records[-limit:]
     header = f"当前房间历史：本页 {len(records)} 条，展示末尾 {len(selected)} 条。"
     summaries = [f"{index}. {_message_summary(record)}" for index, record in enumerate(selected, 1)]
-    _reply(client, message, "\n\n".join([header, *summaries]) if selected else "当前房间暂无本地历史。")
+    _reply(client, message, "\n\n".join([header, *summaries]) if selected else "当前房间还没有历史消息。")
 
 
 def _search(message: IcaNewMessage, client: IcaClient, keyword: str) -> None:
@@ -100,13 +100,13 @@ def _search(message: IcaNewMessage, client: IcaClient, keyword: str) -> None:
         return
     search = getattr(client, "search_messages", None)
     if not callable(search):
-        _reply(client, message, "当前 Bot 尚无搜索 API，请先升级 Bot。")
+        _reply(client, message, "当前 Bot 还不支持搜索消息，请先升级 Bot。")
         return
     records = search(message.room_id, keyword)
     selected = records[:DEFAULT_LIMIT]
     header = f"当前房间搜索：本页 {len(records)} 条，展示 {len(selected)} 条。"
     summaries = [f"{index}. {_message_summary(record)}" for index, record in enumerate(selected, 1)]
-    _reply(client, message, "\n\n".join([header, *summaries]) if selected else "当前房间没有匹配的本地消息。")
+    _reply(client, message, "\n\n".join([header, *summaries]) if selected else "没有找到匹配的消息。")
 
 
 def _media(message: IcaNewMessage, client: IcaClient, arguments: str) -> None:
@@ -114,11 +114,11 @@ def _media(message: IcaNewMessage, client: IcaClient, arguments: str) -> None:
         _reply(client, message, "请回复一条消息并发送 /bot-media，查看其媒体结构摘要。")
         return
     if not hasattr(message, "reply"):
-        _reply(client, message, "当前 Bot 尚无结构化回复 API，请先升级 Bot。")
+        _reply(client, message, "当前 Bot 还不支持查看回复消息结构，请先升级 Bot。")
         return
     reply = message.reply
     if not isinstance(reply, dict):
-        _reply(client, message, "当前回复未包含可用的原消息结构。")
+        _reply(client, message, "这条回复里没有原消息结构。")
         return
     files = reply.get("files") or []
     if not files and isinstance(reply.get("file"), dict):
@@ -151,4 +151,4 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
     except RuntimeError:
         # 不回显远端原始 payload 或异常文本，避免把凭据/临时资源 URL 放进聊天。
         client.warn(f"bridge_query：{command} 查询失败")
-        _reply(client, msg, "查询失败：Bridge 无响应或返回错误，请检查连接与 Bot 日志。")
+        _reply(client, msg, "查询失败，请检查 Bridge 连接或 Bot 日志。")

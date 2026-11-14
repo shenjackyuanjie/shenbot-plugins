@@ -56,17 +56,17 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
 if TYPE_CHECKING:
-    from ica_typing import IcaNewMessage, IcaClient
+    from ica_typing import IcaClient, IcaNewMessage
 
-from shenbot_api import PluginManifest, ConfigStorage
+from shenbot_api import ConfigStorage, PluginManifest
 
 # 插件版本独立于 Rust 二进制版本；分析模型名集中供用户文案引用。
-VERSION = "0.5.8"
+VERSION = "0.5.9"
 ANALYZE_MODEL = "V41F"
 
 PLUGIN_MANIFEST = PluginManifest(
@@ -93,7 +93,7 @@ _binary_path: str = ""
 _config_path: str = ""
 _check_interval: int = 600
 _enabled: bool = True
-_target_configs: dict[str, "MonitorTarget"] = {}
+_target_configs: dict[str, MonitorTarget] = {}
 _fingerprint_history_path: str = ""
 # web_craw/config.toml 的 [status] 段（服务状态页订阅源），只用于展示与 /monitor sp
 _status_config: dict[str, Any] = {}
@@ -226,7 +226,7 @@ def log(msg: str) -> None:
         try:
             _client.info(f"[ds-monitor] {msg}")
             return
-        except Exception:
+        except Exception:  # noqa: BLE001, S110
             pass
     print(f"[ds-monitor] {msg}")
 
@@ -250,7 +250,7 @@ def notify_error(msg: str, room_id: int | None = None) -> None:
                     return
                 if not _client.send_message(target_room.new_message_to(ds(msg))):
                     log(f"错误通知发送失败: {room_id}")
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         log(f"错误通知发送异常: {type(exc).__name__}")
 
 
@@ -363,7 +363,7 @@ def load_rust_config() -> dict[str, Any]:
         with open(_config_path, "rb") as f:
             raw = tomllib.load(f)
         return raw if isinstance(raw, dict) else {}
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         log(f"读取 ds-monitor 配置失败（{type(exc).__name__}），显示层暂用默认值；启动前仍须校验")
         return {}
 
@@ -514,7 +514,7 @@ def validate_binary(room_id: int | None = None) -> bool:
 
             with open(_config_path, "rb") as source:
                 tomllib.load(source)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             msg = f"❌ ds-monitor 配置无法读取或 TOML 无效（{type(exc).__name__}），已拒绝启动"
             log(msg)
             notify_error(msg, room_id)
@@ -537,6 +537,7 @@ def run_binary(room_id: int | None = None) -> str:
             encoding="utf-8",
             errors="replace",
             cwd=work_dir(),
+            check=False,
         )
         out = result.stdout
         if result.stderr:
@@ -547,7 +548,7 @@ def run_binary(room_id: int | None = None) -> str:
         log(msg)
         notify_error(msg, room_id)
         return msg
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         msg = f"❌ ds-monitor 执行失败: {e}"
         log(msg)
         notify_error(msg, room_id)
@@ -572,6 +573,7 @@ def run_last_analyze(target: str, room_id: int | None = None) -> str:
             encoding="utf-8",
             errors="replace",
             cwd=work_dir(),
+            check=False,
         )
         out = result.stdout
         if result.stderr:
@@ -582,7 +584,7 @@ def run_last_analyze(target: str, room_id: int | None = None) -> str:
         log(msg)
         notify_error(msg, room_id)
         return msg
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         msg = f"❌ ds-monitor 最近变更分析失败: {e}"
         log(msg)
         notify_error(msg, room_id)
@@ -606,6 +608,7 @@ def run_last_render(target: str | None, room_id: int | None = None) -> str:
             encoding="utf-8",
             errors="replace",
             cwd=work_dir(),
+            check=False,
         )
         out = result.stdout
         if result.stderr:
@@ -616,7 +619,7 @@ def run_last_render(target: str | None, room_id: int | None = None) -> str:
         log(msg)
         notify_error(msg, room_id)
         return msg
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         msg = f"❌ ds-monitor 最近分析渲染失败: {e}"
         log(msg)
         notify_error(msg, room_id)
@@ -667,6 +670,7 @@ def run_status_probe() -> str:
             errors="replace",
             cwd=work_dir(),
             timeout=STATUS_PROBE_TIMEOUT_SECS,
+            check=False,
         )
         out = result.stdout or ""
         if result.stderr:
@@ -678,13 +682,12 @@ def run_status_probe() -> str:
         return out
     except subprocess.TimeoutExpired:
         return f"❌ 状态页查询超时（{int(STATUS_PROBE_TIMEOUT_SECS)}s）"
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         return f"❌ 状态页查询失败: {e}"
 
 
 def handle_output_line(line: str, generation: int) -> None:
-    global _last_check_time, _last_change_time, _last_change_summary
-    global _watch_summary_lines, _active_output_target
+    global _last_check_time, _last_change_time, _active_output_target
 
     if generation != _watch_generation:
         # 旧 watch 进程退出前残留的输出，忽略
@@ -711,7 +714,7 @@ def handle_output_line(line: str, generation: int) -> None:
             _active_output_target = "status"
 
     target_key = _active_output_target or "chat"
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     if line.startswith(f"=== {CYCLE_RESULT_MARKER} "):
         # 记录本轮检查结果；继续走下面的汇总逻辑，让 "===" 正常结束变更摘要
@@ -981,7 +984,7 @@ def watch_stdout_loop(proc: subprocess.Popen[str], generation: int) -> None:
         assert proc.stdout is not None
         for line in proc.stdout:
             handle_output_line(line, generation)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         log(f"watch 输出读取失败: {exc}")
     finally:
         code = proc.poll()
@@ -1026,7 +1029,7 @@ def start_watch(expected_generation: int | None = None) -> bool:
                 creationflags=(getattr(subprocess, "CREATE_NO_WINDOW", 0)
                                | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)),
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             log(f"watch 启动失败: {exc}")
             notify_error(f"❌ ds-monitor watch 启动失败: {exc}")
             return False
@@ -1051,7 +1054,7 @@ def start_watch(expected_generation: int | None = None) -> bool:
         _watch_thread = threading.Thread(target=watch_stdout_loop, args=(proc, generation), daemon=True)
         try:
             _watch_thread.start()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             log(f"watch 输出线程启动失败: {exc}")
             stop_watch()
             return False
@@ -1091,14 +1094,14 @@ def stop_watch(timeout: float = 10.0) -> bool:
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                             timeout=5, check=False,
                         )
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001
                     log(f"结束 watch 进程树失败: {exc}")
                 try:
                     proc.kill()
                     proc.wait(timeout=5)
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001
                     log(f"watch 强制停止失败: {exc}")
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 log(f"watch 停止失败: {exc}")
         if proc.poll() is None:
             log(f"watch 仍未退出，保留进程句柄 (pid={proc.pid})")
@@ -1469,7 +1472,7 @@ def do_check(room_id: int | None = None) -> None:
 
     log("开始检查...")
     output = run_binary(room_id)
-    _last_check_time = datetime.now(timezone.utc)
+    _last_check_time = datetime.now(UTC)
 
     if "检测到变化" in output:
         _last_change_time = _last_check_time
@@ -1502,7 +1505,7 @@ def on_load() -> None:
         intent = _lifecycle_generation
     try:
         load_config()
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         log(f"加载配置失败，改用内置默认值继续启动: {type(exc).__name__}: {exc}")
     enabled = ", ".join(target.label for target in _target_configs.values() if target.enabled)
     status_state = "启用" if _status_config.get("enabled", True) else "未启用"
@@ -1605,7 +1608,7 @@ def cmd_status(msg: IcaNewMessage, client: IcaClient) -> None:
             publish_state = f"❌ 上次失败（连续 {_publish_failures} 次）"
         publish_line = f"看板自动发布: {publish_state}"
         if _last_publish_at:
-            at = datetime.fromtimestamp(_last_publish_at, timezone.utc)
+            at = datetime.fromtimestamp(_last_publish_at, UTC)
             publish_line += f" · {at.strftime('%Y-%m-%d %H:%M:%S')} UTC"
         lines.append(publish_line)
     else:
@@ -1666,7 +1669,7 @@ def _lifecycle_reply(msg: IcaNewMessage, client: IcaClient, text: str) -> None:
     """生命周期回复失败只记日志，不能撤销已受理任务或打断回滚。调用时不持状态锁。"""
     try:
         client.send_message(msg.reply_with(text))
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         log(f"生命周期命令回复失败: {type(exc).__name__}: {exc}")
 
 
@@ -1781,7 +1784,7 @@ def noticer_post(text: str) -> bool:
                     raise ValueError("HTTP 状态未成功")
                 if not isinstance(payload, dict) or payload.get("status") != "ok":
                     raise ValueError("业务状态未确认成功")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             all_sent = False
             # 不回显服务端正文或异常中的 URL，避免把私有配置带进日志。
             log(f"发布通知到 {room} 未确认成功（{type(exc).__name__}）")
@@ -1904,7 +1907,7 @@ def maybe_publish(changes: int) -> None:
         threading.Thread(
             target=publish_once, args=(True,), kwargs={"reserved": True}, daemon=True
         ).start()
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         with _operation_lock:
             _publish_in_progress = False
             _publish_pending = True
@@ -1947,6 +1950,7 @@ def publish_once(notify_room: bool, *, reserved: bool = False) -> str:
             encoding="utf-8",
             errors="replace",
             timeout=PUBLISH_TIMEOUT_SECS,
+            check=False,
         )
         output = (result.stdout or "") + (result.stderr or "")
         ok = result.returncode == 0 and "Deployment complete!" in output
@@ -1974,7 +1978,7 @@ def publish_once(notify_room: bool, *, reserved: bool = False) -> str:
             )
     except subprocess.TimeoutExpired:
         report = ds(f"❌ 看板发布超时（{int(PUBLISH_TIMEOUT_SECS)}s），本次放弃")
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         report = ds(f"❌ 看板发布失败: {type(exc).__name__}: {exc}")
     finally:
         with _operation_lock:
@@ -1994,7 +1998,7 @@ def publish_once(notify_room: bool, *, reserved: bool = False) -> str:
         try:
             if notify_room and not noticer_post(report):
                 log("发布结论未全部送达；部署结果已记录，不因此重复部署")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             log(f"发布结论通知异常（{type(exc).__name__}），不重复部署")
         finally:
             with _operation_lock:
@@ -2032,16 +2036,16 @@ def cmd_deploy(msg: IcaNewMessage, client: IcaClient) -> None:
         result = publish_once(False, reserved=True)
         try:
             client.send_message(msg.reply_with(result))
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             log(f"手动发布结果回复失败（{type(exc).__name__}）")
 
     try:
         try:
             client.send_message(msg.reply_with(report))
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             log(f"发布开始回复失败（{type(exc).__name__}），继续执行已受理任务")
         threading.Thread(target=deploy, daemon=True).start()
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         with _operation_lock:
             _publish_in_progress = False
             _publish_pending = True
@@ -2068,22 +2072,21 @@ def cmd_update(msg: IcaNewMessage, client: IcaClient) -> None:
         return
     # 与已有切换先串行，再原子占位；不能持操作锁等待生命周期锁。
     rejection = ""
-    with _lifecycle_lock:
-        with _operation_lock:
-            if _update_in_progress or _publish_in_progress:
-                rejection = "已有更新或看板发布在进行中，请稍候"
-            elif cooling_down(_last_update_cmd_at):
-                rejection = "命令冷却中，请稍后再试"
-            else:
-                with _watch_lock:
-                    if _unloading:
-                        rejection = "插件正在卸载，已取消更新"
-                    else:
-                        _lifecycle_generation += 1
-                        intent = _lifecycle_generation
-                if not rejection:
-                    _last_update_cmd_at = time.monotonic()
-                    _update_in_progress = True
+    with _lifecycle_lock, _operation_lock:
+        if _update_in_progress or _publish_in_progress:
+            rejection = "已有更新或看板发布在进行中，请稍候"
+        elif cooling_down(_last_update_cmd_at):
+            rejection = "命令冷却中，请稍后再试"
+        else:
+            with _watch_lock:
+                if _unloading:
+                    rejection = "插件正在卸载，已取消更新"
+                else:
+                    _lifecycle_generation += 1
+                    intent = _lifecycle_generation
+            if not rejection:
+                _last_update_cmd_at = time.monotonic()
+                _update_in_progress = True
     if rejection:
         _lifecycle_reply(msg, client, ds(rejection))
         return
@@ -2113,6 +2116,7 @@ def cmd_update(msg: IcaNewMessage, client: IcaClient) -> None:
                     ["cargo", "build", "--release", "--bin", "ds-monitor"],
                     cwd=repo_root() or None, capture_output=True, text=True,
                     encoding="utf-8", errors="replace", timeout=BUILD_TIMEOUT_SECS,
+                    check=False,
                 )
                 if result.returncode != 0:
                     tail = (result.stderr or result.stdout or "").strip()[-500:]
@@ -2121,7 +2125,7 @@ def cmd_update(msg: IcaNewMessage, client: IcaClient) -> None:
             except subprocess.TimeoutExpired:
                 reply(f"构建超时（{int(BUILD_TIMEOUT_SECS)}s）\n{watch_state()}")
                 return
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 reply(f"构建失败: {exc}\n{watch_state()}")
                 return
             if not current():
@@ -2136,7 +2140,7 @@ def cmd_update(msg: IcaNewMessage, client: IcaClient) -> None:
                 had_backup = os.path.isfile(destination)
                 if had_backup:
                     shutil.copy2(destination, backup)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 reply(f"暂存副本失败，未替换旧文件: {exc}\n{watch_state()}")
                 return
             def rollback(reason: str) -> None:
@@ -2155,7 +2159,7 @@ def cmd_update(msg: IcaNewMessage, client: IcaClient) -> None:
                         return
                     try:
                         os.replace(backup, destination)
-                    except Exception as exc:
+                    except Exception as exc:  # noqa: BLE001
                         keep_backup = True
                         reply(f"{reason}；回滚失败: {exc}；旧副本保留在 {backup}")
                         return
@@ -2172,7 +2176,7 @@ def cmd_update(msg: IcaNewMessage, client: IcaClient) -> None:
                     return
                 try:
                     os.replace(staged, destination)
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001
                     restored = current() and _enabled and start_watch(intent)
                     state = "已用未改动的旧副本恢复监测" if restored else watch_state()
                     reply(f"原子替换失败，旧文件未改动: {exc}\n{state}")
@@ -2210,7 +2214,7 @@ def cmd_update(msg: IcaNewMessage, client: IcaClient) -> None:
     try:
         reply("正在更新：旧 watch 继续运行 → 构建 release → 暂存副本 → 短暂停机原子切换")
         threading.Thread(target=update, daemon=True).start()
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         with _operation_lock:
             _update_in_progress = False
         log(f"无法启动更新任务: {exc}")
@@ -2430,7 +2434,7 @@ def cmd_help(msg: IcaNewMessage, client: IcaClient) -> None:
             "🔍 DS 监测：DeepSeek 网页监测\n"
             "/monitor         - 查看状态\n"
             "/monitor check   - 重启 watch 并立即检查，回报本轮结果（无变化则回“无事发生”）\n"
-            "/monitor sp      - 现场查询服务状态页（故障/恢复事件，不发通知）\n"
+            "/monitor sp      - 现场查询服务状态页（只查看，不发群通知）\n"
             "/monitor update  - 管理员构建 release、刷新运行副本并重启 watch\n"
             "/monitor deploy  - 管理员立即导出并部署看板（Cloudflare Pages）\n"
             "/monitor last    - 汇总 Chat、官网、Harness、Platform、API Docs 最近修改\n"
