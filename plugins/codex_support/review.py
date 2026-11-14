@@ -74,14 +74,14 @@ def parse_verdict(response: dict) -> Verdict:
     try:
         choices = response["choices"]
         if not isinstance(choices, list) or len(choices) != 1:
-            raise ReviewError("审核没有返回唯一结果。")
+            raise ReviewError("审核结果格式异常，请重试。")
         choice = choices[0]
         if choice["finish_reason"] != "tool_calls":
-            raise ReviewError("审核未正常完成工具裁决。")
+            raise ReviewError("审核未能正常完成，请重试。")
         message = choice["message"]
         calls = message.get("tool_calls")
         if message.get("refusal") or not isinstance(calls, list) or len(calls) != 1:
-            raise ReviewError("审核必须恰好调用一个裁决工具。")
+            raise ReviewError("审核未能给出明确结果，请重试。")
         call = calls[0]
         if (
             call.get("type") != "function"
@@ -107,7 +107,7 @@ def parse_verdict(response: dict) -> Verdict:
             raise ReviewError("审核缺少有效裁决原因。")
         return Verdict(name, reason.strip())
     except (KeyError, TypeError, ValueError):
-        raise ReviewError("无法解析审核工具裁决，已停止后续操作。") from None
+        raise ReviewError("无法解析审核结果，请重试。") from None
 
 
 def responses_review_payload(
@@ -139,7 +139,7 @@ def completed_response_output(response: dict) -> list[dict]:
         or response.get("incomplete_details") is not None
         or response.get("refusal")
     ):
-        raise ReviewError("Responses 未完整结束，已停止后续操作。")
+        raise ReviewError("审核请求未完整结束，请重试。")
     output = response.get("output")
     if not isinstance(output, list) or not output:
         raise ReviewError("Responses 没有完整输出。")
@@ -178,7 +178,7 @@ def parse_responses_verdict(response: dict) -> Verdict:
         output = completed_response_output(response)
         calls = [item for item in output if item.get("type") == "function_call"]
         if len(calls) != 1:
-            raise ReviewError("审核必须恰好调用一个裁决工具。")
+            raise ReviewError("审核未能给出明确结果，请重试。")
         # 出现裁决之外的正文时，无法确认模型没有用自然语言覆盖工具结论；
         # 只有空 output_text 的 message 项不构成覆盖。
         for item in output:
@@ -205,4 +205,4 @@ def parse_responses_verdict(response: dict) -> Verdict:
             raise ReviewError("审核缺少有效裁决原因。")
         return Verdict(name, reason.strip())
     except (KeyError, TypeError, ValueError):
-        raise ReviewError("无法解析审核工具裁决，已停止后续操作。") from None
+        raise ReviewError("无法解析审核结果，请重试。") from None

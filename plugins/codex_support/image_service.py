@@ -110,8 +110,7 @@ def _check_backend_params(execution: dict, params: dict) -> None:
     """按冻结模型与后端校验；旧模型在审核或消费确认前直接拒绝。"""
     if execution.get("image_model", "gpt-image-2.5-flare") not in IMAGE_MODELS:
         raise ImageError(
-            "图片模型只允许 GPT Image 2.6 Flare/Sunburst 或已支持的 2.5 别名/快照；"
-            "请修改模型配置后重新发起任务。"
+            "当前配置的模型不受支持，请改用 GPT Image 2.6 Flare/Sunburst 后重新发起。"
         )
     if params.get("quality", "auto") not in IMAGE_QUALITIES:
         raise ImageError(f"质量可选：{'/'.join(IMAGE_QUALITIES)}。")
@@ -149,12 +148,12 @@ def _download(url: str) -> bytes:
                 raise ImageError("下载引用图片失败，请重新发送。")
             length = response.headers.get("content-length", "")
             if length.isdigit() and int(length) > MAX_REPLY_IMAGE_BYTES:
-                raise ImageError("引用图片过大，第一版仅支持 8MB 以内。")
+                raise ImageError("参考图太大了，单张请控制在 8MB 以内。")
             chunks, size = [], 0
             for block in response.iter_content(65536):
                 size += len(block)
                 if size > MAX_REPLY_IMAGE_BYTES:
-                    raise ImageError("引用图片过大，第一版仅支持 8MB 以内。")
+                    raise ImageError("参考图太大了，单张请控制在 8MB 以内。")
                 chunks.append(block)
     except requests.RequestException:
         raise ImageError("下载引用图片失败，请稍后重试。") from None
@@ -433,12 +432,12 @@ class ImageService:
             self.log("review failed", level="warn", job=short, code=code)
             raise ImageError(
                 f"任务 {short} 的提示词处理失败\n{format_error(error)}"
-                + f"\n已停止；可用 /codex status {short} 查看记录。"
+                + f"\n可用 /codex status {short} 查看记录。"
             ) from None
         self.log("draft ready", job=short)
         if direct:
             # direct 没有润色，提示词就是用户原话，不再复述一遍。
-            head = "模式：直接生成（未润色，按你的原始描述）\n"
+            head = "模式：直接生成（按你的原始描述）\n"
         else:
             head = f"模式：润色\n提示词：{final_prompt}\n"
         return (
@@ -486,7 +485,7 @@ class ImageService:
         if execution.get("image_backend", "codex") == "openai":
             if not self.settings.openai_image_api_key:
                 raise ImageError(
-                    "尚未配置 openai_image_api_key；未消费确认，请在配置里填写后重试。"
+                    "尚未配置 openai_image_api_key，请在配置里填写后再确认。"
                 )
         else:
             login = self.login_provider()
@@ -556,22 +555,21 @@ class ImageService:
             if code == "CONTENT_REJECTED":
                 raise ImageError(
                     detail
-                    + f"\n已停止，不会自动重试；宿主管理员可手动发送 /codex retry {short} 强制再试一次，可能再次消耗额度。"
+                    + f"\n管理员可发送 /codex retry {short} 强制重试（会再次消耗额度）。"
                 ) from None
             if http_status is not None and 400 <= http_status <= 599:
                 raise ImageError(
                     detail
-                    + f"\n发送 /codex retry {short} 可按原提示词、参数和参考图再生成一次，"
-                    "会再次消耗额度；不会自动重试。"
+                    + f"\n发送 /codex retry {short} 可按原内容重试（会再次消耗额度）。"
                 ) from None
             if code.startswith("INVALID_"):
                 raise ImageError(
                     detail
-                    + "\n这是本地配置或参数问题，修正后重新发起；本次没有可重试的上游结果。"
+                    + "\n请修正配置或参数后重新发起。"
                 ) from None
             raise ImageError(
                 detail
-                + f"\n结果可能不确定，已停止且不重试；用 /codex status {short} 查看记录。"
+                + f"\n请用 /codex status {short} 查看任务记录。"
             ) from None
         if not archive.finish_job(job["id"], "succeeded"):
             # 取消终态优先；迟到结果已经归档，但不再自动回图。

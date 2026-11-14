@@ -211,7 +211,7 @@ class Archive:
                 yield db
         except psycopg.Error:
             raise ArchiveError(
-                "Codex 存档数据库操作失败，本次不继续外部操作。"
+                "存档数据库操作失败，请稍后重试。"
             ) from None
 
     def initialize(self) -> None:
@@ -357,13 +357,13 @@ class Archive:
                 (job_id, owner[0], owner[1], owner[2], owner[2]),
             ).fetchone()
             if row is None:
-                raise ArchiveError("未找到属于你的当前群任务。")
+                raise ArchiveError("当前群里没有找到你的任务。")
             return row
 
     def owned_job_by_prefix(self, prefix: str, owner: Scope) -> dict:
         """群内确认使用任务编号短前缀；账号与群始终强制匹配，且必须唯一。"""
         if not re.fullmatch(r"[0-9a-f]{8}", prefix):
-            raise ArchiveError("任务编号格式无效。")
+            raise ArchiveError("任务编号格式不对，请输入 8 位十六进制编号。")
         with self._db() as db:
             rows = db.execute(
                 self._sql(
@@ -373,7 +373,7 @@ class Archive:
                 (prefix + "%", owner[0], owner[1], owner[2], owner[2]),
             ).fetchall()
             if len(rows) != 1:
-                raise ArchiveError("未找到唯一的可操作任务。")
+                raise ArchiveError("没有找到对应的任务，请检查任务编号。")
             return rows[0]
 
     def pending_job(self, owner: Scope) -> dict:
@@ -609,7 +609,7 @@ class Archive:
             ).fetchone()
             if row is None:
                 raise ArchiveError(
-                    "任务不可调整参数：请检查所属群、发起者、有效期及当前状态。"
+                    "任务当前无法调整参数，可能已过期、已确认或不属于你。"
                 )
             self._event(
                 db,
@@ -632,7 +632,7 @@ class Archive:
             ).fetchone()
             if row is None:
                 raise ArchiveError(
-                    "任务不可确认：请检查所属群、发起者、有效期及当前状态。"
+                    "任务当前无法确认，可能已过期、已确认或不属于你。"
                 )
             self._event(db, job_id, "confirmed", {"digest": row["approval_digest"]})
             return row
@@ -652,6 +652,7 @@ class Archive:
         """
         if not source_id:
             raise ArchiveError("重试命令缺少可靠消息来源。")
+        administrator = owner[2] is None
         with self._db() as db:
             job = db.execute(
                 self._sql(
@@ -661,15 +662,14 @@ class Archive:
                 (job_id, owner[0], owner[1], owner[2], owner[2]),
             ).fetchone()
             if job is None:
-                raise ArchiveError("未找到属于你的当前群任务。")
-            administrator = owner[2] is None
+                raise ArchiveError("当前群里没有找到你的任务。")
             if job["state"] == "blocked" and not administrator:
                 raise ArchiveError(
-                    "该任务被上游审核拒绝，只允许宿主管理员手动强制重试。"
+                    "该任务未通过上游审核，需要管理员才能重试。"
                 )
             if job["state"] not in {"failed", "blocked"} or not job["approval_digest"]:
                 raise ArchiveError(
-                    "只能重试已确认且明确失败的生图任务；进行中、已成功或结果不确定的任务不重试。"
+                    "只能重试已确认且失败的生图任务。"
                 )
             previous = db.execute(
                 self._sql(
@@ -689,11 +689,11 @@ class Archive:
             )
             if rejected and (not administrator or not operator_id):
                 raise ArchiveError(
-                    "该任务被上游审核拒绝，只允许宿主管理员手动强制重试。"
+                    "该任务未通过上游审核，需要管理员才能重试。"
                 )
             if job["state"] == "blocked" and not rejected:
                 raise ArchiveError(
-                    "本任务没有可强制重试的上游生成拒绝记录，不能跳过提示词审核。"
+                    "该任务在提示词阶段未通过，请重新发起。"
                 )
             if (
                 previous is None
@@ -702,7 +702,7 @@ class Archive:
                 or not 400 <= previous["http_status"] <= 599
             ):
                 raise ArchiveError(
-                    "本次生成没有明确的 HTTP 失败记录，结果可能不确定，不能重试。"
+                    "该任务失败原因不明确，暂不支持重试，请重新发起。"
                 )
             replay = db.execute(
                 self._sql(
@@ -713,7 +713,7 @@ class Archive:
             ).fetchone()
             if replay is not None:
                 raise ArchiveError(
-                    "这条重试命令已经处理过；如需再次重试，请发送一条新命令。"
+                    "这条重试命令已经处理过了，如需再试请重新发一条。"
                 )
             row = db.execute(
                 self._sql(
@@ -750,7 +750,7 @@ class Archive:
                 (job_id, owner[0], owner[1], owner[2], owner[2]),
             ).fetchone()
             if row is None:
-                raise ArchiveError("任务不可取消或不属于你。")
+                raise ArchiveError("这个任务现在无法取消。")
             self._event(db, job_id, "cancelled", {})
 
     def finish_job(self, job_id: UUID, state: str) -> bool:
@@ -797,7 +797,7 @@ class Archive:
                     (job_id,),
                 ).fetchone()
                 if job["state"] != "reviewing" or started:
-                    raise ArchiveError("审核已经开始，不能改变参考图。")
+                    raise ArchiveError("任务已经在审核了，没法再改参考图。")
             if request_id is not None:
                 row = db.execute(
                     self._sql(
@@ -823,7 +823,7 @@ class Archive:
                 (job_id, digest, role, position, request_id),
             ).fetchone()
             if row is None:
-                raise ArchiveError("该用途已有不同图片，不覆盖既有存档。")
+                raise ArchiveError("已有对应图片存档。")
         return digest
 
     def append_references(self, job_id: UUID, owner: Scope, images: list[bytes]) -> int:
@@ -843,9 +843,9 @@ class Archive:
                 (job_id, owner[0], owner[1], owner[2], owner[2]),
             ).fetchone()
             if job is None:
-                raise ArchiveError("未找到属于你的当前群任务。")
+                raise ArchiveError("当前群里没有找到你的任务。")
             if job["state"] != "awaiting_confirmation" or not job["valid"]:
-                raise ArchiveError("只有待确认且未过期的任务可以追加参考图。")
+                raise ArchiveError("只有待确认且在有效期内的任务才能追加参考图。")
             existing = db.execute(
                 self._sql(
                     "SELECT count(*) AS n, coalesce(max(position), -1) AS last FROM {schema}.job_assets "
@@ -907,7 +907,7 @@ class Archive:
         for row in rows:
             data = bytes(row["data"])
             if hashlib.sha256(data).hexdigest() != row["sha256"]:
-                raise ArchiveError("图片存档摘要不匹配，停止发送。")
+                raise ArchiveError("图片校验失败，无法发送。")
             stored.append(data)
         return stored
 

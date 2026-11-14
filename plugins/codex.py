@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     from ica_typing import IcaClient, IcaNewMessage
     from shenbot_api import IcaConnectionState, IcaConnectionWatch
 
-VERSION = "0.8.0"
+VERSION = "0.8.1"
 POLL_SECONDS = 120
 THRESHOLD_STEP = 5
 COMMAND = "/codex"
@@ -51,8 +51,8 @@ DISPLAY_ZONE = timezone(timedelta(hours=8))
 LOGIN_HELP = "请启动 DSH，在「设置 → Codex 订阅」刷新额度或重新登录后再试。"
 HELP_TEXT = (
     "Codex 帮助\n"
-    "/codex check：查询 DSH 当前 Codex 订阅的套餐、剩余额度和重置时间，与生图后端无关。\n"
-    "/codex 或 /codex help：显示本帮助，不联网，不占用查询冷却。\n"
+    "/codex check：查看 DSH 当前 Codex 订阅的套餐、剩余额度和重置时间。\n"
+    "/codex 或 /codex help：查看本帮助。\n"
     "/codex image <描述>：润色并审核后预览提示词，本人确认后生成图片；可引用图片改图。\n"
     "/codex image direct <描述>：跳过润色，直接按原描述生成。\n"
     "/codex image attach <编号>：确认前追加参考图（引用含图片的消息）。\n"
@@ -60,53 +60,48 @@ HELP_TEXT = (
     "生图支持 --model flare|sunburst；--max 等同于 sunburst + 质量 max。\n"
     "Flare：日常高质量生图、速度最快；Sunburst：能力最强，侧重精细编辑。\n"
     "/codex image confirm|cancel|status <编号>：确认生成、取消或查看任务。\n"
-    "/codex retry <编号>：按原内容重试明确失败的生图任务，会再次消耗额度。\n"
+    "/codex retry <编号>：重试失败的生图任务（会再次消耗额度）。\n"
     "/codex image help：完整生图帮助，含命令、参数、尺寸与重试规则。\n"
     "生图子命令可以省略 image，例如直接发 /codex confirm、/codex cancel、/codex set。\n"
-    f"自动提醒：每 {POLL_SECONDS // 60} 分钟检查，剩余额度跨过 95%、90%、85%……0% 时提醒；"
-    "只发配置的提醒群。\n"
+    f"自动提醒：每 {POLL_SECONDS // 60} 分钟检查一次，剩余额度每下降 5% 或重置时，在提醒群通知。\n"
     "reset 警告：剩余额度比上次上涨时报告；上次不为 0% 时提示“浪费了xx%额度😭”。\n"
-    "订阅额度与 OpenAI API 费用分开：API 计费在 OpenAI 控制台查看，本插件不查询。\n"
-    "仅白名单群可用；登录失效请在 DSH 中刷新。"
+    "API 账单请在 OpenAI 控制台查看。\n"
+    "登录失效时请在 DSH 中刷新。"
 )
 IMAGE_HELP = (
     "Codex 生图速查\n"
     "/codex image [--max] <描述>：审核润色后等待确认；引用图片可改图。\n"
-    "/codex direct <描述>：跳过润色，仍须审核与确认。\n"
+    "/codex direct <描述>：跳过润色，直接按原描述审核并确认。\n"
     "/codex confirm|cancel|status [编号]：确认、取消、查看。\n"
     "/codex set [编号] --model flare|sunburst；--max = Sunburst + 质量 max。\n"
     "Flare：最快日常生图；Sunburst：能力最强，侧重精细编辑。\n"
     "完整命令、参数与规则：/codex image help"
 )
-
 IMAGE_DETAILED_HELP = (
     "Codex 生图完整帮助\n"
     "【生成与确认】\n"
-    "/codex image <描述> [参数]：前审 → 润色 → 后审 → 预览，确认后才生成。\n"
-    "/codex direct <描述> [参数]：不润色，只做一次前审，仍需确认。\n"
-    "引用含图片的消息即可改图，最多 5 张；引用无图会拒绝，不退化成文生图。\n"
-    "/codex confirm|cancel|status [编号]：确认、取消、查看；只有一个待确认任务可省略编号。\n"
-    "草稿 10 分钟有效，确认只生效一次；生成按预览中的后端与参数执行。\n"
+    "/codex image <描述> [参数]：前审 → 润色 → 后审 → 预览，确认后生成。\n"
+    "/codex direct <描述> [参数]：跳过润色，按原描述审核并确认。\n"
+    "引用带图片的消息就能改图，最多 5 张；请确保引用的消息里有图片。\n"
+    "/codex confirm|cancel|status [编号]：确认、取消或查看任务（只有一个待确认任务时可省略编号）。\n"
+    "草稿 10 分钟内有效，按预览中的后端和参数生成。\n"
     "【确认前调整】\n"
-    "/codex set [编号] <参数>：只改给出的参数，确认后不能再改。\n"
+    "/codex set [编号] <参数>：在确认前修改指定参数。\n"
     "/codex attach [编号]：引用图片追加参考图并重新审核。\n"
     "【参数与模型】\n"
-    "--model flare|sunburst；未指定时新任务沿用管理员配置，旧任务保留原模型。\n"
-    "--max：固定 Sunburst + 质量 max，优先于同条命令的 model/quality，与顺序无关。\n"
+    "--model flare|sunburst；未指定时新任务沿用默认配置，旧任务保留原模型。\n"
+    "--max：固定 Sunburst + 质量 max。\n"
     "--quality auto/low/medium/high/xhigh/max；--background auto/transparent/opaque。\n"
-    "--size auto 或 宽x高；尺寸、质量、背景默认 auto，由上游决定。\n"
-    "新任务选择 GPT Image 2.6 Flare/Sunburst；已有任务保留确认的模型。\n"
+    "--size auto 或 宽x高；尺寸、质量、背景默认 auto。\n"
     "Flare：日常高质量生图的最快模型；Sunburst：能力最强的生图与编辑模型，侧重编辑精度。\n"
     "【尺寸】\n"
     "推荐 1024x1024、1536x1024、1024x1536 或 auto。\n"
-    "插件目前每边限 512–2048，API 模式额外检查 16 倍数；这不是官方完整范围。\n"
-    "API 官方还要求：比例 1:3～3:1、每边 ≤3840、总像素 655360～8294400；\n"
-    "超过 2560x1440 属实验性支持。插件尚未完整校验比例和总像素，建议用推荐尺寸。\n"
+    "插件支持每边 512–2048 像素（API 模式还需为 16 的倍数），建议优先用推荐尺寸。\n"
+    "API 官方还要求比例在 1:3～3:1 之间，且总像素在 655360～8294400 之间。\n"
     "【重试、权限与计费】\n"
-    "/codex retry <编号>：明确 HTTP 失败后手动重试，沿用确认内容，会再次消耗额度。\n"
-    "不自动重试；超时、断线或成功响应解析失败等结果不确定的任务不能重试。\n"
-    "仅原群本人可操作；宿主管理员可代办 confirm/cancel/retry，并强制重试已确认的上游审核拒绝。\n"
-    "后端由管理员配置，订阅额度与 API 独立计费分开；以任务预览为准，不自动换模型或后端。\n"
+    "/codex retry <编号>：任务明确失败后可手动重试，沿用原内容（会再次消耗额度）。\n"
+    "支持在原群由本人操作，或由管理员代办 confirm/cancel/retry。\n"
+    "实际使用的后端与模型以任务预览为准。\n"
     "这些子命令可省略 image 前缀；返回简短速查：/codex image"
 )
 
@@ -187,8 +182,7 @@ PLUGIN_MANIFEST = PluginManifest(
     plugin_id="codex",
     name="Codex 订阅与生图",
     version=VERSION,
-    description="白名单群用 /codex check 查询订阅、/codex image 审核润色后确认生图；"
-    "每两分钟检查额度下降与 reset，提醒只发配置的 alert_groups",
+    description="在白名单群用 /codex check 查订阅额度，用 /codex image 生图，并定时在提醒群推送额度变化",
     authors=["shenjack"],
     config={
         "main": ConfigStorage(
@@ -466,7 +460,7 @@ def fetch_usage(login: Login, timeout: int) -> dict:
             ) from None
         if 300 <= error.code < 400:
             raise QueryError(
-                "额度接口发生重定向，已停止查询，请检查网络或代理。"
+                "额度接口被重定向，请检查网络或代理。"
             ) from None
         raise QueryError(
             f"额度服务暂时不可用（HTTP {error.code}），请稍后重试。"
@@ -474,7 +468,7 @@ def fetch_usage(login: Login, timeout: int) -> dict:
     except (OSError, TimeoutError, urllib.error.URLError):
         raise QueryError("连接额度接口失败或超时，请检查网络与代理后重试。") from None
     if len(raw) > MAX_RESPONSE_BYTES:
-        raise QueryError("额度接口响应过大，已停止查询。")
+        raise QueryError("额度接口返回内容过大，请稍后重试。")
     try:
         result = json.loads(raw)
     except (UnicodeError, ValueError):
@@ -565,7 +559,7 @@ def format_usage(usage: dict, now: float | None = None) -> str:
     lines = ["Codex 订阅（DSH 当前账号）", f"套餐：{plan_name}"]
     rate = usage.get("rate_limit")
     if rate is None:
-        lines.append("订阅额度：未返回（不代表剩余额度为 0）")
+        lines.append("订阅额度：暂未返回")
     elif isinstance(rate, dict):
         if rate.get("allowed") is False or rate.get("limit_reached") is True:
             lines.append("状态：当前订阅额度受限")
@@ -658,7 +652,7 @@ def _usage_http_error(error: urllib.error.HTTPError) -> UsageError:
             "该 Key 缺 api.usage.read，需要 Admin key（Settings → Organization → Admin keys）"
         )
     if 300 <= error.code < 400:
-        return UsageError("用量接口发生重定向，已停止查询")
+        return UsageError("用量接口被重定向，请检查网络或代理")
     # spend_limit 在该组织没有配置上限时返回 404，不是权限问题。
     if error.code == 404 and "spend limit" in message.lower():
         return UsageError(
@@ -703,7 +697,7 @@ def _openai_get(url: str, settings: Settings, label: str) -> dict:
             f"连接{label}接口失败或超时，请检查网络与 openai_proxy"
         ) from None
     if len(raw) > MAX_RESPONSE_BYTES:
-        raise UsageError(f"{label}接口响应过大，已停止查询")
+        raise UsageError(f"{label}接口返回内容过大，请稍后重试")
     try:
         parsed = json.loads(raw)
     except ValueError:
@@ -776,7 +770,7 @@ def format_openai_costs(
         if isinstance(started, (int, float)):
             days.append((float(started), amount))
         total += amount
-    lines = ["OpenAI API 用量（本月至今，已花费估算，不是余额）"]
+    lines = ["OpenAI API 本月已花费（估算）"]
     if spend_limit is not None:
         limit, limit_currency = spend_limit
         parts = [
@@ -849,7 +843,7 @@ def _reply(state: Runtime, msg: IcaNewMessage, client: IcaClient, text: str) -> 
         try:
             if not client.send_message(msg.reply_with(text)):
                 client.warn("codex：消息发送请求未受理")
-        except Exception:
+        except Exception:  # noqa: BLE001
             client.warn("codex：发送查询结果失败")
 
 
@@ -940,16 +934,14 @@ def _poll_worker(
                     accepted = watch.send_text(
                         connection.generation, connection.account, -group, text, 5.0
                     )
-                except Exception:
+                except Exception:  # noqa: BLE001
                     # 宿主约定异常可能已外发；推进基准，避免下一轮盲目重复发送。
                     warn("codex：额度提醒发送结果不确定，不自动重发本次档位")
-                if not accepted:
-                    warn("codex：额度提醒未受理，保留该群基准等待下轮检查")
             if accepted:
                 with state.lock:
                     if not state.stopped:
                         state.baselines[group] = baseline
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001
         with state.lock:
             if isinstance(error, QueryError):
                 state.next_query_at = max(
@@ -999,7 +991,7 @@ def _start_poll(state: Runtime) -> None:
             name="codex-poll",
             daemon=True,
         ).start()
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001
         if watch is not None:
             watch.close()
         with state.lock:
@@ -1135,7 +1127,7 @@ def on_load() -> None:
     timeout = cfg.get_value("timeout_seconds")
     cooldown = cfg.get_value("cooldown_seconds")
     if not isinstance(home, str):
-        raise ValueError("codex：dsh_home 必须为目录字符串")
+        raise TypeError("codex：dsh_home 必须为目录字符串")
     if type(timeout) is not int or not 1 <= timeout <= 60:
         raise ValueError("codex：timeout_seconds 必须为 1-60 的整数")
     if type(cooldown) is not int or not 1 <= cooldown <= 3600:
@@ -1186,11 +1178,7 @@ def _run_generation(
             stopping = state.stopped
         if stopping:
             return ""
-        return f"生成队列已满（最多 {slots.max_waiting} 个排队），" + (
-            "请稍后再发送重试命令。"
-            if retry
-            else "请稍后再确认；草稿在有效期内仍可确认。"
-        )
+        return f"当前排队已满（最多 {slots.max_waiting} 个），请稍后再试；草稿在有效期内仍可确认。"
     try:
         return service.confirm(msg, client, prefix, retry=retry)
     finally:
@@ -1245,7 +1233,7 @@ def _image_worker(
     try:
         status = client.status
         account = status.self_id
-    except Exception:
+    except Exception:  # noqa: BLE001
         status = None
         account = None
 
@@ -1283,13 +1271,13 @@ def _image_worker(
             text = service.status(msg, value)
     except (ImageError, ArchiveError) as error:
         text = str(error)
-    except Exception as error:  # 兜底只记录类型，避免上游细节进入群聊。
+    except Exception as error:  # noqa: BLE001 # 兜底只记录类型，避免上游细节进入群聊。
         # 本地控制台保留完整栈便于定位；群消息仍只给固定文案。
         import traceback
 
         traceback.print_exc()
         client.warn(f"codex：生图流程异常（{type(error).__name__}: {error}）")
-        text = "生图流程失败。发送 /codex image status 可以查看最近任务与状态。"
+        text = "生图失败了，发 /codex image status 可以查看最近的任务。"
     with state.lock:
         stopped = state.stopped
     # confirm 已在开始时回执并自行回图，text 为 None 时不再追加任何文本。
@@ -1317,7 +1305,7 @@ def _handle_image(
                 state,
                 msg,
                 client,
-                "用法：/codex retry <8 位任务编号>；会再次消耗生成额度。",
+                "用法：/codex retry <8 位任务编号>（会再次消耗额度）",
             )
             return
         value = parts[1]
@@ -1354,7 +1342,7 @@ def _handle_image(
                 state,
                 msg,
                 client,
-                "参数调整只接受 --size/--quality/--background/--model/--max，且至少给出一个。",
+                "请至少指定一个要调整的参数：--size / --quality / --background / --model / --max",
             )
             return
     else:
@@ -1429,7 +1417,7 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
                 # 用量异常只影响追加段，绝不能吞掉已经拿到的订阅额度。
                 try:
                     usage = openai_usage_section(state.settings)
-                except Exception as error:
+                except Exception as error:  # noqa: BLE001
                     client.warn(f"codex：用量查询异常（{type(error).__name__}）")
                     usage = "OpenAI API 用量：本轮查询失败"
                 if usage:
@@ -1440,7 +1428,7 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
                         state.next_query_at, time.monotonic() + error.retry_after
                     )
                 result = "Codex 查询失败：" + str(error)
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001
                 client.warn(f"codex：查询异常（{type(error).__name__}）")
                 result = "Codex 查询失败，请检查插件依赖与配置后重试。"
             _reply(state, msg, client, result)
@@ -1451,9 +1439,9 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
     try:
         _reply(state, msg, client, "正在查询 DSH 当前 Codex 订阅…")
         threading.Thread(target=run_query, name="codex-query", daemon=True).start()
-    except Exception:
+    except Exception:  # noqa: BLE001
         with state.lock:
             state.busy = False
             state.next_query_at = 0
         client.warn("codex：启动查询线程失败")
-        _reply(state, msg, client, "Codex 查询未能启动，请稍后重试。")
+        _reply(state, msg, client, "Codex 查询启动失败，请稍后重试。")

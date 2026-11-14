@@ -11,7 +11,7 @@ import re
 # 兼容旧响应把 insufficient_quota 放在 code、新响应作为宽泛 type 的两种形式。
 QUOTA_HINT = (
     "上游余额或用量额度不足",
-    "先检查对应账号的余额和额度；订阅额度可用 /codex check 查询，API 计费以 OpenAI 控制台为准。",
+    "请检查对应账号的余额或额度；订阅额度可用 /codex check 查看。",
 )
 
 # 优先使用服务端稳定 code，避免把所有 HTTP 429 都误报成请求频率过高。
@@ -19,73 +19,73 @@ CODE_HINTS = {
     "insufficient_quota": QUOTA_HINT,
     "moderation_blocked": (
         "上游内容审核未通过",
-        "普通用户请调整描述或参考图后重新发起；宿主管理员可手动强制重试。",
+        "请调整描述或参考图后再试；管理员可用 retry 重试。",
     ),
     "credit_balance_exhausted": (
-        "上游账户预付余额已用完",
-        "请账户管理员处理余额，再手动操作。",
+        "账户预付余额已用完",
+        "请充值后再试。",
     ),
     "organization_spend_limit_exceeded": (
         "已达到组织支出上限",
-        "请账户管理员调整组织支出上限，再手动操作。",
+        "请在控制台调高组织支出上限后再试。",
     ),
     "project_spend_limit_exceeded": (
         "已达到项目支出上限",
-        "请账户管理员调整项目支出上限，再手动操作。",
+        "请在控制台调高项目支出上限后再试。",
     ),
     "organization_usage_limit_exceeded": (
         "已达到组织用量上限",
-        "请账户管理员检查或申请提高用量上限。",
+        "请在控制台检查或申请提高用量上限。",
     ),
-    "slow_down": ("请求速率增长过快", "降低请求频率，等待限流恢复后再手动操作。"),
+    "slow_down": ("请求太快了", "稍等一会再试。"),
     "server_is_overloaded": (
-        "上游模型暂时过载",
-        "稍等后手动重试；持续失败可查看 status.openai.com。",
+        "上游模型当前过载",
+        "稍等一会再重试。",
     ),
 }
 TYPE_HINTS = {
     "image_generation_user_error": (
         "上游无法按当前输入生成图片",
-        "根据上游说明调整描述或参考图，再手动重新发起。",
+        "请根据提示调整描述或参考图后再试。",
     ),
     "invalid_request_error": (
-        "请求参数或输入无效",
-        "根据上游说明检查参数、描述和参考图，再手动操作。",
+        "请求参数或输入有误",
+        "请检查参数、描述和参考图后再试。",
     ),
     "authentication_error": (
-        "上游身份认证失败",
-        "检查对应服务凭据；订阅模式在 DSH 中刷新登录，API 模式检查 openai_text_api_key / openai_image_api_key。",
+        "身份认证失败",
+        "请检查凭据：订阅模式在 DSH 刷新登录，API 模式检查对应的 API Key。",
     ),
     "permission_error": (
         "当前账号没有访问权限",
-        "检查账号、模型权限和所在地区；处理后再手动操作。",
+        "请检查账号、模型权限和所在地区。",
     ),
     "insufficient_quota": QUOTA_HINT,
-    "rate_limit_error": ("请求频率受到限制", "减少并发或等待限流恢复，再手动操作。"),
+    "rate_limit_error": ("请求频率受限", "稍等一会再试。"),
     "server_error": (
-        "上游服务内部错误",
-        "稍等后手动重试；持续失败可查看 status.openai.com。",
+        "上游服务出错了",
+        "稍等一会再重试。",
     ),
-    "service_unavailable_error": ("上游服务暂时不可用", "等待服务恢复后再手动操作。"),
+    "service_unavailable_error": ("上游服务暂时不可用", "稍等一会再试。"),
 }
 HTTP_HINTS = {
     400: TYPE_HINTS["invalid_request_error"],
     401: TYPE_HINTS["authentication_error"],
     403: TYPE_HINTS["permission_error"],
-    404: ("上游资源或模型不存在", "检查所用模型及接口；不会自动切换模型。"),
-    408: ("上游请求超时", "先查看任务记录，确认结果后再手动处理。"),
-    409: ("上游资源状态冲突", "等待冲突解除并检查任务记录，再手动操作。"),
-    413: ("请求内容过大", "减少参考图数量或图片大小，再手动重新发起。"),
-    415: ("上游不支持当前文件格式", "检查参考图格式，再手动重新发起。"),
-    422: ("上游无法处理当前输入", "根据上游说明检查参数和参考图，再手动重新发起。"),
+    404: ("找不到对应的模型或资源", "请检查配置中的模型名称和接口地址。"),
+    408: ("上游请求超时", "可以先查看任务记录确认状态。"),
+    409: ("上游资源状态冲突", "请稍后查看任务记录再试。"),
+    413: ("请求内容太大了", "请减少参考图数量或压缩图片后再试。"),
+    415: ("不支持该图片格式", "请更换图片格式后再试。"),
+    422: ("上游无法处理当前输入", "请检查参数和参考图后再试。"),
     429: (
-        "上游请求频率或额度受到限制",
-        "根据上游错误码检查限流、余额或额度，再手动操作。",
+        "请求频率或额度受限",
+        "请检查限流、余额或额度后再试。",
     ),
     500: TYPE_HINTS["server_error"],
-    502: ("上游网关错误", "等待上游恢复后再手动操作。"),
+    502: ("上游网关出错", "稍等一会再试。"),
     503: TYPE_HINTS["service_unavailable_error"],
-    504: ("上游网关超时", "先查看任务记录，确认结果后再手动处理。"),
+    504: ("上游网关超时", "可以先查看任务记录确认状态。"),
 }
 LOCAL_HINTS = {
     "CONTENT_REJECTED": CODE_HINTS["moderation_blocked"],
@@ -93,61 +93,61 @@ LOCAL_HINTS = {
     "ACCESS_REFUSED": TYPE_HINTS["permission_error"],
     "RATE_LIMITED": HTTP_HINTS[429],
     "TIMEOUT_UNCERTAIN": (
-        "请求超时，生成结果不确定",
-        "已停止，不重新发送；请查看任务记录。",
+        "请求超时",
+        "请查看任务记录确认结果。",
     ),
     "NETWORK_UNCERTAIN": (
-        "连接中断，生成结果不确定",
-        "已停止，不重新发送；请查看任务记录。",
+        "网络连接中断",
+        "请查看任务记录确认结果。",
     ),
-    "CANCELLED_BEFORE_DISPATCH": ("请求在发送前已停止", "保持停止，不会自动恢复。"),
+    "CANCELLED_BEFORE_DISPATCH": ("请求已取消", "任务已停止。"),
     "INVALID_JSON": (
         "上游返回内容无法解析",
-        "已停止；查看任务记录，避免结果不确定时重复生成。",
+        "请查看任务记录确认结果。",
     ),
     "INVALID_REWRITE": (
-        "润色结果不完整或格式异常",
-        "已停止；查看任务记录后手动重新发起。",
+        "润色结果格式异常",
+        "请重新发起任务。",
     ),
     "INVALID_IMAGE_DATA": (
-        "上游图片数据无法解析",
-        "已停止；请检查已归档响应，不重新生成。",
+        "上游返回的图片数据无法解析",
+        "请查看任务记录或重新发起。",
     ),
-    "INVALID_PNG": ("上游返回的图片格式无效", "已停止；请检查已归档响应，不重新生成。"),
+    "INVALID_PNG": ("上游返回的图片格式无效", "请查看任务记录或重新发起。"),
     "EXPECTED_ONE_IMAGE": (
-        "上游返回的图片数量异常",
-        "已停止；请检查已归档响应，不重新生成。",
+        "上游返回的图片数量不对",
+        "请查看任务记录或重新发起。",
     ),
     "INVALID_REFERENCE": (
-        "参考图无法解码或格式不支持",
-        "更换有效的 PNG/JPEG/WebP 图片后手动重新发起。",
+        "参考图无法识别或格式不支持",
+        "请换用 PNG、JPEG 或 WebP 图片。",
     ),
-    "REFERENCE_TOO_LARGE": ("参考图超过大小限制", "压缩或减少参考图后手动重新发起。"),
+    "REFERENCE_TOO_LARGE": ("参考图太大了", "请压缩或减少参考图后再试。"),
     "INVALID_DEEPSEEK_CONFIGURATION": (
-        "审核或润色服务配置无效",
-        "检查 DeepSeek 模型、接口和凭据配置。",
+        "审核或润色配置有误",
+        "请检查 DeepSeek 模型、接口和密钥配置。",
     ),
     "INVALID_CODEX_CONFIGURATION": (
-        "生成请求配置无效",
-        "检查当前图片模型及尺寸、质量、背景参数。",
+        "生图配置有误",
+        "请检查图片模型和尺寸、质量、背景参数。",
     ),
     "INVALID_REVIEW": (
-        "审核返回内容不可用",
-        "已停止；查看任务记录后手动重新发起。",
+        "审核返回内容异常",
+        "请重新发起任务。",
     ),
     "INVALID_OPENAI_CONFIGURATION": (
-        "OpenAI API 配置无效",
-        "检查 openai_base_url、模型名与 reasoning effort 配置。",
+        "OpenAI API 配置有误",
+        "请检查 openai_base_url、模型名和 reasoning effort 配置。",
     ),
     "INVALID_HTTP_CLIENT": (
-        "HTTP 客户端配置无效",
-        "检查 openai_proxy 是否为可用的 HTTP(S) 代理地址。",
+        "代理配置有误",
+        "请检查 openai_proxy 是否为有效的 HTTP(S) 代理地址。",
     ),
     "INVALID_CREDENTIAL": TYPE_HINTS["authentication_error"],
-    "INVALID_API_URL": ("模型接口地址不在支持范围内", "检查插件接口配置。"),
+    "INVALID_API_URL": ("接口地址不受支持", "请检查插件接口配置。"),
     "RESPONSE_TOO_LARGE": (
-        "上游响应超出大小限制",
-        "已停止；结果可能不确定，不重新发送。",
+        "上游返回内容太大了",
+        "请查看任务记录确认结果。",
     ),
 }
 # Responses 官方错误枚举中的图片输入类，以及常见认证/资源码；仅用于说明返回值。
@@ -156,56 +156,56 @@ CODE_HINTS.update(
         "invalid_api_key": TYPE_HINTS["authentication_error"],
         "missing_scope": (
             "该 Key 没有当前接口权限",
-            "检查是否把审核 Key 用于生图或反之：两把 Key 必须按用途分开。",
+            "请确认文本审核 Key 和生图 Key 各自配置正确。",
         ),
         "model_not_found": HTTP_HINTS[404],
         "unsupported_country_region_territory": (
             "当前所在地区不受上游支持",
-            "检查上游支持地区和账号访问条件。",
+            "请检查上游支持地区和账号访问条件。",
         ),
         "server_error": TYPE_HINTS["server_error"],
         "rate_limit_exceeded": TYPE_HINTS["rate_limit_error"],
         "invalid_prompt": (
             "上游无法接受当前描述",
-            "根据上游原文调整描述后手动重新发起。",
+            "请调整描述后再试。",
         ),
         "invalid_image": LOCAL_HINTS["INVALID_REFERENCE"],
         "invalid_image_format": (
             "参考图格式无效",
-            "将参考图转换为受支持的格式后手动重新发起。",
+            "请转换为支持的格式后再试。",
         ),
         "invalid_base64_image": (
             "参考图编码无效",
-            "重新发送有效图片；持续失败请检查插件编码。",
+            "请重新发送图片。",
         ),
         "invalid_image_url": (
             "参考图地址无效",
-            "重新发送可访问的图片，再手动重新发起。",
+            "请重新发送可访问的图片。",
         ),
-        "image_too_large": ("参考图尺寸过大", "缩小图片尺寸后手动重新发起。"),
-        "image_too_small": ("参考图尺寸过小", "提供更清晰的图片后手动重新发起。"),
+        "image_too_large": ("参考图尺寸太大了", "请缩小图片尺寸后再试。"),
+        "image_too_small": ("参考图尺寸太小了", "请换一张更清晰的图片。"),
         "image_parse_error": LOCAL_HINTS["INVALID_REFERENCE"],
         "image_content_policy_violation": (
-            "上游参考图内容审核未通过",
-            "调整参考图内容后手动重新发起。",
+            "参考图未通过上游审核",
+            "请调整参考图后再试。",
         ),
         "invalid_image_mode": (
-            "参考图色彩模式不受支持",
-            "转换图片色彩模式后手动重新发起。",
+            "参考图色彩模式不支持",
+            "请转换图片色彩模式后再试。",
         ),
         "image_file_too_large": LOCAL_HINTS["REFERENCE_TOO_LARGE"],
         "unsupported_image_media_type": (
-            "参考图媒体类型不受支持",
-            "检查图片实际格式与 MIME 类型。",
+            "参考图类型不支持",
+            "请检查图片格式与后缀。",
         ),
-        "empty_image_file": ("参考图文件为空", "重新发送有效图片后手动重新发起。"),
+        "empty_image_file": ("参考图是空的", "请重新发送有效图片。"),
         "failed_to_download_image": (
             "上游无法下载参考图",
-            "检查图片是否可访问，或重新发送图片。",
+            "请重新发送图片后再试。",
         ),
         "image_file_not_found": (
-            "上游未找到参考图文件",
-            "重新发送有效图片后手动重新发起。",
+            "上游找不到参考图",
+            "请重新发送图片后再试。",
         ),
     }
 )
@@ -247,7 +247,7 @@ def format_error(error: Exception) -> str:
         or (
             HTTP_HINTS[500] if isinstance(status, int) and 500 <= status < 600 else None
         )
-        or ("请求未能完成", "查看上游说明和任务记录后手动处理。")
+        or ("请求未能完成", "请查看上游说明和任务记录。")
     )
     lines = [f"原因：{label}"]
     moderation = details.get("moderation_details")
@@ -269,7 +269,7 @@ def format_error(error: Exception) -> str:
             if isinstance(item, str) and item
         ]
         if names:
-            lines.append("上游标记：" + "、".join(names[:8]) + "（仅为上游判定）")
+            lines.append("上游标记：" + "、".join(names[:8]))
         stage = moderation.get("moderation_stage")
         if isinstance(stage, str):
             lines.append("审核阶段：" + STAGE_NAMES.get(stage, _text(stage)))
