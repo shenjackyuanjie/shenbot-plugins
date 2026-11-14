@@ -2,6 +2,11 @@
 
 宿主版本对应 [shenbot_api.py](shenbot_api.py) 的 `__version__`；ICA/Tailchat API 与各插件的 `VERSION` 分别管理。
 
+## 2026-11-14 优化各插件用户文案并修复 Ruff 告警
+
+- [codex](plugins/codex.py) **0.8.0 → 0.8.1**、[ds_monitor](plugins/ds_monitor.py) **0.5.8 → 0.5.9**、[bridge_query](plugins/bridge_query.py) **0.1.0 → 0.1.1**、[namerena](plugins/namerena.py) **0.12.0 → 0.12.1**、[score](plugins/score.py) **0.3.4 → 0.3.5**、[sign](plugins/sign.py) **0.3.4 → 0.3.5**：简化帮助与错误提示中的防御性表述，改为正面、自然的人话。
+- 修复 `codex_support/archive.py` 中 `claim_retry` 缺少 `administrator` 定义的错误，以及修改涉及文件的 Ruff 告警。
+
 ## 2026-11-11 DeepSeek 监测可指定更新上报群
 
 - [ds_monitor](plugins/ds_monitor.py) **0.5.7 → 0.5.8**：插件配置新增 `room_id`，填正整数群号后 watch 与一次性 check/analyze/render 的 noticer 通知都直发该群；留空或 0 时继续跟随 ds-monitor `config.toml` 的 room/rooms 广播。

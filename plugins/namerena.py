@@ -86,7 +86,7 @@ if TYPE_CHECKING:
         TailchatReciveMessage,
     )
 
-VERSION = "0.12.0"
+VERSION = "0.12.1"
 
 CMD_PREFIX = "/namer"
 
@@ -1274,7 +1274,7 @@ def convert_base(msg: ReciveMessage, client: IcaClient | TailchatClient) -> None
     if msg.content.find("\n") == -1:
         client.send_message(
             msg.reply_with(
-                f"请使用 {BASE_CMD} 命令\n为防止刷屏，一次只能转换一个名字\n"
+                f"请使用 {BASE_CMD} 命令\n一次只能转换一个名字\n"
             )
         )
         return
@@ -1286,7 +1286,7 @@ def convert_base(msg: ReciveMessage, client: IcaClient | TailchatClient) -> None
     raw_players = [x for x in names.split("\n") if x != ""]
     if len(raw_players) != 1:
         client.send_message(
-            msg.reply_with("请输入名字\n为防止刷屏，一次只能转换一个名字\n")
+            msg.reply_with("请输入名字\n一次只能转换一个名字\n")
         )
         return
     current_player = sqrtools.Name()
@@ -1755,7 +1755,7 @@ def dispatch_msg(msg, client, platform="ica"):
     except ArchiveError:
         if session:
             session.broken = True
-        client.send_message(msg.reply_with("请求存档不可用，已停止本次计算，请联系管理员检查遥测配置。"))
+        client.send_message(msg.reply_with("记录服务不可用，请联系管理员检查配置。"))
     except Exception as exc:  # noqa: BLE001 - 命令边界分类记录未知失败，不透传到宿主
         if session:
             session.error("request_failed", exception_type=type(exc).__name__)

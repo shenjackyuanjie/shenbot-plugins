@@ -12,14 +12,14 @@ from selenium.common.exceptions import SessionNotCreatedException, TimeoutExcept
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
-from shenbot_api import ConfigStorage, PluginManifest, python_config_path
 
+from shenbot_api import ConfigStorage, PluginManifest, python_config_path
 
 if TYPE_CHECKING:
     from ica_typing import IcaClient, IcaNewMessage
 
 
-VERSION = "0.3.4"
+VERSION = "0.3.5"
 USERNAME = ""
 PASSWORD = ""
 
@@ -144,7 +144,7 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
         return
 
     if not _query_lock.acquire(blocking=False):
-        client.send_message(msg.reply_with("成绩正在查询，请稍候。"))
+        client.send_message(msg.reply_with("正在查询成绩，请稍候。"))
         return
 
     # 捕获当前启用周期，重新 on_load 不会复活旧任务的回包权限。
@@ -158,7 +158,7 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
                 result = query_scores()
             except ScoreQueryError as error:
                 result = f"成绩查询失败：{error}"
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001
                 client.warn(f"score：查询失败（{type(error).__name__}）")
                 result = "成绩查询失败，请检查登录状态或网络后重试。"
             if not shutdown.is_set():
@@ -168,10 +168,10 @@ def on_ica_message(msg: IcaNewMessage, client: IcaClient) -> None:
 
     try:
         client.send_message(
-            msg.reply_with("正在查询成绩；如 Edge 出现安全验证，请手动完成。")
+            msg.reply_with("正在查询成绩，如 Edge 弹出安全验证请手动完成。")
         )
         threading.Thread(target=run_query, daemon=True).start()
-    except Exception:
+    except Exception:  # noqa: BLE001
         _query_lock.release()
         client.warn("score：启动成绩查询失败")
         client.send_message(msg.reply_with("启动成绩查询失败，请稍后重试。"))

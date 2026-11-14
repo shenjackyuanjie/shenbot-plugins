@@ -11,7 +11,7 @@ from shenbot_api import PluginManifest, Scheduler
 if TYPE_CHECKING:
     from ica_typing import IcaClient, IcaNewMessage
 
-VERSION = "0.3.4"
+VERSION = "0.3.5"
 CMD_PREFIX = "/bot-sign"
 HELP_CMD = f"{CMD_PREFIX} help"
 ALL_CMD = f"{CMD_PREFIX} all"
@@ -183,13 +183,13 @@ def handle_sign_want(msg: IcaNewMessage, client: IcaClient) -> None:
         if previous_time is not None:
             if previous_time == want_time:
                 client.send_message(
-                    msg.reply_with(f"已有 {fmt_time} 的签到预约，无需重复预约")
+                    msg.reply_with(f"已经预约过 {fmt_time} 签到了")
                 )
                 return
             if previous_time < want_time:
                 previous_text = previous_time.strftime("%m-%d %H:%M")
                 client.send_message(
-                    msg.reply_with(f"已有 {previous_text} 的签到预约，保留原计划")
+                    msg.reply_with(f"已有更早的 {previous_text} 签到预约，保留原计划")
                 )
                 return
         SIGN_PLAN[room_id] = want_time
@@ -207,14 +207,14 @@ def handle_sign_want(msg: IcaNewMessage, client: IcaClient) -> None:
             if SIGN_REC.get(room_id, datetime.min).date() == callback_now.date():
                 return
             if not client.send_room_sign_in(room_id):
-                client.send_message(msg.reply_with("签到请求未受理，可重新预约"))
+                client.send_message(msg.reply_with("签到发送失败，可以重新预约"))
                 return
             SIGN_REC[room_id] = callback_now
-        client.send_message(msg.reply_with("已提交当前群的签到请求"))
+        client.send_message(msg.reply_with("已发送当前群的签到请求"))
 
     try:
         Scheduler(callback, want_time - now).start()
-    except Exception:
+    except Exception:  # noqa: BLE001
         with _sign_lock:
             if _sign_tokens.get(room_id) is token:
                 if previous_time is not None and previous_token is not None:
@@ -223,7 +223,7 @@ def handle_sign_want(msg: IcaNewMessage, client: IcaClient) -> None:
                 else:
                     SIGN_PLAN.pop(room_id, None)
                     _sign_tokens.pop(room_id, None)
-        client.send_message(msg.reply_with("创建签到预约失败，请稍后重试"))
+        client.send_message(msg.reply_with("预约签到失败，请稍后重试"))
         return
     action = "将提前到" if previous_time is not None else "将在"
     client.send_message(msg.reply_with(f"{action} {fmt_time} 开始签到"))
