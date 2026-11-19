@@ -14,6 +14,7 @@ from .archive import ArchiveError
 from .model import (
     CURRENT,
     ITEM,
+    RATING_COMMANDS,
     VERSION,
     engine_input,
     file_snapshot,
@@ -113,7 +114,7 @@ class Session:
             command = self.payload["command"]
             if command.endswith(("peek", "peeks", "team", "teams", "base")):
                 expected = ["python"]
-            elif command.endswith(("todiy", "cqp", "-cp", "-fp", "-wcp", "-fsp", "-pjp")):
+            elif command == "/namer-todiy" or command in RATING_COMMANDS:
                 expected = ["tswn"]
             else:
                 expected = ["md5"] + (["tswn"] if self.payload["settings"].get("tswn_compare") else [])

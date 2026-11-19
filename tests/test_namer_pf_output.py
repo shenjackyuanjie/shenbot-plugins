@@ -1,7 +1,7 @@
 """真实 PF 指标协议与逐非空行输入对齐的必要回归。"""
 import subprocess
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from plugins import namerena
 
@@ -11,6 +11,19 @@ from test_namer_archive import MemoryArchive
 
 
 class PfOutputTests(unittest.TestCase):
+    def test_pd_uses_the_duos_pd_metric_from_native_output(self):
+        native = "\n".join(f"A+B {key}:{score}" for key, score in
+                           zip(("pp", "pd", "qp", "qd", "sum"), (1, 22, 3, 4, 30)))
+        msg = Mock(content="/namer-pd\nA+B", is_reply=False, is_from_self=False)
+        msg.reply_with.side_effect = lambda value: value
+        client = Mock()
+        with (patch.object(namerena, "run_namerena", return_value=("22", 0)),
+              patch.object(namerena, "run_tswn_cli", return_value=(native, 0)) as engine,
+              patch.object(namerena, "out_msg", return_value="")):
+            namerena.dispatch_msg(msg, client)
+        self.assertEqual(engine.call_args.args[:2], ("A+B", "namer-pf"))
+        self.assertIn("tswn: 22-", client.send_message.call_args.args[0])
+
     def test_native_metric_cycles_preserve_duplicate_inputs_and_blank_lines_are_not_teams(self):
         body = "A\nA\n\nB"
         output = ("A pp:10000\nA pd:0\nA qp:0\nA qd:0\nA sum:10000\n"

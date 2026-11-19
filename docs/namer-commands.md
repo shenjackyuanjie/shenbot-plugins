@@ -7,7 +7,7 @@ Openbox 的几套命令行工具包成 Bot 命令。本文说明命令、依赖�
 
 - 命令统一用 `/namer` 前缀，子命令用连字符连接（`/namer-todiy`）。下划线写法（`/namer_team`）
   不匹配任何命令，也不会落进简化求值的 `/namer`，方便发现笔误。
-- 除 `/namer-help` 以外，命令都要求「命令占一行，之后每个输入各占一行」。回复本插件自己发的消息、
+- 队友评可以把第一个输入写在命令后面。其它有参数的命令要求「命令占一行，之后每个输入各占一行」。回复本插件自己发的消息、
   或自己发送的消息会被忽略。
 - `/namer` 是 `/namerena` 的简化输入，只做最后兜底匹配。
 
@@ -29,12 +29,22 @@ Openbox 的几套命令行工具包成 Bot 命令。本文说明命令、依赖�
 | `/namer-peek`、`/namer-peeks` | 查看单个名字的八围与技能，`-peeks` 按原始槽位顺序 | — |
 | `/namer-team`、`/namer-teams` | 同队加成后的八围与熟练度，`-teams` 按原始槽位顺序 | — |
 | `/namer-base` | base 工具，一次只接受一个名字，避免刷屏 | — |
-| `/namer-cqp` | 100% CQP，一行一组，双人组用 `+` 连接 | `tswn-cli` + Openbox 靶子资产 |
-| `/namer-cp` `/namer-fp` `/namer-wcp` `/namer-fsp` `/namer-pjp` | Openbox 队友评测（刺评/辅评/无刺评/分身评/配件评） | `tswn-cli` + backend 资产 |
+| `/namer-cqp`（别名 `/namer-cqd`） | 100% CQP，一行一组，双人组用 `+` 连接 | `tswn-cli` + Openbox 靶子资产 |
+| `/namer-cp`（`/namer-bcp`）、`/namer-fp`（`/namer-fzp`）、`/namer-wcp`（`/namer-dp`）、`/namer-fsp`、`/namer-pjp` | Openbox 队友评测（刺评/辅评/无刺评/分身评/配件评） | `tswn-cli` + backend 资产 |
 | `/namer-todiy` | 名字导出为 `+ol` 覆盖格式，对齐 Openbox 的 `to-diy` | `tswn-cli` |
 
 「JS 运行时」指 `node` 或 `bun`：评分与战斗跑 `plugins/namerena_support/md5/md5-api.js`，用 `use_bun` 决定优先哪一个。
 `-peek` / `-team` / `-base` 用插件内置的本地端口，不需要外部运行时。
+
+队友评支持同一条消息内混合单号和双号输入。例如：
+
+```text
+/namer-cp A@team+B@team
+B@team+A@team
+solo
+```
+
+第一行用两人组队后的属性和技能冻结 A，再让 A 和预设队友对战双人靶。第二行评测 B。第三行按单号规则评测 solo。每个对局 1000 场（10%），三个输入按原顺序各返回一行。
 
 ## 配置项
 

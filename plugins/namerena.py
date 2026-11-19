@@ -25,7 +25,18 @@ for _module_name in list(sys.modules):
 
 from namerena_support import name_utils, sqrtools
 from namerena_support.archive import Archive, ArchiveError
-from namerena_support.model import CURRENT, ITEM, parse_input, split_parts
+from namerena_support.model import (
+    CURRENT,
+    ITEM,
+    PAIR_COMMANDS,
+    PAIR_ROUNDS,
+    RATING_ALIASES,
+    RATING_COMMANDS,
+    pair_members,
+    parse_input,
+    parse_tswn,
+    split_parts,
+)
 from namerena_support.runtime import (
     ClientProxy,
     Session,
@@ -70,11 +81,6 @@ def _player_data(player, index):
             "skills": [{"slot": slot, "id": player.skl_id[slot], "level": player.skl_freq[slot]} for slot in range(16)]}
 
 
-try:
-    import tomllib
-except ModuleNotFoundError:  # pragma: no cover - Python 3.10 fallback
-    import tomli as tomllib
-
 if TYPE_CHECKING:
     from ica_typing import (
         IcaClient,
@@ -84,7 +90,7 @@ if TYPE_CHECKING:
         TailchatReciveMessage,
     )
 
-VERSION = "0.12.1"
+VERSION = "0.13.0"
 # JS 运行时、tswn 二进制与名字/技能数据都收在 support 包里，入口只留控制逻辑。
 SUPPORT_DIR = Path(__file__).resolve().parent / "namerena_support"
 
@@ -99,13 +105,6 @@ EVAL_QP_CMD = f"{CMD_PREFIX}-qp"
 EVAL_QD_CMD = f"{CMD_PREFIX}-qd"
 EVAL_PF_CMD = f"{CMD_PREFIX}-pf"
 CQP_CMD = f"{CMD_PREFIX}-cqp"
-PAIR_COMMANDS = {
-    f"{CMD_PREFIX}-cp": ("刺评", "teammate_fz.toml", 4),
-    f"{CMD_PREFIX}-fp": ("辅评", "teammate_bc.toml", 4),
-    f"{CMD_PREFIX}-wcp": ("无刺评", "teammate_wc.toml", 4),
-    f"{CMD_PREFIX}-fsp": ("分身评", "teammate_pj.toml", 4),
-    f"{CMD_PREFIX}-pjp": ("配件评", "teammate_fs.toml", 4),
-}
 CONVERT_CMD = f"{CMD_PREFIX}-peek"
 CONVERT_RAW_CMD = f"{CMD_PREFIX}-peeks"
 BASE_CMD = f"{CMD_PREFIX}-base"
@@ -125,8 +124,9 @@ PF
     - 一行一个名字/+连接的多个名字
 - {EVAL_PF_CMD} - 一下子全评
     - 一行一个名字/+连接的多个名字
-- {CQP_CMD} - 使用 tswn 计算 100% CQP, 一行一组，双人组用 + 连接
-- /namer-cp /namer-fp /namer-wcp /namer-fsp /namer-pjp - Openbox 队友评测
+- {CQP_CMD}（/namer-cqd）- 使用 tswn 计算 100% CQP, 一行一组，双人组用 + 连接
+- /namer-cp（/namer-bcp）、/namer-fp（/namer-fzp）、/namer-wcp（/namer-dp）、/namer-fsp、/namer-pjp - Openbox 队友评测
+    - 命令后可直接输入或换行，每行一个名字或 A+B；A+B 只评测与 B 组队加成后的 A
 - {CONVERT_CMD} - 查看一个名字的属性, 每一行一个名字
 - {CONVERT_RAW_CMD} - 查看一个名字的属性, 技能按原始顺序输出
 - {TODIY_CMD} - 把名字导出成 +ol 覆盖格式 (对齐 Openbox 的 to-diy), 每行一个名字, 组内多个号用 ++ 连接
@@ -611,7 +611,17 @@ def run_tswn_pf_compare(input_text: str) -> tuple[str, float] | None:
     result = run_tswn_cli(input_text, "namer-pf", "-n", str(TSWN_COMPARE_ROUNDS))
     if result is None:
         return None
-    return result[0], result[1]
+    try:
+        items = parse_tswn(result[0], "namer-pf")["items"]
+    except ValueError:
+        return result  # Preserve the engine diagnostic when no complete result exists.
+    rows = []
+    for item in items:
+        scores = item["scores"]
+        values = [int(scores[key]) for key in PF_LABELS[:4]]
+        values.append(int(scores.get("sum", sum(values))))
+        rows.append("|".join(map(str, values)))
+    return "\n".join(rows), result[1]
 
 
 def run_tswn_compare(input_text: str) -> tuple[str, float] | None:
@@ -744,30 +754,6 @@ def _split_ol_group(line: str) -> list[str]:
     return values
 
 
-def _prepare_weighted_target_diy(source: Path, output: Path) -> None:
-    data = tomllib.loads(source.read_text(encoding="utf-8"))
-    targets = data.get("targets", [])
-    raw_groups = [target.get("players", []) for target in targets]
-    with tempfile.TemporaryDirectory(prefix="namer_target_diy_") as temp:
-        raw_file = Path(temp) / "players.txt"
-        diy_file = Path(temp) / "players_diy.txt"
-        raw_file.write_text("\n".join("+".join(players) for players in raw_groups) + "\n", encoding="utf-8")
-        _run_tswn_to_diy_file(raw_file, diy_file)
-        converted_groups = [line.strip() for line in diy_file.read_text(encoding="utf-8").splitlines() if line.strip()]
-    if len(converted_groups) != len(raw_groups):
-        raise RuntimeError("靶子 DIY 转换后的组数量不一致")
-
-    converted = [_split_ol_group(line) for line in converted_groups]
-    lines = []
-    for target, players in zip(targets, converted):
-        factor = target.get("factor")
-        lines.append("[[targets]]")
-        lines.append(f"factor = {factor!r}")
-        lines.append("players = [" + ", ".join(json.dumps(value, ensure_ascii=False) for value in players) + "]")
-        lines.append("")
-    output.write_text("\n".join(lines), encoding="utf-8")
-
-
 def _run_tswn_to_diy_file(input_file: Path, output_file: Path) -> None:
     runner = resolve_tswn_runner()
     if runner is None:
@@ -788,15 +774,12 @@ def _run_tswn_to_diy_file(input_file: Path, output_file: Path) -> None:
         raise RuntimeError(f"tswn DIY 转换失败（exit {result.returncode}）\n{details[-800:]}")
 
 
-def _run_tswn_to_diy_names(names: list[str]) -> list[str]:
-    """把名字按行交给 tswn-cli 的 to-diy，返回每行对应的 `+ol` 文本。
+def _run_tswn_to_diy_groups(names: list[str]) -> list[list[str]]:
+    """把名字按行交给 tswn-cli 的 to-diy，按输入行和成员顺序返回覆盖文本。
 
     `to-diy` 的标准输出带 CLI banner，只有 `-o` 写出的文件是纯转换结果，
     所以统一走文件模式；批次输出与输入行严格一一对应。
 
-    组内多个号之间改用 `++` 连接：`+ol:{...}` 里的技能强化值本身就带 `+`
-    （`"17+5"`），单 `+` 拼出来的双号没有 `@队伍` 时会被 tswn 当成“一个号 +
-    武器”，回读后两个号只剩一个。
     """
     with tempfile.TemporaryDirectory(prefix="namer_todiy_") as temp:
         names_file = Path(temp) / "names.txt"
@@ -812,11 +795,37 @@ def _run_tswn_to_diy_names(names: list[str]) -> list[str]:
         raise RuntimeError(
             f"DIY 转换结果行数不一致（输入 {len(names)} 行, 输出 {len(converted)} 行）"
         )
-    return ["++".join(_split_ol_group(line)) for line in converted]
+    return [_split_ol_group(line) for line in converted]
+
+
+def _run_tswn_to_diy_names(names: list[str]) -> list[str]:
+    """用 ++ 连接完整覆盖，便于再次导入没有显式队名的双号组。"""
+    return ["++".join(group) for group in _run_tswn_to_diy_groups(names)]
+
+
+def _pair_subjects(players: list[str]) -> list[str]:
+    subjects = []
+    pairs = {}
+    for index, player in enumerate(players):
+        members = pair_members(player)
+        subjects.append(members[0])
+        if len(members) == 2:
+            pairs[index] = "++".join(members)
+    if pairs:
+        token = ITEM.set(list(pairs))
+        try:
+            converted = _run_tswn_to_diy_groups(list(pairs.values()))
+        finally:
+            ITEM.reset(token)
+        for index, group in zip(pairs, converted, strict=True):
+            if len(group) != 2:
+                raise ValueError(f"第 {index + 1} 行未能导出两个组员")
+            subjects[index] = group[0]
+    return subjects
 
 
 def run_tswn_pair_scores(players: list[str], teammate_file: Path, head: int) -> str:
-    """Calculate latest Openbox weighted pair scores with DIY-frozen targets."""
+    """Run Openbox pair scoring against the original weighted targets."""
     assets = _find_tswn_backend_assets()
     if assets is None:
         raise RuntimeError(
@@ -834,27 +843,26 @@ def run_tswn_pair_scores(players: list[str], teammate_file: Path, head: int) -> 
     with tempfile.TemporaryDirectory(prefix="namer_pair_") as temp:
         temp_root = Path(temp)
         players_in = temp_root / "players.txt"
-        target_diy = temp_root / "target_diy.toml"
         scores_file = temp_root / "scores.txt"
-        players_in.write_text("\n".join(players) + "\n", encoding="utf-8")
-        _prepare_weighted_target_diy(target2, target_diy)
+        players_in.write_text("\n".join(_pair_subjects(players)) + "\n", encoding="utf-8")
         result = _run_process(
             [
                 *command,
                 "bench",
                 "pair",
                 "-l",
-                str(target_diy),
+                str(target2),
                 "--target-factored",
                 "-p",
                 str(players_in),
+                "--player-list-double-plus",  # Keep +ol and skill boosts inside the single subject.
                 "--teammate-list",
                 str(teammate_file),
                 "--teammate-factored",
                 "--head",
                 str(head),
                 "-n",
-                "1000",
+                str(PAIR_ROUNDS),
                 "--keep-rq",
                 "-o",
                 str(scores_file),
@@ -884,16 +892,12 @@ def run_tswn_pair_scores(players: list[str], teammate_file: Path, head: int) -> 
 def cmd_pair_rating(
     msg: ReciveMessage, client: IcaClient | TailchatClient, command: str
 ) -> None:
-    if "\n" not in msg.content:
-        client.send_message(msg.reply_with(f"请使用 {command} 命令，然后换行输入待测名字，每行一个"))
-        return
     raw = msg.content[len(command) :]
-    raw = raw[raw.find("\n") + 1 :]
     players = [line.strip() for line in raw.splitlines() if line.strip()]
     if not players:
-        client.send_message(msg.reply_with("请输入至少一个待测名字"))
+        client.send_message(msg.reply_with(f"请在 {command} 后输入待测名字或 A+B，每行一组"))
         return
-    _, teammate_name, head = PAIR_COMMANDS[command]
+    _, teammate_name, head = PAIR_COMMANDS[RATING_ALIASES.get(command, command)]
     teammate_file = _find_tswn_teammate_file(teammate_name)
     if teammate_file is None:
         client.send_message(
@@ -983,26 +987,20 @@ def run_tswn_cqp(raw_groups: list[str]) -> str:
             continue
         with tempfile.TemporaryDirectory(prefix="namer_cqp_players_") as temp:
             player_file = Path(temp) / "players.txt"
-            player_diy_file = Path(temp) / "players_diy.txt"
             player_file.write_text("\n".join(group for _, group in entries) + "\n", encoding="utf-8")
-            _run_tswn_to_diy_file(player_file, player_diy_file)
             target = target1 if count == 1 else target2
-            target_for_run = target
             target_factored = target.suffix.lower() == ".toml"
-            if target_factored:
-                target_for_run = Path(temp) / f"target{count}_diy.toml"
-                _prepare_weighted_target_diy(target, target_for_run)
-            for (index, original), result in zip(entries, _run_tswn_cqp_file(player_diy_file, target_for_run, target_factored)):
+            for (index, original), result in zip(entries, _run_tswn_cqp_file(player_file, target, target_factored)):
                 parts = result.split(None, 1)
                 results[index] = f"{parts[0]} {original}" if parts else original
     return "\n".join(results[index] for index in range(len(raw_groups)))
 
 
-def cmd_cqp(msg: ReciveMessage, client: IcaClient | TailchatClient) -> None:
+def cmd_cqp(msg: ReciveMessage, client: IcaClient | TailchatClient, command: str = CQP_CMD) -> None:
     if "\n" not in msg.content:
-        client.send_message(msg.reply_with(f"请使用 {CQP_CMD} 命令，然后换行输入名字组，每行一组，双人组用 + 连接"))
+        client.send_message(msg.reply_with(f"请使用 {command} 命令，然后换行输入名字组，每行一组，双人组用 + 连接"))
         return
-    raw = msg.content[len(CQP_CMD) :]
+    raw = msg.content[len(command) :]
     raw = raw[raw.find("\n") + 1 :]
     groups = [line.strip() for line in raw.splitlines() if line.strip()]
     if not groups:
@@ -1300,15 +1298,13 @@ def convert_base(msg: ReciveMessage, client: IcaClient | TailchatClient) -> None
     propcnt = 1
     for i in range(10, 31, 3):
         cache.write(sqrtools.propname[propcnt] + ": ")
-        raw_prop = " ".join(str(j).zfill(2) for j in r[i : i + 3])
+        raw_prop = ",".join(map(str, r[i : i + 3]))
         r[i : i + 3] = sorted(r[i : i + 3])
         cache.write(
             str(r[i + 1] + 36)
             + " / "
             + str(r[i + 2] + 36)
-            + " <- "
-            + raw_prop
-            + "\n"
+            + f" ({raw_prop})\n"
         )
         propcnt += 1
     cache.write("\n")
@@ -1334,7 +1330,7 @@ def convert_base(msg: ReciveMessage, client: IcaClient | TailchatClient) -> None
             _ = cache.write("\n")
         else:
             r = current_player.namebase[i * 4 + 64 : i * 4 + 68]
-            raw_skill = " ".join(str(j).zfill(2) for j in r)
+            raw_skill = ",".join(map(str, r))
             r = sorted(r)
             skill_result = ""
             if i < 14:
@@ -1380,8 +1376,7 @@ def convert_base(msg: ReciveMessage, client: IcaClient | TailchatClient) -> None
                 + str(current_player.nameskill[i][1]).zfill(2)
                 + " / "
                 + skill_result.split("\n", 1)[0]
-                + " <- "
-                + raw_skill
+                + f" ({raw_skill})"
                 + ("\n" + skill_result.split("\n", 1)[1] if "\n" in skill_result else "")
                 + "\n"
             )
@@ -1524,7 +1519,7 @@ def run_fights(msg: ReciveMessage, client: IcaClient | TailchatClient) -> None:
     client.send_message(reply)
 
 
-def eval_score(msg: ReciveMessage, client, template: str) -> None:
+def eval_score(msg: ReciveMessage, client, template: str, metric: str) -> None:
     content = msg.content[len(EVAL_PP_CMD) :]
     # 去掉第一个 \n
     content = content[content.find("\n") + 1 :]
@@ -1539,16 +1534,15 @@ def eval_score(msg: ReciveMessage, client, template: str) -> None:
         _select(input_index)
         if name.strip() == "":
             continue
-        name = split_parts(name)
-        name = "\n".join(name)
-        runs = template.format(test=name)
+        runs = template.format(test="\n".join(split_parts(name)))
         result = run_namerena(runs)
-        tswn_result = run_tswn_bench_compare(runs)
+        tswn_result = run_tswn_pf_compare(name)
         # 只取最后一行括号之前的内容
         last_line = result[0].split("\n")[-1]
         last_line = last_line.split("(")[0]
 
-        tswn_score = tswn_result[0] if tswn_result is not None else ""
+        rows = _parse_tswn_pf_rows(tswn_result[0]) if tswn_result else []
+        tswn_score = str(rows[0][PF_LABELS.index(metric)]) if rows else ""
         tswn_cost = tswn_result[1] if tswn_result is not None else 0.0
         diff_line = (
             _compute_bench_diff(result[0], tswn_score)
@@ -1663,6 +1657,14 @@ def score_all(msg: ReciveMessage, client: IcaClient | TailchatClient) -> None:
     client.send_message(reply)
 
 
+def _rating_command(text: str) -> str | None:
+    if text.startswith(CMD_PREFIX):
+        token = text.split(maxsplit=1)[0]
+        if token in RATING_COMMANDS:
+            return token
+    return None
+
+
 def _dispatch_msg(msg: ReciveMessage, client: IcaClient | TailchatClient) -> None:
     if msg.is_reply or msg.is_from_self:
         return
@@ -1673,11 +1675,11 @@ def _dispatch_msg(msg: ReciveMessage, client: IcaClient | TailchatClient) -> Non
         eval_fight(msg, client)
     elif msg.content.startswith(FIGHT_CMD):
         run_fights(msg, client)
-    elif msg.content.startswith(CQP_CMD):
-        cmd_cqp(msg, client)
-    elif next((command for command in PAIR_COMMANDS if msg.content.startswith(command)), None) is not None:
-        command = next(command for command in PAIR_COMMANDS if msg.content.startswith(command))
-        cmd_pair_rating(msg, client, command)
+    elif (command := _rating_command(msg.content)) is not None:
+        if RATING_ALIASES.get(command, command) == CQP_CMD:
+            cmd_cqp(msg, client, command)
+        else:
+            cmd_pair_rating(msg, client, command)
     elif msg.content.startswith(CONVERT_RAW_CMD):
         # 长命令放前面，避免被 /namer-peek 的前缀匹配抢走
         convert_name(msg, client, sort_skills=False)
@@ -1692,20 +1694,17 @@ def _dispatch_msg(msg: ReciveMessage, client: IcaClient | TailchatClient) -> Non
     elif msg.content.startswith(TODIY_CMD):
         cmd_to_diy(msg, client)
     elif msg.content.startswith(EVAL_PP_CMD):
-        eval_score(msg, client, "!test!\n\n{test}")
+        eval_score(msg, client, "!test!\n\n{test}", "pp")
     elif msg.content.startswith(EVAL_PD_CMD):
-        eval_score(msg, client, "!test!\n\n{test}\n{test}")
+        eval_score(msg, client, "!test!\n\n{test}\n{test}", "pd")
     elif msg.content.startswith(EVAL_QP_CMD):
-        eval_score(msg, client, "!test!\n!\n\n{test}")
+        eval_score(msg, client, "!test!\n!\n\n{test}", "qp")
     elif msg.content.startswith(EVAL_QD_CMD):
-        eval_score(msg, client, "!test!\n!\n\n{test}\n{test}")
+        eval_score(msg, client, "!test!\n!\n\n{test}\n{test}", "qd")
     elif msg.content.startswith(EVAL_PF_CMD):
         score_all(msg, client)
-    elif msg.content.startswith(EVAL_SIMPLE_CMD):
-        # 放在最后, 避免覆盖 前面的命令
-        # 同时过滤掉别的 /namer-xxxxx / /namer_xxxxx
-        if not msg.content.startswith(f"{EVAL_SIMPLE_CMD}-") and not msg.content.startswith(f"{EVAL_SIMPLE_CMD}_"):
-            eval_fight(msg, client)
+    elif msg.content.startswith(EVAL_SIMPLE_CMD) and not msg.content.startswith((f"{EVAL_SIMPLE_CMD}-", f"{EVAL_SIMPLE_CMD}_")):
+        eval_fight(msg, client)
 
 
 def dispatch_msg(msg, client, platform="ica"):
@@ -1714,9 +1713,9 @@ def dispatch_msg(msg, client, platform="ica"):
     if msg.is_reply or msg.is_from_self:
         return
     commands = sorted([EVAL_CMD, EVAL_SIMPLE_CMD, EVAL_PP_CMD, EVAL_PD_CMD, EVAL_QP_CMD,
-        EVAL_QD_CMD, EVAL_PF_CMD, CQP_CMD, *PAIR_COMMANDS, CONVERT_CMD, CONVERT_RAW_CMD,
+        EVAL_QD_CMD, EVAL_PF_CMD, CONVERT_CMD, CONVERT_RAW_CMD,
         BASE_CMD, TODIY_CMD, TEAM_CMD, TEAM_RAW_CMD, FIGHT_CMD, HELP_CMD], key=len, reverse=True)
-    command = next((value for value in commands if msg.content.startswith(value)), None)
+    command = _rating_command(msg.content) or next((value for value in commands if msg.content.startswith(value)), None)
     if command is None or (command == EVAL_SIMPLE_CMD and msg.content.startswith(("/namer-", "/namer_"))):
         return
     session = None

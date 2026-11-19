@@ -8,7 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .archive import ArchiveError
-from .model import file_snapshot, member
+from .history_source import ALIASES
+from .model import PAIR_COMMANDS, PAIR_ROUNDS, file_snapshot, member, pair_group
 from .runtime import PROCESS_DEADLINE, PROCESS_TIMEOUT
 
 
@@ -21,7 +22,7 @@ class InputError(ValueError):
 @dataclass(frozen=True)
 class Settings:
     rounds: int = 10000
-    pair_rounds: int = 1000
+    pair_rounds: int = PAIR_ROUNDS
     timeout: float = 600
     request_timeout: float = 3600
 
@@ -119,7 +120,7 @@ class EngineExecutor:
                     bench = TEMPLATES[metric].format(test=names)
                     invoke(module.run_namerena, bench)
                     if suffix != "pf":
-                        invoke(module.run_tswn_bench_compare, bench)
+                        invoke(module.run_tswn_pf_compare, line)
         elif suffix == "fight":
             for index, line in enumerate(lines):
                 module.ITEM.set([index])
@@ -138,7 +139,7 @@ class EngineExecutor:
             teammate = module._find_tswn_teammate_file(filename)
             if teammate is None:
                 raise InputError("teammate_not_found")
-            invoke(module.run_tswn_pair_scores, lines, teammate, head)
+            invoke(module.run_tswn_pair_scores, [line.strip() for line in lines], teammate, head)
         elif suffix in ("peek", "peeks", "team", "teams", "base"):
             self._local(suffix, body)
         else:
@@ -197,17 +198,26 @@ class EngineExecutor:
 def recompute(message, archive, executor, snapshot, *, mode="overwrite"):
     module, settings = executor.module, executor.settings
     command = message.command
-    body = message.content.partition("\n")[2]
+    raw_command = getattr(message, "raw_command", None) or command
+    is_pair = command in PAIR_COMMANDS
+    first_line, _, body = message.content.partition("\n")
+    if is_pair:
+        inline = first_line[len(raw_command):].strip()
+        if inline:
+            body = inline + ("\n" + body if body else "")
     error = None
     if command is None:
         error = "unsupported_command"
-    elif command != "/namer-help" and "\n" not in message.content:
+    elif not is_pair and command != "/namer-help" and "\n" not in message.content:
         error = "invalid_missing_newline"
     source_lines = []
     local = bool(command and command.endswith(("peek", "peeks", "team", "teams", "base")))
     for index, line in enumerate(body.split("\n")):
         try:
-            syntax = {"kind": "literal_name", "value": line} if local else member(line)
+            if is_pair and line.strip():
+                syntax = pair_group(line)
+            else:
+                syntax = {"kind": "literal_name", "value": line} if local else member(line)
             source_lines.append({"line_index": index, "syntax": syntax})
         except (ValueError, TypeError):
             source_lines.append({"line_index": index, "syntax": {"kind": "unparsed", "value": line},
@@ -219,11 +229,9 @@ def recompute(message, archive, executor, snapshot, *, mode="overwrite"):
         payload = {"version": 1, "command": command or "unsupported", "groups": [], "settings": {}}
         error = "invalid_input"
     payload["source_lines"] = source_lines
-    first_line = message.content.split("\n", 1)[0]
-    raw_command = getattr(message, "raw_command", None)
-    if raw_command and first_line.startswith(raw_command):
+    if not is_pair and raw_command and first_line.startswith(raw_command):
         payload["inline_arguments"] = {"kind": "unparsed_arguments", "value": first_line[len(raw_command):]}
-    payload["settings"].update(rounds_requested=settings.rounds, pair_rounds=settings.pair_rounds,
+    payload["settings"].update(rounds_requested=settings.pair_rounds if is_pair else settings.rounds, pair_rounds=settings.pair_rounds,
                                tswn_compare=True, process_timeout=settings.timeout, request_timeout=settings.request_timeout)
     fingerprint = hashlib.sha256(json.dumps({"settings": payload["settings"], "assets": snapshot,
         "command": command, "input": payload, "parser_version": 1, "plugin_version": module.VERSION},
@@ -232,7 +240,7 @@ def recompute(message, archive, executor, snapshot, *, mode="overwrite"):
         ("platform", "room_id", "message_id", "sender_id", "source_alias", "requested_at")}
     provenance = {"origin": "history_recompute", "source_alias": message.source_alias,
                   "parser_version": 1, "fingerprint": fingerprint, "execution_snapshot": snapshot,
-                  "reconstruction": False, "source_command_alias": getattr(message, "raw_command", command) if getattr(message, "raw_command", command) in ("/namer_peeks", "/namer_teams", "/namer-rhp") else command}
+                  "reconstruction": False, "source_command_alias": raw_command if raw_command in ALIASES else command}
     executor.verify()  # 配置漂移停止整批，不能连续清空后续历史成功结果。
     with archive.history_job(source, payload, module.VERSION, provenance, mode) as writer:
         if writer is None:

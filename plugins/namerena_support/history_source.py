@@ -10,6 +10,8 @@ from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
+from .model import RATING_ALIASES
+
 BEIJING = timezone(timedelta(hours=8))
 # 不漏掉未知旧命令，但仅提取消息开头的 /namer 词族，不读普通聊天。
 PREFIX_PATTERN = r"^(/namer[^[:space:]]*)([[:space:]]|$)"
@@ -21,7 +23,7 @@ KNOWN_COMMANDS = frozenset({
 })
 # 7f489c2 的 rhp 与 fsp 都使用 teammate_pj.toml/head=4，现名称为 fsp。
 ALIASES = {"/namer_peeks": "/namer-peeks", "/namer_teams": "/namer-teams",
-           "/namer-rhp": "/namer-fsp"}
+           "/namer-rhp": "/namer-fsp", **RATING_ALIASES}
 
 
 class SourceError(RuntimeError):

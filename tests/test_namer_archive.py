@@ -118,7 +118,7 @@ class NamerArchiveTests(unittest.TestCase):
 
         with patch.object(namerena, "run_tswn_cqp", side_effect=calculate):
             namerena.dispatch_msg(message('/namer-cqp\nA', 'first'), client('bot-a'))
-            namerena.dispatch_msg(message('/namer-cqp\nB', 'second'), client('bot-b'))
+            namerena.dispatch_msg(message('/namer-cqd\nB', 'second'), client('bot-b'))
             self.assertTrue(all(job["state"] == "started" for job in self.archive.jobs.values()))
             release.set()
             for event in self.archive.events.values():

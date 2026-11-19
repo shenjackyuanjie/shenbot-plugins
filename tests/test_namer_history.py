@@ -60,10 +60,28 @@ def sample(content='/namer_peeks\n A+B[" ', command='/namer-peeks'):
     return SimpleNamespace(platform="ica", room_id="synthetic-room", message_id="synthetic-message",
         sender_id="synthetic-sender", source_alias="synthetic-source", account=None,
         requested_at=datetime(2024, 1, 1, tzinfo=UTC), content=content,
-        command=command, raw_command=content.split("\n", 1)[0])
+        command=command, raw_command=content.split(maxsplit=1)[0])
 
 
 class HistoryTests(unittest.TestCase):
+    def test_inline_pair_alias_preserves_first_group_when_replayed(self):
+        value = sample("/namer-bcp A@x+B@x\nsolo", "/namer-cp")
+        archive, executor = HistoryMemory(), FakeExecutor()
+
+        def evaluate(command, body, payload):
+            self.assertEqual(body, "A@x+B@x\nsolo")
+            session = namerena.CURRENT.get()
+            handle = session.begin("tswn", "pair", {"groups": payload["groups"]})
+            session.end(handle, {"kind": "pair", "items": [{"score": 12}, {"score": 34}]})
+
+        executor.execute = evaluate
+        self.assertEqual(recompute(value, archive, executor, {}), "succeeded")
+        job = next(iter(archive.jobs.values()))
+        self.assertEqual(job["provenance"]["source_command_alias"], "/namer-bcp")
+        groups = job["input"]["groups"]
+        self.assertEqual([[m["identity_parts"] for m in g["members"]] for g in groups],
+                         [[["A", "x"], ["B", "x"]], [["solo"]]])
+
     def test_input_only_recompute_resumes_and_overwrites_old_success_with_explicit_failure(self):
         archive, executor = HistoryMemory(), FakeExecutor()
         value = sample()

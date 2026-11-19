@@ -2,6 +2,13 @@
 
 宿主版本对应 [shenbot_api.py](shenbot_api.py) 的 `__version__`；ICA/Tailchat API 与各插件的 `VERSION` 分别管理。
 
+## 2026-11-19 名竞评分（0.13.0）
+
+- 新增 cqd、bcp、fzp、dp，分别是 cqp、cp、fp、wcp 的别名。支持命令存档与历史重算。
+- 队友评支持同一行或多行输入 `A+B`。按两人组队后的属性和技能冻结 A，只有 A 和预设队友参战。
+- CQP 直接评测原始选手和带权靶子，保留镜像组合的 50% 规则。队友评同样使用原始靶子。
+- PF 将 tswn 的逐项结果整理成与 JS 对齐的分数行，pp/pd/qp/qd 只显示对应指标。base 将底层属性和技能数组以逗号分隔，放在括号内。
+
 ## 2026-11-14 namerena 资产收进 support 包
 
 - [namerena](plugins/namerena.py)：`md5/`、`name_utils/`、`sqrtools/` 从 `plugins/` 根目录移入 `namerena_support/`，根目录只剩入口文件与 support 包。入口与 `namerena_support/history.py` 改为按 support 目录定位 JS 运行时、`tswn-cli` 与快照资产，查找顺序与行为不变。
