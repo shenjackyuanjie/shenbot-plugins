@@ -1,5 +1,10 @@
 # 插件市场更新日志
 
+## 2026-11-20 ds-monitor 原生插件清单
+
+- 新增 [ds_monitor.plugins.toml 模板](docs/examples/ds_monitor.plugins.toml)：shenbot 0.9.6 起可把 ds-monitor 作为外部进程插件运行，清单放插件目录、文件名即插件 ID，与同名 Python 脚本二选一。
+- [监测插件维护说明](docs/ds-monitor.md)补充原生入口、与 Python 版的差异和迁移顺序；Python 插件版本与命令不变。
+
 宿主版本对应 [shenbot_api.py](shenbot_api.py) 的 `__version__`；ICA/Tailchat API 与各插件的 `VERSION` 分别管理。
 
 ## 2026-11-19 名竞评分（0.13.0）

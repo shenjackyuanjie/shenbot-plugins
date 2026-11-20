@@ -3,11 +3,22 @@
 [ds_monitor.py](../plugins/ds_monitor.py) **0.5.7** 配套 Rust **ds-monitor 0.5.7**，两侧版本独立管理。
 插件负责进程管理、查询和看板发布；抓取、分析及监测通知由 Rust 执行。变更见[更新日志](../CHANGELOG.md)。
 
+Rust 侧从 **ds-monitor 0.6.0** 起提供 `serve-ica` 原生入口，可作为 shenbot 的外部进程插件直接运行，不再需要 Python 包装层。两种方式共用同一份 ds-monitor 配置、归档格式和命令语义，二选一运行，不要同时写入同一归档。
+
+## 作为原生外部插件运行
+
+shenbot **0.9.6** 起支持目录式外部插件：把[清单模板](examples/ds_monitor.plugins.toml)复制到宿主的插件目录并改名为 `ds_monitor.plugins.toml`，同时确保宿主主配置启用 `enable_ext = true`。文件名就是插件 ID，不要写 `id` 字段；外部插件先占用 ID，同名的 Python 脚本会被跳过，所以切换时不需要删除 `ds_monitor.py`。
+
+- 清单里的 `binary` 指向 Cargo release 产物，宿主自动创建每代运行副本；Python 版时代的 `ds-monitor-copy.exe` 不再需要手工维护。
+- 命令、管理员权限、引用回复和四主题图片与 Python 版一致；`/monitor update` 改为宿主串行热切换，原监测进程排空后才启动新代。
+- 清单在宿主启动时读取；改完需要重启宿主。详细字段、路径解析和热切策略见 shenbot 的[外部插件指南](https://github.com/shenjackyuanjie/icalingua-bridge-bot/blob/main/docs/external-plugins.md)。
+- 迁移顺序：暂停旧监测并确认旧 watch 退出 → 停旧宿主 → 放好清单并启用 `enable_ext` → 启动新版宿主 → `/bot-ls` 确认显示 `[ext] ds_monitor` → `/monitor on` 恢复监测。原生插件停用并退出前不要恢复旧 watch，避免两边并发写归档。
+
 ## 配置与 Windows 运行副本
 
 插件配置位于 `config/ds_monitor.toml`，包含 `binary`、`config`、`interval` 和 `publish`。
 
-- `binary` 指向运行副本 `target/release/ds-monitor-copy.exe`，与构建产物 `ds-monitor.exe` 同目录。
+- Python 版：`binary` 指向运行副本 `target/release/ds-monitor-copy.exe`，与构建产物 `ds-monitor.exe` 同目录；原生版由宿主管理副本，本条不适用。
   watch 锁副本，cargo 更新产物，因此可以先构建、后换文件；直接把 binary 指向产物时 update 会拒绝执行。
 - Rust 以配置目录作为 cwd，保证 output/settings 等相对路径一致；构建目录单独查找有效 Cargo 清单，支持外置配置。
 - 显式配置不存在、无法读取或 TOML 无效时拒绝启动，不自动生成默认模板；诊断不回显配置原文。

@@ -1,0 +1,18 @@
+# 将本文件复制为插件目录下的 ds_monitor.plugins.toml；文件名决定插件 ID。
+# 宿主只扫描插件目录直属的 *.plugins.toml，不递归。
+enabled = true
+
+# 指向 Cargo 的 release 产物；宿主会为每代创建运行副本，不要填副本路径。
+binary = 'C:\path\to\web_craw\target\release\ds-monitor.exe'
+working_dir = 'C:\path\to\web_craw'
+# 首次以暂停状态启动；确认命令和图片正常后再 /monitor on。
+# --publish 沿用原有看板自动发布，不需要时删除。
+args = ["serve-ica", "--config", "config.toml", "--start-paused", "--publish"]
+
+# 监测写同一份归档，必须让旧代排空后再启动新代。
+reload_mode = "serial"
+drain_timeout_ms = 120000
+
+# 异常退出指数退避；允许 /monitor update 在构建成功后请求宿主热切。
+auto_restart = true
+allow_self_reload = true
