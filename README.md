@@ -37,7 +37,7 @@
   显示套餐、剩余额度与重置时间；`/codex` 或 `/codex help` 查看帮助。每两分钟轮询，剩余额度跨过 95%、90%、85% 等档位时提醒；
   额度上涨报告 reset，上次余额不为 0% 时附上“浪费了xx%额度😭”。
   配置和 DSH 离线/重启行为见 [使用说明](docs/codex.md)。
-- DeepSeek 监测（[ds_monitor.py](plugins/ds_monitor.py)，另有原生外部插件入口）：运行副本、命令、更新回滚与发布熔断见
+- DeepSeek 监测（旧 [ds_monitor.py](plugins/ds_monitor.py_disable) 已归档停用，现行使用原生外部插件）：运行副本、命令、更新回滚与发布熔断见
   [监测插件维护说明](docs/ds-monitor.md)；原生清单模板见 [docs/examples/ds_monitor.plugins.toml](docs/examples/ds_monitor.plugins.toml)。
 - 名竞小工具（[namerena.py](plugins/namerena.py)）：命令表、依赖与配置项、`+ol` 导出格式见
   [namer 命令说明](docs/namer-commands.md)。

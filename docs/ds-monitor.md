@@ -1,13 +1,12 @@
 # DeepSeek 监测插件使用与维护
 
-[ds_monitor.py](../plugins/ds_monitor.py) **0.5.7** 配套 Rust **ds-monitor 0.5.7**，两侧版本独立管理。
-插件负责进程管理、查询和看板发布；抓取、分析及监测通知由 Rust 执行。变更见[更新日志](../CHANGELOG.md)。
+旧 Python 插件 [ds_monitor.py](../plugins/ds_monitor.py_disable) **0.5.9** 已归档停用（`.py_disable` 不会被宿主扫描）。现行部署统一使用 Rust **ds-monitor 0.6.0+** 的 `serve-ica` 原生外部插件，见下方[原生运行](#作为原生外部插件运行)。下文 Python 时代的配置与更新说明保留作历史参考。
 
-Rust 侧从 **ds-monitor 0.6.0** 起提供 `serve-ica` 原生入口，可作为 shenbot 的外部进程插件直接运行，不再需要 Python 包装层。两种方式共用同一份 ds-monitor 配置、归档格式和命令语义，二选一运行，不要同时写入同一归档。
+抓取、分析及监测通知由 Rust 执行。变更见[更新日志](../CHANGELOG.md)。两种方式共用同一份 ds-monitor 配置、归档格式和命令语义，二选一运行，不要同时写入同一归档。
 
 ## 作为原生外部插件运行
 
-shenbot **0.9.6** 起支持目录式外部插件：把[清单模板](examples/ds_monitor.plugins.toml)复制到宿主的插件目录并改名为 `ds_monitor.plugins.toml`，同时确保宿主主配置启用 `enable_ext = true`。文件名就是插件 ID，不要写 `id` 字段；外部插件先占用 ID，同名的 Python 脚本会被跳过，所以切换时不需要删除 `ds_monitor.py`。
+shenbot **0.9.6** 起支持目录式外部插件：把[清单模板](examples/ds_monitor.plugins.toml)复制到宿主的插件目录并改名为 `ds_monitor.plugins.toml`，同时确保宿主主配置启用 `enable_ext = true`。文件名就是插件 ID，不要写 `id` 字段；外部插件先占用 ID，同名的 Python 脚本会被跳过；旧 Python 版已归档为 `ds_monitor.py_disable`，不会再被扫描。
 
 - 清单里的 `binary` 指向 Cargo release 产物，宿主自动创建每代运行副本；Python 版时代的 `ds-monitor-copy.exe` 不再需要手工维护。
 - 命令、管理员权限、引用回复和四主题图片与 Python 版一致；`/monitor update` 改为宿主串行热切换，原监测进程排空后才启动新代。

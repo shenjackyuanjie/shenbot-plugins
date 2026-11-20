@@ -1,5 +1,10 @@
 # 插件市场更新日志
 
+## 2026-11-20 停用旧 Python 监测插件
+
+- [ds_monitor.py](plugins/ds_monitor.py_disable) 归档为 `.py_disable`，宿主不再扫描；现行部署使用 Rust ds-monitor 0.6.0+ 的原生 `serve-ica` 外部插件，清单格式见 [模板](docs/examples/ds_monitor.plugins.toml)。
+- [监测插件维护说明](docs/ds-monitor.md)改为以原生运行为主，Python 时代的运行副本与更新说明保留作历史参考。
+
 ## 2026-11-20 ds-monitor 原生插件清单
 
 - 新增 [ds_monitor.plugins.toml 模板](docs/examples/ds_monitor.plugins.toml)：shenbot 0.9.6 起可把 ds-monitor 作为外部进程插件运行，清单放插件目录、文件名即插件 ID，与同名 Python 脚本二选一。
